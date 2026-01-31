@@ -79,22 +79,12 @@ function initializeSocket (server) {
             `Rider ${userId} reconnecting. Old socketId: ${currentUser.socketId}, New socketId: ${socket.id}`
           )
 
-          // // Check if old socket is still connected
-          // const oldSocket = io.sockets.sockets.get(currentUser.socketId);
-          // if (oldSocket && oldSocket.connected) {
-          //   logger.warn(`Rider ${userId} reconnecting from new device/connection. Disconnecting old socket: ${currentUser.socketId}`);
-          //   oldSocket.disconnect();
-          // } else {
-          //   logger.info(`Rider ${userId} old socket ${currentUser.socketId} is not connected, cleaning up stale socketId`);
-          // }
-
           // 🔥 MULTI-SERVER SAFE RECONNECTION HANDLING
           logger.info(
             `Rider ${userId} reconnecting. Clearing old socketId: ${currentUser.socketId}`
           )
 
           // Just clear old socketId from DB
-          // Do NOT try to disconnect old socket (it may be on another server)
           await clearUserSocket(userId, currentUser.socketId)
 
           // Clear old socketId before setting new one
@@ -235,8 +225,7 @@ function initializeSocket (server) {
     // ============================
     // VALIDATE AND FIX DRIVER STATUS
     // ============================
-    // Ensure driver isBusy status matches actual active rides
-    let correctedDriver = driver
+        let correctedDriver = driver
     try {
       const validationResult = await validateAndFixDriverStatus(driverId)
       if (validationResult.corrected) {
@@ -250,13 +239,11 @@ function initializeSocket (server) {
       logger.error(
         `❌ [Socket] Error validating driver status for ${driverId}: ${validationError.message}`
       )
-      // Continue with connection even if validation fails
-    }
+     }
 
     // ============================
     // VALIDATE SOCKET ID
     // ============================
-    // Ensure socketId is properly set and not empty
     const updatedDriver = await Driver.findById(driverId)
     if (!updatedDriver?.socketId || updatedDriver.socketId.trim() === '') {
       logger.warn(
@@ -358,12 +345,7 @@ function initializeSocket (server) {
             : 'You are now offline for ride requests'
         })
 
-        // Broadcast status change to admin/monitoring systems if needed
-        // io.emit('driverStatusChanged', {
-        //   driverId,
-        //   isActive: driver.isActive,
-        //   isOnline: driver.isOnline
-        // })
+   
 
         io.to('admin').emit('driverStatusChanged', {
           driverId,
@@ -397,15 +379,8 @@ function initializeSocket (server) {
           io.to(`ride_${data.rideId}`).emit('driverLocationUpdate', data)
         }
 
-        // Notify specific rider if ride is in progress
         if (data.rideId) {
-          // const ride = await Ride.findById(data.rideId)
-          // if (ride && ride.userSocketId) {
-          //   io.to(ride.userSocketId).emit('driverLocationUpdate', data)
-          //   logger.info(
-          //     `Location update sent to rider - rideId: ${data.rideId}`
-          //   )
-          // }
+        
         }
         logger.info(
           `Driver location updated successfully - driverId: ${data.driverId}`
@@ -431,11 +406,7 @@ function initializeSocket (server) {
         }
 
         await clearDriverSocket(driverId, socket.id)
-        // await updateDriverStatus(driverId, false, '')
-        // await Driver.findByIdAndUpdate(driverId, { isOnline: false })
-        // Don't change `isActive` here; driver toggle should be explicit via `driverToggleStatus`.
-        // `clearDriverSocket` sets `isOnline:false` and clears `socketId` when appropriate.
-        // io.emit('driverDisconnect', { driverId })
+       
         io.to('admin').emit('driverDisconnect', { driverId })
 
         logger.info(`Driver disconnected successfully - driverId: ${driverId}`)
@@ -695,172 +666,13 @@ function initializeSocket (server) {
         // ============================
         logger.info(`📥 Queuing ride ${ride._id} for driver discovery`)
 
-        // If Redis is enabled we already export a real queue; otherwise the in-process
-        // queue implementation will call `processRideJob` immediately.
         await rideBookingQueue.add('process-ride', {
           rideId: ride._id.toString()
         })
 
         logger.info(`✅ Ride ${ride._id} queued for driver discovery`)
 
-        // const { drivers: nearbyDrivers, radiusUsed } = await searchDriversWithProgressiveRadius(
-        //   ride.pickupLocation,
-        //   [3000, 6000, 9000, 12000] // Progressive radii in meters
-        // );
-
-        // logger.info(`Found ${nearbyDrivers.length} nearby drivers for rideId: ${ride._id} within ${radiusUsed}m radius`);
-
-        // if (nearbyDrivers.length > 0) {
-        //   let notifiedCount = 0;
-        //   let skippedCount = 0;
-        //   const skippedReasons = {
-        //     noSocketId: 0,
-        //     socketNotConnected: 0,
-        //     socketNotFound: 0
-        //   };
-
-        //   // Notify specific nearby drivers - verify socket connection is active
-        //   nearbyDrivers.forEach(driver => {
-        //     if (driver.socketId) {
-        //       // Verify socket connection is still active
-        //       const socketConnection = io.sockets.sockets.get(driver.socketId);
-        //       if (socketConnection && socketConnection.connected) {
-        //         io.to(driver.socketId).emit('newRideRequest', populatedRide);
-        //         logger.info(`✅ Ride request sent to driver: ${driver._id} (socketId: ${driver.socketId})`);
-        //         notifiedCount++;
-        //       } else {
-        //         if (socketConnection) {
-        //           logger.warn(`⚠️ Driver ${driver._id} has socketId but socket is not connected: ${driver.socketId}`);
-        //           skippedReasons.socketNotConnected++;
-        //         } else {
-        //           logger.warn(`⚠️ Driver ${driver._id} has socketId but socket not found in server: ${driver.socketId}`);
-        //           skippedReasons.socketNotFound++;
-        //         }
-        //         skippedCount++;
-        //       }
-        //     } else {
-        //       logger.warn(`⚠️ Driver ${driver._id} has no socketId, cannot send ride request`);
-        //       skippedReasons.noSocketId++;
-        //       skippedCount++;
-        //     }
-        //   });
-
-        //   // Log notification summary
-        //   logger.info(`📊 Ride request notification summary for rideId: ${ride._id}`);
-        //   logger.info(`   ✅ Successfully notified: ${notifiedCount} drivers`);
-        //   logger.info(`   ⚠️ Skipped: ${skippedCount} drivers`);
-        //   if (skippedCount > 0) {
-        //     logger.info(`   📋 Skip reasons: noSocketId=${skippedReasons.noSocketId}, socketNotConnected=${skippedReasons.socketNotConnected}, socketNotFound=${skippedReasons.socketNotFound}`);
-        //   }
-
-        //   // Track notified drivers in ride document
-        //   const notifiedDriverIds = nearbyDrivers.map(driver => driver._id);
-        //   await Ride.findByIdAndUpdate(ride._id, {
-        //     $set: {
-        //       notifiedDrivers: notifiedDriverIds
-        //     }
-        //   });
-        //   logger.info(`📝 Tracked ${notifiedDriverIds.length} notified drivers for rideId: ${ride._id}`);
-
-        //   // Create notifications for nearby drivers (including those who didn't receive socket notification)
-        //   nearbyDrivers.forEach(async (driver) => {
-        //     await createNotification({
-        //       recipientId: driver._id,
-        //       recipientModel: 'Driver',
-        //       title: 'New Ride Request',
-        //       message: `New ride request nearby from ${populatedRide.pickupAddress}`,
-        //       type: 'ride_request',
-        //       relatedRide: ride._id,
-        //     });
-        //   });
-        // } else {
-        //   // No drivers found after progressive radius expansion
-        //   logger.warn(`❌ No drivers found for rideId: ${ride._id} after searching up to ${radiusUsed}m radius`);
-
-        //   // Add detailed debugging information
-        //   try {
-        //     // Check total drivers in database
-        //     const totalDrivers = await Driver.countDocuments({});
-        //     logger.warn(`   📊 Total drivers in database: ${totalDrivers}`);
-
-        //     // Check drivers by status
-        //     const activeDrivers = await Driver.countDocuments({ isActive: true });
-        //     const onlineDrivers = await Driver.countDocuments({ isOnline: true });
-        //     const busyDrivers = await Driver.countDocuments({ isBusy: true });
-        //     const availableDrivers = await Driver.countDocuments({
-        //       isActive: true,
-        //       isBusy: false,
-        //       isOnline: true
-        //     });
-
-        //     logger.warn(`   📊 Driver status breakdown:`);
-        //     logger.warn(`      - Total drivers: ${totalDrivers}`);
-        //     logger.warn(`      - isActive=true: ${activeDrivers}`);
-        //     logger.warn(`      - isOnline=true: ${onlineDrivers}`);
-        //     logger.warn(`      - isBusy=true: ${busyDrivers}`);
-        //     logger.warn(`      - Available (isActive=true, isBusy=false, isOnline=true): ${availableDrivers}`);
-
-        //     // Check if there are any drivers near the pickup location (without filters)
-        //     const nearbyWithoutFilters = await Driver.find({
-        //       location: {
-        //         $near: {
-        //           $geometry: {
-        //             type: 'Point',
-        //             coordinates: ride.pickupLocation.coordinates,
-        //           },
-        //           $maxDistance: radiusUsed,
-        //         },
-        //       },
-        //     }).limit(10);
-
-        //     logger.warn(`   📍 Drivers within ${radiusUsed}m radius (no filters): ${nearbyWithoutFilters.length}`);
-
-        //     if (nearbyWithoutFilters.length > 0) {
-        //       logger.warn(`   ⚠️ Found ${nearbyWithoutFilters.length} drivers nearby but all were excluded by filters:`);
-        //       nearbyWithoutFilters.forEach((driver, index) => {
-        //         logger.warn(`      Driver ${index + 1} (${driver._id}):`);
-        //         logger.warn(`        - isActive: ${driver.isActive}`);
-        //         logger.warn(`        - isBusy: ${driver.isBusy}`);
-        //         logger.warn(`        - isOnline: ${driver.isOnline}`);
-        //         logger.warn(`        - Location: [${driver.location.coordinates[0]}, ${driver.location.coordinates[1]}]`);
-        //       });
-        //     } else {
-        //       logger.warn(`   📍 No drivers found within ${radiusUsed}m radius (even without filters)`);
-        //       logger.warn(`   💡 This suggests either:`);
-        //       logger.warn(`      1. No drivers exist in the database`);
-        //       logger.warn(`      2. All drivers are very far from pickup location`);
-        //       logger.warn(`      3. Driver location data is missing or incorrect`);
-        //     }
-
-        //     // Verify coordinate format
-        //     const coords = ride.pickupLocation.coordinates;
-        //     logger.warn(`   📐 Coordinate format verification:`);
-        //     logger.warn(`      - Coordinates: [${coords[0]}, ${coords[1]}]`);
-        //     logger.warn(`      - Format: [longitude, latitude]`);
-        //     logger.warn(`      - Longitude range: -180 to 180 (current: ${coords[0]})`);
-        //     logger.warn(`      - Latitude range: -90 to 90 (current: ${coords[1]})`);
-
-        //     if (coords[0] < -180 || coords[0] > 180) {
-        //       logger.error(`      ❌ INVALID: Longitude out of range!`);
-        //     }
-        //     if (coords[1] < -90 || coords[1] > 90) {
-        //       logger.error(`      ❌ INVALID: Latitude out of range!`);
-        //     }
-        //   } catch (debugError) {
-        //     logger.error(`   ❌ Error gathering debug information: ${debugError.message}`);
-        //   }
-
-        //   // Emit noDriverFound event to rider (NEW event - optional for apps)
-        //   if (populatedRide.userSocketId) {
-        //     io.to(populatedRide.userSocketId).emit('noDriverFound', {
-        //       rideId: ride._id,
-        //       message: 'No drivers found within 12km radius. Please try again later.',
-        //     });
-        //     logger.info(`No driver found event sent to rider: ${populatedRide.rider._id}`);
-        //   } else {
-        //     logger.warn(`   ⚠️ Cannot send noDriverFound event: userSocketId is missing`);
-        //   }
-        // }
+       
 
         // Ack to the rider (backward compatible - existing apps expect this)
         if (populatedRide.userSocketId) {
@@ -1010,28 +822,6 @@ function initializeSocket (server) {
         const roomName = `ride_${rideId}`
         logger.info(`🚪 [Socket] Auto-joining sockets to room: ${roomName}`)
 
-        // // Join driver socket to room
-        // if (assignedRide.driverSocketId) {
-        //   const driverSocket = io.sockets.sockets.get(
-        //     assignedRide.driverSocketId
-        //   )
-        //   if (driverSocket) {
-        //     driverSocket.join(roomName)
-        //     if (!driverSocket.data.rooms) {
-        //       driverSocket.data.rooms = []
-        //     }
-        //     if (!driverSocket.data.rooms.includes(roomName)) {
-        //       driverSocket.data.rooms.push(roomName)
-        //     }
-        //     logger.info(
-        //       `✅ [Socket] Driver socket ${assignedRide.driverSocketId} auto-joined room: ${roomName}`
-        //     )
-        //   } else {
-        //     logger.warn(
-        //       `⚠️ [Socket] Driver socket not found: ${assignedRide.driverSocketId}`
-        //     )
-        //   }
-        // }
 
         // 🔥 MULTI-SERVER SAFE: ask client to join the ride room itself
         if (assignedRide.driverSocketId) {
@@ -1046,28 +836,7 @@ function initializeSocket (server) {
           )
         }
 
-        // Join user socket to room
-        // if (assignedRide.userSocketId) {
-        //   const userSocket = io.sockets.sockets.get(assignedRide.userSocketId)
-        //   if (userSocket) {
-        //     userSocket.join(roomName)
-        //     if (!userSocket.data.rooms) {
-        //       userSocket.data.rooms = []
-        //     }
-        //     if (!userSocket.data.rooms.includes(roomName)) {
-        //       userSocket.data.rooms.push(roomName)
-        //     }
-        //     logger.info(
-        //       `✅ [Socket] User socket ${assignedRide.userSocketId} auto-joined room: ${roomName}`
-        //     )
-        //   } else {
-        //     logger.warn(
-        //       `⚠️ [Socket] User socket not found: ${assignedRide.userSocketId}`
-        //     )
-        //   }
-        // }
-
-        // 🔥 MULTI-SERVER SAFE: ask user client to join the ride room itself
+       
         // 🔥 MULTI-SERVER SAFE: ask user client to join the ride room itself
         if (assignedRide.userSocketId) {
           io.to(assignedRide.userSocketId).emit('joinRideRoom', {
@@ -1701,8 +1470,6 @@ function initializeSocket (server) {
         // Log ride data for debugging
         logger.info(`storeRideEarnings: Ride data check - rideId: ${rideId}, driver: ${completedRide.driver ? (completedRide.driver._id || completedRide.driver) : 'missing'}, rider: ${completedRide.rider ? (completedRide.rider._id || completedRide.rider) : 'missing'}, fare: ${completedRide.fare}`)
 
-        // Store earnings IMMEDIATELY after completing ride (before any saves that might lose populated fields)
-        // This ensures driver/rider are still populated from completeRide()
         // Earnings are calculated from final fare (after recalculation)
         storeRideEarnings(completedRide).catch(err => {
           logger.error(
@@ -2692,11 +2459,7 @@ function initializeSocket (server) {
         if (userId) {
           await clearUserSocket(userId, socket.id)
           socketToUser.delete(socket.id)
-          // io.emit('riderDisconnect', { userId })
-          // logger.info(
-          //   `Rider socket cleanup completed - userId: ${userId}, socketId: ${socket.id}`
-          // )
-        }
+          }
 
         if (driverId) {
           await clearDriverSocket(driverId, socket.id)
