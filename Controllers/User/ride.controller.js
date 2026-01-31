@@ -2,7 +2,8 @@ const Ride = require('../../Models/Driver/ride.model')
 const Settings = require('../../Models/Admin/settings.modal')
 const logger = require('../../utils/logger')
 const crypto = require('crypto')
-const rideBookingQueue = require('../../src/queues/rideBooking.queue')
+// const rideBookingQueue = require('../../src/queues/rideBooking.queue')
+const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
 const { mapServiceToVehicleService, calculateFareWithTime, calculateHaversineDistance } = rideBookingFunctions
 
@@ -90,9 +91,10 @@ const createRide = async (req, res) => {
     // ============================
     logger.info(`📥 Queuing ride ${ride._id} for driver discovery`)
 
-    await rideBookingQueue.add('process-ride', {
-      rideId: ride._id.toString()
-    })
+    await rideBookingProducer.add('process-ride', {
+  rideId: ride._id.toString(),
+})
+
 
     logger.info(`✅ Ride ${ride._id} successfully added to Redis queue`)
 
