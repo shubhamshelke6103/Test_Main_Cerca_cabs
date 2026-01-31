@@ -1,6 +1,6 @@
 // routes/ride.routes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
   createRide,
   getAllRides,
   getRideById,
@@ -10,7 +10,7 @@ import {
   getRidesByDriverId,
   searchRide,
   calculateFare
-} from '../Controllers/User/ride.controller.js';
+} = require('../Controllers/User/ride.controller');
 
 const router = express.Router();
 
@@ -50,4 +50,4 @@ router.get('/rides/driver/:driverId', getRidesByDriverId);
 // POST /rides/search/:id
 router.post('/rides/search/:id', searchRide);
 
-export default router;
+module.exports = router;

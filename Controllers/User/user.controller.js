@@ -1,15 +1,21 @@
-import User from '../../Models/User/user.model.js';
-import jwt from 'jsonwebtoken';
-import logger from '../../utils/logger.js';
-import fs from 'fs';
-import path from 'path';
+// import User from '../../Models/User/user.model.js';
+// import jwt from 'jsonwebtoken';
+// import logger from '../../utils/logger.js';
+// import fs from 'fs';
+// import path from 'path';
+
+const User = require('../../Models/User/user.model');
+const jwt = require('jsonwebtoken');
+const logger = require('../../utils/logger');
+const fs = require('fs');
+const path = require('path');
 
 
 /**
  * @desc    Get a single user by ID
  * @route   GET /users/:id
  */
-export const getUserById = async (req, res) => {
+const getUserById = async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
         if (!user) {
@@ -26,7 +32,7 @@ export const getUserById = async (req, res) => {
  * @desc    Create a new user with optional profile picture
  * @route   POST /users
  */
-export const createUser = async (req, res) => {
+const createUser = async (req, res) => {
     try {
         // Extract user data from the request body
         const userData = req.body;
@@ -67,7 +73,7 @@ export const createUser = async (req, res) => {
  * @desc    Update a user by ID
  * @route   PUT /users/:id
  */
-export const updateUser = async (req, res) => {
+const updateUser = async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
 
@@ -116,7 +122,7 @@ export const updateUser = async (req, res) => {
  * @desc    Delete a user by ID
  * @route   DELETE /users/:id
  */
-export const deleteUser = async (req, res) => {
+const deleteUser = async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
         if (!user) {
@@ -152,7 +158,7 @@ export const deleteUser = async (req, res) => {
  * @desc    Get user by email
  * @route   GET /users/email/:email
  */
-export const getUserByEmail = async (req, res) => {
+const getUserByEmail = async (req, res) => {
     try {
         const user = await User.findOne({ email: req.params.email });
         if (!user) {
@@ -169,7 +175,7 @@ export const getUserByEmail = async (req, res) => {
  * @desc    Login user by mobile number
  * @route   POST /users/login
  */
-export const loginUserByMobile = async (req, res) => {
+const loginUserByMobile = async (req, res) => {
     const { phoneNumber } = req.body;
 
     try {
@@ -259,7 +265,7 @@ export const loginUserByMobile = async (req, res) => {
  * @desc    Get the wallet balance of a user by ID
  * @route   GET /users/:id/wallet
  */
-export const getUserWallet = async (req, res) => {
+const getUserWallet = async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
         if (!user) {
@@ -276,7 +282,7 @@ export const getUserWallet = async (req, res) => {
  * @desc    Update the wallet balance of a user by ID and type add or deduct
  * @route   PUT /users/:id/wallet
  */
-export const updateUserWallet = async (req, res) => {
+const updateUserWallet = async (req, res) => {
     try {
         const { amount, type } = req.body; // type = 'add' or 'deduct'
 
@@ -310,4 +316,16 @@ export const updateUserWallet = async (req, res) => {
         logger.error('Error updating wallet balance:', error);
         res.status(500).json({ message: 'Error updating wallet balance', error });
     }
+};
+
+
+module.exports = {
+  getUserById,
+  createUser,
+  updateUser,
+  deleteUser,
+  getUserByEmail,
+  loginUserByMobile,
+  getUserWallet,
+  updateUserWallet,
 };

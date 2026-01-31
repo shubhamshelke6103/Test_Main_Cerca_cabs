@@ -1,16 +1,16 @@
-import Ride from '../../Models/Driver/ride.model.js'
-import Settings from '../../Models/Admin/settings.modal.js'
-import logger from '../../utils/logger.js'
-import crypto from 'crypto'
-import rideBookingQueue from '../../src/queues/rideBooking.queue.js'
-import rideBookingFunctions from '../../utils/ride_booking_functions.js'
+const Ride = require('../../Models/Driver/ride.model')
+const Settings = require('../../Models/Admin/settings.modal')
+const logger = require('../../utils/logger')
+const crypto = require('crypto')
+const rideBookingQueue = require('../../src/queues/rideBooking.queue')
+const rideBookingFunctions = require('../../utils/ride_booking_functions')
 const { mapServiceToVehicleService, calculateFareWithTime, calculateHaversineDistance } = rideBookingFunctions
 
 /**
  * @desc    Create a new ride
  * @route   POST /rides
  */
-export const createRide = async (req, res) => {
+const createRide = async (req, res) => {
   try {
     const rideData = req.body
     const riderId = rideData.rider || rideData.riderId
@@ -137,7 +137,7 @@ function calculateDistance (lat1, lon1, lat2, lon2) {
  * @desc    Get all rides
  * @route   GET /rides
  */
-export const getAllRides = async (req, res) => {
+const getAllRides = async (req, res) => {
   try {
     const rides = await Ride.find()
     res.status(200).json(rides)
@@ -151,7 +151,7 @@ export const getAllRides = async (req, res) => {
  * @desc    Get a single ride by ID
  * @route   GET /rides/:id
  */
-export const getRideById = async (req, res) => {
+const getRideById = async (req, res) => {
   try {
     const ride = await Ride.findById(req.params.id).populate('driver rider')
     if (!ride) {
@@ -168,7 +168,7 @@ export const getRideById = async (req, res) => {
  * @desc    Update a ride by ID
  * @route   PUT /rides/:id
  */
-export const updateRide = async (req, res) => {
+const updateRide = async (req, res) => {
   try {
     const ride = await Ride.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
@@ -191,7 +191,7 @@ export const updateRide = async (req, res) => {
  * @desc    Delete a ride by ID
  * @route   DELETE /rides/:id
  */
-export const deleteRide = async (req, res) => {
+const deleteRide = async (req, res) => {
   try {
     const ride = await Ride.findByIdAndDelete(req.params.id)
 
@@ -211,7 +211,7 @@ export const deleteRide = async (req, res) => {
  * @desc    Get rides for a specific user by user ID
  * @route   GET /rides/user/:userId
  */
-export const getRidesByUserId = async (req, res) => {
+const getRidesByUserId = async (req, res) => {
   try {
     const rides = await Ride.find({ rider: req.params.userId })
       .populate('driver', 'name phone rating totalTrips profilePic vehicleInfo')
@@ -229,7 +229,7 @@ export const getRidesByUserId = async (req, res) => {
  * @desc    Get rides for a specific driver by driver ID
  * @route   GET /rides/driver/:driverId
  */
-export const getRidesByDriverId = async (req, res) => {
+const getRidesByDriverId = async (req, res) => {
   try {
     const rides = await Ride.find({ driver: req.params.driverId })
     if (!rides || rides.length === 0) {
@@ -243,7 +243,7 @@ export const getRidesByDriverId = async (req, res) => {
 }
 
 // Search for nearby drivers based on user location
-export const searchRide = async (req, res) => {
+const searchRide = async (req, res) => {
   const { pickupLocation } = req.body // User's pickup location (lat, lon)
   const { lat, lon } = pickupLocation
 
@@ -277,7 +277,7 @@ export const searchRide = async (req, res) => {
  * @desc    Calculate fare with time component
  * @route   POST /rides/calculate-fare
  */
-export const calculateFare = async (req, res) => {
+const calculateFare = async (req, res) => {
   try {
     const { pickupLocation, dropoffLocation, vehicleType, promoCode, userId, estimatedDuration } = req.body
 
@@ -378,7 +378,7 @@ export const calculateFare = async (req, res) => {
     let promoCodeApplied = null
 
     if (promoCode && userId) {
-      const Coupon = (await import('../../Models/Admin/coupon.modal.js')).default
+      const Coupon = require('../../Models/Admin/coupon.modal')
       const coupon = await Coupon.findOne({
         couponCode: promoCode.toUpperCase().trim()
       })
@@ -432,4 +432,14 @@ export const calculateFare = async (req, res) => {
   }
 }
 
-// All functions are already exported individually above using ES module syntax
+module.exports = {
+  createRide,
+  getAllRides,
+  getRideById,
+  updateRide,
+  deleteRide,
+  getRidesByUserId,
+  getRidesByDriverId,
+  searchRide,
+  calculateFare,
+}

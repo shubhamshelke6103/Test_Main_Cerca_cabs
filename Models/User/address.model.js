@@ -1,5 +1,5 @@
 // models/Address.js
-import mongoose from 'mongoose';
+const mongoose = require('mongoose');
 
 const { Schema, model } = mongoose;
 
@@ -73,4 +73,4 @@ const addressSchema = new Schema(
 addressSchema.index({ location: '2dsphere' });
 
 // Export the model
-export default model('Address', addressSchema);
+module.exports = model('Address', addressSchema);
