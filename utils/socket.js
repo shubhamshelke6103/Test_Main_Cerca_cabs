@@ -805,192 +805,173 @@ function initializeSocket (server) {
     })
 
     // ============================
-    // DRIVER ACCEPTS RIDE
+// DRIVER ACCEPTS RIDE
+// ============================
+socket.on('rideAccepted', async data => {
+  const { rideId, driverId } = data || {}
+
+  try {
+    logger.info(
+      `rideAccepted event - rideId: ${rideId}, driverId: ${driverId}`
+    )
+
+    if (!rideId || !driverId) {
+      logger.warn('rideAccepted: Missing rideId or driverId')
+      return
+    }
+
     // ============================
-    socket.on('rideAccepted', async data => {
-      const { rideId, driverId } = data || {}
+    // 🔒 REDIS RIDE LOCK (CRITICAL)
+    // ============================
+    const lockKey = `ride_lock:${rideId}`
 
-      try {
-        logger.info(
-          `rideAccepted event - rideId: ${rideId}, driverId: ${driverId}`
-        )
+    const locked = await redis.set(
+      lockKey,
+      driverId,
+      'NX',
+      'EX',
+      15
+    )
 
-        if (!rideId || !driverId) {
-          logger.warn('rideAccepted: Missing rideId or driverId')
-          return
-        }
+    if (!locked) {
+      logger.warn(`🚫 Ride ${rideId} already locked by another driver`)
+      socket.emit('rideError', {
+        message: 'This ride has already been accepted by another driver',
+        code: 'RIDE_ALREADY_ACCEPTED',
+        rideId
+      })
+      return
+    }
 
-        // ============================
-        // 🔒 REDIS RIDE LOCK (CRITICAL)
-        // ============================
-        const lockKey = `ride_lock:${rideId}`
+    // ============================
+    // ASSIGN DRIVER TO RIDE (DB)
+    // ============================
+    const assignedRide = await assignDriverToRide(
+      rideId,
+      driverId,
+      socket.id
+    )
 
-        const locked = await redis.set(
-          lockKey,
-          driverId,
-          'NX', // only set if not exists
-          'EX', // expire
-          15 // seconds (enough for DB transaction)
-        )
+    logger.info(
+      `Ride assigned successfully - rideId: ${rideId}, driverId: ${driverId}`
+    )
 
-        if (!locked) {
-          logger.warn(`🚫 Ride ${rideId} already locked by another driver`)
+    const isFullDayBooking = assignedRide.bookingType === 'FULL_DAY'
 
-          socket.emit('rideError', {
-            message: 'This ride has already been accepted by another driver',
-            code: 'RIDE_ALREADY_ACCEPTED',
-            rideId
-          })
-          return
-        }
+    const rideWithMetadata = {
+      ...(assignedRide.toObject ? assignedRide.toObject() : assignedRide),
+      isFullDayBooking
+    }
 
-        // ============================
-        // ASSIGN DRIVER TO RIDE (DB)
-        // ============================
-        const assignedRide = await assignDriverToRide(
-          rideId,
-          driverId,
-          socket.id
-        )
+    const roomName = `ride_${rideId}`
 
-        logger.info(
-          `Ride assigned successfully - rideId: ${rideId}, driverId: ${driverId}, driver: ${assignedRide.driver.name}`
-        )
+    // ============================
+    // 🔥 FORCE JOIN RIDE ROOM (SERVER-SIDE)
+    // ============================
+    io.in(`user_${assignedRide.rider._id || assignedRide.rider}`)
+      .socketsJoin(roomName)
 
-        // Check if this is a Full Day booking
-        const isFullDayBooking = assignedRide.bookingType === 'FULL_DAY'
+    io.in(`driver_${assignedRide.driver._id || assignedRide.driver}`)
+      .socketsJoin(roomName)
 
-        // Add metadata for client
-        const rideWithMetadata = {
-          ...(assignedRide.toObject ? assignedRide.toObject() : assignedRide),
-          isFullDayBooking
-        }
+    logger.info(`✅ Auto-joined rider & driver to ${roomName}`)
 
-        // ============================
-        // NOTIFY RIDER
-        // ============================
-        if (assignedRide.userSocketId) {
-          io.to(`user_${assignedRide.rider._id || assignedRide.rider}`).emit(
-            'rideAccepted',
-            rideWithMetadata
+    // ============================
+    // NOTIFY RIDER
+    // ============================
+    io.to(`user_${assignedRide.rider._id || assignedRide.rider}`).emit(
+      'rideAccepted',
+      rideWithMetadata
+    )
+
+    // ============================
+    // NOTIFY DRIVER
+    // ============================
+    if (assignedRide.driverSocketId) {
+      io.to(assignedRide.driverSocketId).emit(
+        'rideAssigned',
+        rideWithMetadata
+      )
+    }
+
+    // ============================
+    // BROADCAST TO RIDE ROOM
+    // ============================
+    io.to(roomName).emit('rideAccepted', rideWithMetadata)
+
+    // ============================
+    // CREATE NOTIFICATIONS
+    // ============================
+    await createNotification({
+      recipientId: assignedRide.rider._id,
+      recipientModel: 'User',
+      title: 'Driver Accepted',
+      message: `${assignedRide.driver.name} is coming to pick you up`,
+      type: 'ride_accepted',
+      relatedRide: rideId
+    })
+
+    await createNotification({
+      recipientId: assignedRide.driver._id,
+      recipientModel: 'Driver',
+      title: 'Ride Assigned',
+      message: 'You have accepted a new ride',
+      type: 'ride_accepted',
+      relatedRide: rideId
+    })
+
+    // ============================
+    // NOTIFY OTHER DRIVERS
+    // ============================
+    try {
+      const rideWithNotifiedDrivers = await Ride.findById(rideId)
+        .select('notifiedDrivers')
+        .lean()
+
+      if (rideWithNotifiedDrivers?.notifiedDrivers?.length) {
+        const acceptingDriverId =
+          assignedRide.driver._id || assignedRide.driver
+
+        const otherDriverIds =
+          rideWithNotifiedDrivers.notifiedDrivers.filter(
+            id => id.toString() !== acceptingDriverId.toString()
           )
-        }
 
-        // ============================
-        // NOTIFY DRIVER
-        // ============================
-        if (assignedRide.driverSocketId) {
-          io.to(assignedRide.driverSocketId).emit(
-            'rideAssigned',
-            rideWithMetadata
-          )
-        }
-
-        // ============================
-        // CREATE NOTIFICATIONS
-        // ============================
-        await createNotification({
-          recipientId: assignedRide.rider._id,
-          recipientModel: 'User',
-          title: 'Driver Accepted',
-          message: `${assignedRide.driver.name} is coming to pick you up`,
-          type: 'ride_accepted',
-          relatedRide: rideId
-        })
-
-        await createNotification({
-          recipientId: assignedRide.driver._id,
-          recipientModel: 'Driver',
-          title: 'Ride Assigned',
-          message: 'You have accepted a new ride',
-          type: 'ride_accepted',
-          relatedRide: rideId
-        })
-
-        // ============================
-        // ASK CLIENTS TO JOIN ROOM
-        // ============================
-        const roomName = `ride_${rideId}`
-
-        if (assignedRide.driverSocketId) {
-          io.to(assignedRide.driverSocketId).emit('joinRideRoom', {
-            rideId,
-            driverId: assignedRide.driver._id || assignedRide.driver,
-            userType: 'Driver'
+        if (otherDriverIds.length) {
+          const otherDrivers = await Driver.find({
+            _id: { $in: otherDriverIds }
           })
-        }
-
-        if (assignedRide.userSocketId) {
-          io.to(assignedRide.userSocketId).emit('joinRideRoom', {
-            rideId,
-            userId: assignedRide.rider._id || assignedRide.rider,
-            userType: 'User'
-          })
-        }
-
-        // Broadcast accepted state (Redis adapter makes this multi-server)
-        io.to(roomName).emit('rideAccepted', rideWithMetadata)
-
-        // ============================
-        // NOTIFY OTHER DRIVERS
-        // ============================
-        try {
-          const rideWithNotifiedDrivers = await Ride.findById(rideId)
-            .select('notifiedDrivers driver')
+            .select('socketId')
             .lean()
 
-          if (rideWithNotifiedDrivers?.notifiedDrivers?.length) {
-            const acceptingDriverId =
-              assignedRide.driver._id || assignedRide.driver
-
-            const otherDriverIds =
-              rideWithNotifiedDrivers.notifiedDrivers.filter(
-                id => id.toString() !== acceptingDriverId.toString()
-              )
-
-            if (otherDriverIds.length) {
-              const Driver = require('../Models/Driver/driver.model')
-              const otherDrivers = await Driver.find({
-                _id: { $in: otherDriverIds }
+          for (const d of otherDrivers) {
+            if (d.socketId) {
+              io.to(d.socketId).emit('rideNoLongerAvailable', {
+                rideId,
+                message: 'This ride has been accepted by another driver'
               })
-                .select('socketId')
-                .lean()
-
-              for (const d of otherDrivers) {
-                if (d.socketId) {
-                  io.to(d.socketId).emit('rideNoLongerAvailable', {
-                    rideId,
-                    message: 'This ride has been accepted by another driver'
-                  })
-                }
-              }
             }
           }
-        } catch (notifyError) {
-          logger.error(
-            `❌ Error notifying other drivers: ${notifyError.message}`
-          )
         }
-
-        logger.info(`rideAccepted completed successfully - rideId: ${rideId}`)
-      } catch (err) {
-        logger.error('rideAccepted error:', err)
-
-        let errorMessage = err.message || 'Failed to accept ride'
-        let errorCode = 'RIDE_ACCEPTANCE_FAILED'
-
-        if (err.message?.includes('already accepted')) {
-          errorMessage = 'This ride has already been accepted by another driver'
-          errorCode = 'RIDE_ALREADY_ACCEPTED'
-        }
-
-        socket.emit('rideError', {
-          message: errorMessage,
-          code: errorCode,
-          rideId
-        })
       }
+    } catch (notifyError) {
+      logger.error(
+        `❌ Error notifying other drivers: ${notifyError.message}`
+      )
+    }
+
+    logger.info(`rideAccepted completed successfully - rideId: ${rideId}`)
+  } catch (err) {
+    logger.error('rideAccepted error:', err)
+
+    socket.emit('rideError', {
+      message: err.message || 'Failed to accept ride',
+      code: 'RIDE_ACCEPTANCE_FAILED',
+      rideId
     })
+  }
+})
+
 
     // ============================
     // DRIVER REJECTS RIDE
@@ -1300,13 +1281,11 @@ function initializeSocket (server) {
         logger.info(`Driver marked as arrived - rideId: ${rideId}`)
 
         // Notify rider
-        if (ride.userSocketId) {
           io.to(`ride_${ride._id}`).emit('driverArrived', ride)
           logger.info(
             `Driver arrival notification sent to rider - rideId: ${rideId}`
           )
-        }
-
+        
         // Create notification for rider
         await createNotification({
           recipientId: ride.rider._id,
@@ -1382,12 +1361,12 @@ function initializeSocket (server) {
 
         logger.info(`Ride started successfully - rideId: ${rideId}`)
 
-        if (startedRide.userSocketId) {
+       
           io.to(`ride_${startedRide._id}`).emit('rideStarted', startedRide)
           logger.info(
             `Ride start notification sent to rider - rideId: ${rideId}`
           )
-        }
+        
         if (startedRide.driverSocketId) {
           io.to(startedRide.driverSocketId).emit('rideStarted', startedRide)
           logger.info(
@@ -1706,13 +1685,13 @@ function initializeSocket (server) {
           // Don't fail ride completion if referral processing fails
         })
 
-        if (completedRide.userSocketId) {
+        
           io.to(`ride_${completedRide._id}`).emit('rideCompleted', completedRide)
 
           logger.info(
             `Ride completion notification sent to rider - rideId: ${rideId}`
           )
-        }
+        
         if (completedRide.driverSocketId) {
           io.to(completedRide.driverSocketId).emit(
             'rideCompleted',
@@ -1783,13 +1762,13 @@ function initializeSocket (server) {
           `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${cancelledBy}, reason: ${cancellationReason}`
         )
 
-        if (cancelledRide.userSocketId) {
+     
           io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
 
           logger.info(
             `Cancellation notification sent to rider - rideId: ${rideId}`
           )
-        }
+        
         if (cancelledRide.driverSocketId) {
           io.to(cancelledRide.driverSocketId).emit(
             'rideCancelled',
