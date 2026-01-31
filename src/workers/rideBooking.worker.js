@@ -4,6 +4,8 @@ const { Worker } = require('bullmq')
 const redis = require('../../config/redis')
 const logger = require('../../utils/logger')
 
+const { QUEUE_NAME } = require('../queues/rideBooking.queue') // ✅ IMPORTANT
+
 const Ride = require('../../Models/Driver/ride.model')
 const Driver = require('../../Models/Driver/driver.model')
 
@@ -18,18 +20,19 @@ const { getSocketIO } = require('../../utils/socket')
 /**
  * BullMQ Worker — Ride Booking
  * ⚠️ RUN ONLY ON ONE SERVER
+ * ✅ Redis Cluster–safe
  */
 const rideBookingWorker = new Worker(
-  'ride-booking',
+  QUEUE_NAME, // ✅ FIXED — NO MORE 'ride-booking'
   async job => {
     const { rideId } = job.data
 
     logger.info(`🚀 Processing ride job | rideId: ${rideId}`)
 
     // ============================
-    // 🔒 REDIS WORKER LOCK
+    // 🔒 REDIS WORKER LOCK (cluster-safe)
     // ============================
-    const workerLockKey = `ride_worker_lock:${rideId}`
+    const workerLockKey = `{ride-booking}:lock:${rideId}`
     const locked = await redis.set(workerLockKey, '1', 'NX', 'EX', 30)
 
     if (!locked) {
@@ -108,15 +111,6 @@ const rideBookingWorker = new Worker(
     }
 
     // ============================
-    // VERIFY RIDE STILL VALID
-    // ============================
-    const statusCheck = await Ride.findById(rideId).select('status')
-    if (!statusCheck || statusCheck.status !== 'requested') {
-      logger.warn(`⚠️ Ride ${rideId} status changed, aborting notify`)
-      return
-    }
-
-    // ============================
     // NOTIFY DRIVERS
     // ============================
     const notifiedDriverIds = []
@@ -143,9 +137,6 @@ const rideBookingWorker = new Worker(
       }
     }
 
-    // ============================
-    // SAVE NOTIFIED DRIVERS
-    // ============================
     await Ride.findByIdAndUpdate(rideId, {
       $set: { notifiedDrivers: notifiedDriverIds }
     })
