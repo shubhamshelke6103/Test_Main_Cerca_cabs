@@ -1,5 +1,6 @@
 // index.js
-require('dotenv').config() // MUST BE FIRST
+// require('dotenv').config() // MUST BE FIRST
+import config from './config.js';
 
 const express = require('express')
 const cors = require('cors')
