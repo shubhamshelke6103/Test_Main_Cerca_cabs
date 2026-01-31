@@ -127,7 +127,7 @@ app.use('/rides', require('./Routes/ride.routes'))
    HEALTH & UPLOAD
 ======================= */
 app.get('/', (req, res) => {
-  res.send('Welcome to Cerca API!')
+  res.send('Welcome to Cerca API! Demo')
 })
 
 app.get('/health', (req, res) => {
