@@ -1,7 +1,10 @@
 // src/queues/rideBooking.queue.js
 const { Queue } = require('bullmq')
+const redis = require('../../config/redis') // ✅ FIX
 
-const rideBookingQueue = new Queue('{ride-booking}', {
+const QUEUE_NAME = '{ride-booking}'
+
+const rideBookingQueue = new Queue(QUEUE_NAME, {
   connection: redis,
 })
 
