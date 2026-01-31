@@ -27,7 +27,8 @@ module.exports = {
     /**
      * Job ID must be deterministic to prevent duplicates
      */
-    const jobId = `ride:${rideId}`
+    const jobId = `ride_${rideId}`
+
 
     try {
       // 🔒 Prevent duplicate jobs (idempotency)

@@ -5,7 +5,12 @@ const crypto = require('crypto')
 // const rideBookingQueue = require('../../src/queues/rideBooking.queue')
 const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
-const { mapServiceToVehicleService, calculateFareWithTime, calculateHaversineDistance } = rideBookingFunctions
+const {
+  mapServiceToVehicleService,
+  calculateFareWithTime,
+  calculateHaversineDistance
+} = rideBookingFunctions
+const Driver = require('../../Models/Driver/driver.model')
 
 /**
  * @desc    Create a new ride
@@ -24,9 +29,12 @@ const createRide = async (req, res) => {
       })
 
       if (existingActiveRide) {
-        logger.warn(`Duplicate ride attempt prevented for rider ${riderId}. Active ride: ${existingActiveRide._id}`)
+        logger.warn(
+          `Duplicate ride attempt prevented for rider ${riderId}. Active ride: ${existingActiveRide._id}`
+        )
         return res.status(409).json({
-          message: 'You already have an active ride. Please cancel it before booking a new one.',
+          message:
+            'You already have an active ride. Please cancel it before booking a new one.',
           activeRideId: existingActiveRide._id
         })
       }
@@ -54,7 +62,7 @@ const createRide = async (req, res) => {
     rideData.distanceInKm = distance
 
     // Fetch the selected service from the ride data
-    const selectedService = rideData.service?.toLowerCase();
+    const selectedService = rideData.service?.toLowerCase()
     const service = settings.services.find(
       s => s.name.toLowerCase() === selectedService
     )
@@ -69,8 +77,7 @@ const createRide = async (req, res) => {
 
     // Add fare and service to the ride data
     rideData.fare = fare
-    rideData.service = service.name.toLowerCase();
-
+    rideData.service = service.name.toLowerCase()
 
     // Generate start and stop OTPs
     const startOtp = crypto.randomInt(1000, 9999).toString()
@@ -92,9 +99,8 @@ const createRide = async (req, res) => {
     logger.info(`📥 Queuing ride ${ride._id} for driver discovery`)
 
     await rideBookingProducer.add('process-ride', {
-  rideId: ride._id.toString(),
-})
-
+      rideId: ride._id.toString()
+    })
 
     logger.info(`✅ Ride ${ride._id} successfully added to Redis queue`)
 
@@ -281,7 +287,14 @@ const searchRide = async (req, res) => {
  */
 const calculateFare = async (req, res) => {
   try {
-    const { pickupLocation, dropoffLocation, vehicleType, promoCode, userId, estimatedDuration } = req.body
+    const {
+      pickupLocation,
+      dropoffLocation,
+      vehicleType,
+      promoCode,
+      userId,
+      estimatedDuration
+    } = req.body
 
     // Validate required fields
     if (!pickupLocation || !dropoffLocation) {
@@ -293,9 +306,12 @@ const calculateFare = async (req, res) => {
 
     // Extract coordinates
     let pickupLat, pickupLng, dropoffLat, dropoffLng
-    
-    if (pickupLocation.coordinates && Array.isArray(pickupLocation.coordinates)) {
-      [pickupLng, pickupLat] = pickupLocation.coordinates
+
+    if (
+      pickupLocation.coordinates &&
+      Array.isArray(pickupLocation.coordinates)
+    ) {
+      ;[pickupLng, pickupLat] = pickupLocation.coordinates
     } else if (pickupLocation.latitude && pickupLocation.longitude) {
       pickupLat = pickupLocation.latitude
       pickupLng = pickupLocation.longitude
@@ -306,8 +322,11 @@ const calculateFare = async (req, res) => {
       })
     }
 
-    if (dropoffLocation.coordinates && Array.isArray(dropoffLocation.coordinates)) {
-      [dropoffLng, dropoffLat] = dropoffLocation.coordinates
+    if (
+      dropoffLocation.coordinates &&
+      Array.isArray(dropoffLocation.coordinates)
+    ) {
+      ;[dropoffLng, dropoffLat] = dropoffLocation.coordinates
     } else if (dropoffLocation.latitude && dropoffLocation.longitude) {
       dropoffLat = dropoffLocation.latitude
       dropoffLng = dropoffLocation.longitude
@@ -319,7 +338,12 @@ const calculateFare = async (req, res) => {
     }
 
     // Calculate distance using Haversine formula
-    const distance = calculateHaversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng)
+    const distance = calculateHaversineDistance(
+      pickupLat,
+      pickupLng,
+      dropoffLat,
+      dropoffLng
+    )
 
     // Estimate duration if not provided (using average speed of 35 km/h for city driving)
     let duration = estimatedDuration
@@ -341,9 +365,9 @@ const calculateFare = async (req, res) => {
 
     // Map vehicle type to service name
     const serviceNameMap = {
-      'small': 'sedan',
-      'medium': 'suv',
-      'large': 'auto'
+      small: 'sedan',
+      medium: 'suv',
+      large: 'auto'
     }
     const serviceName = serviceNameMap[vehicleType] || vehicleType || 'sedan'
 
@@ -394,7 +418,9 @@ const calculateFare = async (req, res) => {
             coupon.applicableServices.includes(service.name)
 
           if (serviceApplicable) {
-            const discountResult = coupon.calculateDiscount(fareBreakdown.fareAfterMinimum)
+            const discountResult = coupon.calculateDiscount(
+              fareBreakdown.fareAfterMinimum
+            )
             if (discountResult.discount > 0) {
               discount = discountResult.discount
               finalFare = discountResult.finalFare
@@ -443,5 +469,5 @@ module.exports = {
   getRidesByUserId,
   getRidesByDriverId,
   searchRide,
-  calculateFare,
+  calculateFare
 }
