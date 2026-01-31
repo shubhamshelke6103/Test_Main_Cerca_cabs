@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A Taxi Booking App Backend",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "nodemon index.js",
     "start:4000": "cross-env PORT=4000 nodemon index.js",
