@@ -870,7 +870,7 @@ function initializeSocket (server) {
         // NOTIFY RIDER
         // ============================
         if (assignedRide.userSocketId) {
-          io.to(assignedRide.userSocketId).emit(
+          io.to(`user_${assignedRide.rider._id || assignedRide.rider}`).emit(
             'rideAccepted',
             rideWithMetadata
           )
@@ -1301,7 +1301,7 @@ function initializeSocket (server) {
 
         // Notify rider
         if (ride.userSocketId) {
-          io.to(ride.userSocketId).emit('driverArrived', ride)
+          io.to(`ride_${ride._id}`).emit('driverArrived', ride)
           logger.info(
             `Driver arrival notification sent to rider - rideId: ${rideId}`
           )
@@ -1383,7 +1383,7 @@ function initializeSocket (server) {
         logger.info(`Ride started successfully - rideId: ${rideId}`)
 
         if (startedRide.userSocketId) {
-          io.to(startedRide.userSocketId).emit('rideStarted', startedRide)
+          io.to(`ride_${startedRide._id}`).emit('rideStarted', startedRide)
           logger.info(
             `Ride start notification sent to rider - rideId: ${rideId}`
           )
@@ -1707,7 +1707,8 @@ function initializeSocket (server) {
         })
 
         if (completedRide.userSocketId) {
-          io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+          io.to(`ride_${completedRide._id}`).emit('rideCompleted', completedRide)
+
           logger.info(
             `Ride completion notification sent to rider - rideId: ${rideId}`
           )
@@ -1783,7 +1784,8 @@ function initializeSocket (server) {
         )
 
         if (cancelledRide.userSocketId) {
-          io.to(cancelledRide.userSocketId).emit('rideCancelled', cancelledRide)
+          io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
+
           logger.info(
             `Cancellation notification sent to rider - rideId: ${rideId}`
           )
