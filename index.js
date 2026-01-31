@@ -1,6 +1,5 @@
 // index.js
-// require('dotenv').config() // MUST BE FIRST
-import config from './config.js';
+require('dotenv').config() // MUST BE FIRST
 
 const express = require('express')
 const cors = require('cors')
@@ -18,7 +17,7 @@ const initScheduledRideWorker = require('./src/workers/scheduledRide.worker')
 const initRideAutoCancelWorker = require('./src/workers/rideAutoCancel.worker')
 
 const app = express()
-const port = process.env.PORT || 3000
+const port = process.env.PORT || 8000
 
 /* =======================
    DATABASE
