@@ -9,8 +9,8 @@ const Ride = require('../Models/Driver/ride.model')
 const Message = require('../Models/Driver/message.model')
 const AdminEarnings = require('../Models/Admin/adminEarnings.model')
 const Settings = require('../Models/Admin/settings.modal')
-const rideBookingQueue = require('../src/queues/rideBooking.queue')
-
+// const rideBookingQueue = require('../src/queues/rideBooking.queue')
+const { rideBookingQueue } = require('../src/queues/rideBooking.queue')
 const {
   updateDriverStatus,
   updateDriverLocation,
