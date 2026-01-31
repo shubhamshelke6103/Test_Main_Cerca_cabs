@@ -5,7 +5,7 @@ const logger = require('./utils/logger');
 //68rttbD6B7hNXCrL techlapsebusiness
 const connectDB = async () => {
     try {
-        await mongoose.connect("mongodb+srv://techlapsebusiness:68rttbD6B7hNXCrL@cerca-cluster0.uo0vjhs.mongodb.net/cerca", {
+        await mongoose.connect("mongodb+srv://shubhamshelke6103_db:shubham011@cluster0.23riiuz.mongodb.net/demo_Cerca_API?retryWrites=true&w=majority&appName=Cluster0", {
            useUnifiedTopology: true,
             serverSelectionTimeoutMS:20000
         });
