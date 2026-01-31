@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 export default config = {
-  port: process.env.PORT || 3000,
+  port: process.env.PORT || 8000,
   env: process.env.NODE_ENV || 'development',
   rateLimit: {
     windowMs: 15 * 60 * 1000, // 15 minutes
