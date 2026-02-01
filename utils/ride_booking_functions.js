@@ -2301,6 +2301,7 @@ module.exports = {
   mapVehicleServiceToDriverType,
   mapServiceToDriverType,
   calculateFareWithTime,
+  calculateHaversineDistance,
   createRide,
   assignDriverToRide,
   startRide,
