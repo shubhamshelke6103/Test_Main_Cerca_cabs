@@ -7,6 +7,9 @@ const redis = new IORedis({
   password: process.env.REDIS_PASSWORD || undefined,
   db: Number(process.env.REDIS_DB) || 0,
   tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+  // Required for BullMQ blocking operations (BLPOP, BRPOP)
+  // AWS ElastiCache compatible - this is a client-side setting
+  maxRetriesPerRequest: null,
 })
 
 redis.on('connect', () => {
