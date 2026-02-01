@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const logger = require('./utils/logger');
 
 const mongoUri = process.env.MONGODB_URI ||
-    "mongodb+srv://shubhamshelke6103_db:shubham011@cluster0.23riiuz.mongodb.net/demo_Cerca_API?retryWrites=true&w=majority&appName=Cluster0";
+    "mongodb+srv://cercacars:8UJAiLQ4bGkTBIat@cluster0.bvbsosh.mongodb.net/demo_Cerca_API?retryWrites=true&w=majority&appName=Cluster0";
 
 mongoose.connection.on('connected', () => {
     logger.info('🟢 MongoDB connected');
