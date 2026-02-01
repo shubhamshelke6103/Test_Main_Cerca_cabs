@@ -13,6 +13,8 @@ const connectDB = require('./db')
 
 const app = express()
 const port = process.env.PORT || 8000
+app.set('trust proxy', true)
+app.set('trust proxy', 1)
 
 /* =======================
    DATABASE

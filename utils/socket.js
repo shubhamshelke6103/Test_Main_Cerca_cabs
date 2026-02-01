@@ -53,7 +53,16 @@ function initializeSocket (server) {
     },
     transports: ['polling', 'websocket'],
     pingInterval: 25000,
-    pingTimeout: 60000
+    pingTimeout: 60000,
+    allowEIO3: true, 
+    cookie:{
+      httpOnly: false,
+      sameSite: 'lax'
+    }
+  })
+
+   io.engine.on('connection', (socket) => {
+    socket.request.headers['x-forwarded-for'] = socket.request.headers['x-forwarded-for'] || socket.request.connection.remoteAddress
   })
 
   // 🔥 MULTI-SERVER FIX — Redis Adapter
