@@ -24,9 +24,101 @@ const getSettings = async (req, res) => {
 const updateSettings = async (req, res) => {
     try {
         // Get existing settings first
-        const existingSettings = await Settings.findOne();
+        let existingSettings = await Settings.findOne();
+        
+        // If settings don't exist, create them with the provided data
         if (!existingSettings) {
-            return res.status(404).json({ message: 'Settings not found' });
+            // Ensure all required fields are present when creating new settings
+            const newSettingsData = { ...req.body };
+            
+            // Ensure pricingConfigurations has all required fields
+            if (!newSettingsData.pricingConfigurations) {
+                newSettingsData.pricingConfigurations = {
+                    baseFare: 0,
+                    perKmRate: 12,
+                    minimumFare: 100,
+                    cancellationFees: 50,
+                    platformFees: 10,
+                    driverCommissions: 90
+                };
+            }
+            
+            // Ensure vehicleServices have all required fields
+            if (!newSettingsData.vehicleServices) {
+                newSettingsData.vehicleServices = {
+                    cercaSmall: {
+                        name: 'Cerca Small',
+                        price: 299,
+                        perMinuteRate: 2,
+                        seats: 4,
+                        enabled: true,
+                        imagePath: 'assets/cars/cerca-small.png'
+                    },
+                    cercaMedium: {
+                        name: 'Cerca Medium',
+                        price: 499,
+                        perMinuteRate: 3,
+                        seats: 6,
+                        enabled: true,
+                        imagePath: 'assets/cars/Cerca-medium.png'
+                    },
+                    cercaLarge: {
+                        name: 'Cerca Large',
+                        price: 699,
+                        perMinuteRate: 4,
+                        seats: 8,
+                        enabled: true,
+                        imagePath: 'assets/cars/cerca-large.png'
+                    }
+                };
+            } else {
+                // Ensure each vehicle service has all required fields
+                ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+                    if (newSettingsData.vehicleServices[serviceKey]) {
+                        const service = newSettingsData.vehicleServices[serviceKey];
+                        // Ensure perMinuteRate is set
+                        if (service.perMinuteRate === undefined || service.perMinuteRate === null) {
+                            service.perMinuteRate = serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4;
+                        }
+                        // Ensure price is set
+                        if (service.price === undefined || service.price === null) {
+                            service.price = serviceKey === 'cercaSmall' ? 299 : serviceKey === 'cercaMedium' ? 499 : 699;
+                        }
+                        // Ensure other fields have defaults
+                        if (!service.name) {
+                            service.name = serviceKey === 'cercaSmall' ? 'Cerca Small' : serviceKey === 'cercaMedium' ? 'Cerca Medium' : 'Cerca Large';
+                        }
+                        if (service.seats === undefined || service.seats === null) {
+                            service.seats = serviceKey === 'cercaSmall' ? 4 : serviceKey === 'cercaMedium' ? 6 : 8;
+                        }
+                        if (service.enabled === undefined) {
+                            service.enabled = true;
+                        }
+                        if (!service.imagePath) {
+                            service.imagePath = serviceKey === 'cercaSmall' ? 'assets/cars/cerca-small.png' : 
+                                               serviceKey === 'cercaMedium' ? 'assets/cars/Cerca-medium.png' : 
+                                               'assets/cars/cerca-large.png';
+                        }
+                    }
+                });
+            }
+            
+            // Ensure systemSettings exists
+            if (!newSettingsData.systemSettings) {
+                newSettingsData.systemSettings = {
+                    maintenanceMode: false,
+                    forceUpdate: false,
+                    maintenanceMessage: null
+                };
+            }
+            
+            // Create new settings with the provided data
+            const newSettings = new Settings(newSettingsData);
+            await newSettings.save();
+            return res.status(201).json({ 
+                message: 'Settings created successfully', 
+                settings: newSettings 
+            });
         }
 
         // Prepare update object with proper merging for nested objects
