@@ -15,7 +15,8 @@ const logger = require('./utils/logger')
 const { initializeSocket, getSocketHealth } = require('./utils/socket')
 const { connectDB, checkMongoDBHealth } = require('./db')
 const { redis, checkRedisHealth } = require('./config/redis')
-const { apiLimiter, authLimiter, readLimiter, uploadLimiter } = require('./middleware/rateLimiter')
+// Rate limiting temporarily disabled - will be re-enabled later
+// const { apiLimiter, authLimiter, readLimiter, uploadLimiter } = require('./middleware/rateLimiter')
 const mongoose = require('mongoose')
 
 const app = express()
@@ -88,13 +89,12 @@ if (enableWorkers) {
 /* =======================
    MIDDLEWARES
 ======================= */
-// Rate limiting - apply general API limiter to all routes
-// Ensure apiLimiter is a valid middleware function
-if (apiLimiter && typeof apiLimiter === 'function') {
-  app.use(apiLimiter)
-} else {
-  logger.warn('⚠️ apiLimiter is not available, skipping rate limiting')
-}
+// Rate limiting temporarily disabled - will be re-enabled later
+// if (apiLimiter && typeof apiLimiter === 'function') {
+//   app.use(apiLimiter)
+// } else {
+//   logger.warn('⚠️ apiLimiter is not available, skipping rate limiting')
+// }
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -137,12 +137,10 @@ const upload = multer({
 /* =======================
    ROUTES (ALL COMMONJS)
 ======================= */
-// Auth routes with strict rate limiting
-if (authLimiter && typeof authLimiter === 'function') {
-  app.use('/users/login', authLimiter)
-} else {
-  logger.warn('⚠️ authLimiter is not available, skipping auth rate limiting')
-}
+// Auth routes - rate limiting temporarily disabled
+// if (authLimiter && typeof authLimiter === 'function') {
+//   app.use('/users/login', authLimiter)
+// }
 app.use('/users', require('./Routes/User/user.routes'))
 app.use('/users', require('./Routes/User/wallet.routes'))
 app.use('/users', require('./Routes/User/referral.routes'))
@@ -235,7 +233,7 @@ app.get('/health/socket', (req, res) => {
   }
 })
 
-app.post('/upload', (uploadLimiter && typeof uploadLimiter === 'function' ? uploadLimiter : (req, res, next) => next()), upload.single('image'), (req, res) => {
+app.post('/upload', upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.')
   }
