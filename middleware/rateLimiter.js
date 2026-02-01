@@ -56,8 +56,7 @@ try {
 }
 
 // General API rate limiter (100 requests per minute per IP)
-const apiLimiter = rateLimit({
-  store: redisStore,
+const apiLimiterConfig = {
   windowMs: 60 * 1000, // 1 minute
   max: 100, // Limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
@@ -68,14 +67,20 @@ const apiLimiter = rateLimit({
     res.status(429).json({
       error: 'Too many requests',
       message: 'Too many requests from this IP, please try again later.',
-      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+      retryAfter: req.rateLimit?.resetTime ? Math.ceil(req.rateLimit.resetTime / 1000) : 60
     })
   }
-})
+}
+
+// Only add store if Redis is available
+if (redisStore) {
+  apiLimiterConfig.store = redisStore
+}
+
+const apiLimiter = rateLimit(apiLimiterConfig)
 
 // Strict auth rate limiter (5 requests per minute per IP)
-const authLimiter = rateLimit({
-  store: redisStore,
+const authLimiterConfig = {
   windowMs: 60 * 1000, // 1 minute
   max: 5, // Limit each IP to 5 requests per windowMs
   message: 'Too many authentication attempts, please try again later.',
@@ -87,14 +92,19 @@ const authLimiter = rateLimit({
     res.status(429).json({
       error: 'Too many authentication attempts',
       message: 'Too many authentication attempts from this IP, please try again later.',
-      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+      retryAfter: req.rateLimit?.resetTime ? Math.ceil(req.rateLimit.resetTime / 1000) : 60
     })
   }
-})
+}
+
+if (redisStore) {
+  authLimiterConfig.store = redisStore
+}
+
+const authLimiter = rateLimit(authLimiterConfig)
 
 // Lenient read rate limiter (200 requests per minute per IP)
-const readLimiter = rateLimit({
-  store: redisStore,
+const readLimiterConfig = {
   windowMs: 60 * 1000, // 1 minute
   max: 200, // Limit each IP to 200 requests per windowMs
   message: 'Too many read requests, please try again later.',
@@ -105,14 +115,19 @@ const readLimiter = rateLimit({
     res.status(429).json({
       error: 'Too many requests',
       message: 'Too many read requests from this IP, please try again later.',
-      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+      retryAfter: req.rateLimit?.resetTime ? Math.ceil(req.rateLimit.resetTime / 1000) : 60
     })
   }
-})
+}
+
+if (redisStore) {
+  readLimiterConfig.store = redisStore
+}
+
+const readLimiter = rateLimit(readLimiterConfig)
 
 // Upload rate limiter (10 uploads per hour per IP)
-const uploadLimiter = rateLimit({
-  store: redisStore,
+const uploadLimiterConfig = {
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 10, // Limit each IP to 10 uploads per hour
   message: 'Too many uploads, please try again later.',
@@ -123,10 +138,16 @@ const uploadLimiter = rateLimit({
     res.status(429).json({
       error: 'Too many uploads',
       message: 'Too many uploads from this IP, please try again later.',
-      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+      retryAfter: req.rateLimit?.resetTime ? Math.ceil(req.rateLimit.resetTime / 1000) : 3600
     })
   }
-})
+}
+
+if (redisStore) {
+  uploadLimiterConfig.store = redisStore
+}
+
+const uploadLimiter = rateLimit(uploadLimiterConfig)
 
 module.exports = {
   apiLimiter,
