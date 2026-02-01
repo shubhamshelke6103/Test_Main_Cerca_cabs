@@ -41,14 +41,27 @@ class RedisStore {
 }
 
 // Initialize Redis store if Redis is available
+// Note: Redis connection is async, so we check status but don't fail if not ready
 let redisStore
 try {
-  if (redis && (redis.status === 'ready' || redis.status === 'connect')) {
-    redisStore = new RedisStore(redis, 'rl:')
-    logger.info('✅ Rate limiter using Redis store (shared across instances)')
+  // Check if redis object exists and has a valid status
+  if (redis && typeof redis.status === 'string') {
+    const status = redis.status.toLowerCase()
+    if (status === 'ready' || status === 'connect' || status === 'connecting') {
+      try {
+        redisStore = new RedisStore(redis, 'rl:')
+        logger.info('✅ Rate limiter using Redis store (shared across instances)')
+      } catch (storeError) {
+        logger.warn('⚠️ Failed to create Redis store, using memory store:', storeError.message)
+        redisStore = undefined
+      }
+    } else {
+      logger.warn(`⚠️ Redis status is "${status}", rate limiter will use memory store (not shared across instances)`)
+      redisStore = undefined
+    }
   } else {
-    logger.warn('⚠️ Redis not ready, rate limiter will use memory store (not shared across instances)')
-    redisStore = undefined // Fallback to memory store
+    logger.warn('⚠️ Redis not available, rate limiter will use memory store (not shared across instances)')
+    redisStore = undefined
   }
 } catch (error) {
   logger.warn('⚠️ Failed to initialize Redis store for rate limiting, using memory store:', error.message)
@@ -77,7 +90,17 @@ if (redisStore) {
   apiLimiterConfig.store = redisStore
 }
 
-const apiLimiter = rateLimit(apiLimiterConfig)
+let apiLimiter
+try {
+  apiLimiter = rateLimit(apiLimiterConfig)
+  if (typeof apiLimiter !== 'function') {
+    throw new Error('rateLimit did not return a function')
+  }
+} catch (error) {
+  logger.error('❌ Failed to create API rate limiter:', error)
+  // Create a no-op middleware as fallback
+  apiLimiter = (req, res, next) => next()
+}
 
 // Strict auth rate limiter (5 requests per minute per IP)
 const authLimiterConfig = {
@@ -101,7 +124,13 @@ if (redisStore) {
   authLimiterConfig.store = redisStore
 }
 
-const authLimiter = rateLimit(authLimiterConfig)
+let authLimiter
+try {
+  authLimiter = rateLimit(authLimiterConfig)
+} catch (error) {
+  logger.error('❌ Failed to create auth rate limiter:', error)
+  authLimiter = (req, res, next) => next()
+}
 
 // Lenient read rate limiter (200 requests per minute per IP)
 const readLimiterConfig = {
@@ -124,7 +153,13 @@ if (redisStore) {
   readLimiterConfig.store = redisStore
 }
 
-const readLimiter = rateLimit(readLimiterConfig)
+let readLimiter
+try {
+  readLimiter = rateLimit(readLimiterConfig)
+} catch (error) {
+  logger.error('❌ Failed to create read rate limiter:', error)
+  readLimiter = (req, res, next) => next()
+}
 
 // Upload rate limiter (10 uploads per hour per IP)
 const uploadLimiterConfig = {
@@ -147,7 +182,13 @@ if (redisStore) {
   uploadLimiterConfig.store = redisStore
 }
 
-const uploadLimiter = rateLimit(uploadLimiterConfig)
+let uploadLimiter
+try {
+  uploadLimiter = rateLimit(uploadLimiterConfig)
+} catch (error) {
+  logger.error('❌ Failed to create upload rate limiter:', error)
+  uploadLimiter = (req, res, next) => next()
+}
 
 module.exports = {
   apiLimiter,
