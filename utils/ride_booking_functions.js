@@ -7,7 +7,7 @@ const Notification = require('../Models/User/notification.model')
 const Emergency = require('../Models/User/emergency.model')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
 const logger = require('./logger')
-const redis = require('../config/redis')
+const { redis } = require('../config/redis')
 
 
 //Helper Function

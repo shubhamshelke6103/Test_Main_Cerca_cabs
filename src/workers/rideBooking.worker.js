@@ -1,7 +1,7 @@
 console.log('🔥 rideBooking.worker.js (BullMQ) loaded')
 
 const { Worker } = require('bullmq')
-const redis = require('../../config/redis')
+const { redis } = require('../../config/redis')
 const logger = require('../../utils/logger')
 
 const { QUEUE_NAME } = require('../queues/rideBooking.queue') // ✅ IMPORTANT

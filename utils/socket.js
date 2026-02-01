@@ -1,5 +1,5 @@
 const { createAdapter } = require('@socket.io/redis-adapter')
-const redis = require('../config/redis')
+const { redis, checkRedisHealth } = require('../config/redis')
 
 const { Server } = require('socket.io')
 const logger = require('./logger')
@@ -51,7 +51,8 @@ function initializeSocket (server) {
       origin: '*',
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
     },
-    transports: ['polling', 'websocket'],
+    // Optimize transport order: websocket first for better performance
+    transports: ['websocket', 'polling'],
     pingInterval: 25000,
     pingTimeout: 60000,
     allowEIO3: true, 
@@ -65,13 +66,29 @@ function initializeSocket (server) {
     socket.request.headers['x-forwarded-for'] = socket.request.headers['x-forwarded-for'] || socket.request.connection.remoteAddress
   })
 
-  // 🔥 MULTI-SERVER FIX — Redis Adapter
-  const pubClient = redis
-  const subClient = redis.duplicate()
+  // 🔥 MULTI-SERVER FIX — Redis Adapter with error handling
+  try {
+    const pubClient = redis
+    // Create dedicated subClient with proper configuration
+    const subClient = redis.duplicate()
+    
+    // Configure subClient with same settings
+    subClient.on('error', (err) => {
+      logger.error('🔴 Redis subClient error:', err)
+    })
 
-  io.adapter(createAdapter(pubClient, subClient))
+    subClient.on('connect', () => {
+      logger.info('🟢 Redis subClient connected')
+    })
 
-  logger.info('🟢 Socket.IO Redis adapter enabled (multi-server ready)')
+    io.adapter(createAdapter(pubClient, subClient))
+    logger.info('🟢 Socket.IO Redis adapter enabled (multi-server ready)')
+  } catch (error) {
+    logger.error('❌ Failed to initialize Redis adapter:', error)
+    logger.warn('⚠️ Socket.IO will run in single-instance mode (not production-ready for load balancing)')
+    // Continue without adapter - single instance mode
+    // In production, this should fail fast or use fallback
+  }
 
   io.on('connection', socket => {
     logger.info(`Socket connected: ${socket.id}`)
@@ -2921,4 +2938,11 @@ async function processReferralRewardIfFirstRide (userId, rideId) {
   }
 }
 
-module.exports = { initializeSocket, getSocketIO }
+function getSocketHealth() {
+  return {
+    connected: io ? io.engine.clientsCount : 0,
+    adapter: io?.engine?.adapter?.constructor?.name || 'unknown'
+  }
+}
+
+module.exports = { initializeSocket, getSocketIO, getSocketHealth, checkRedisHealth }
