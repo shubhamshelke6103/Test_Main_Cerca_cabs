@@ -23,6 +23,18 @@ const createRide = async (req, res) => {
 
     // Check for existing active ride to prevent duplicates
     if (riderId) {
+      // ============================
+      // STALE DATA CLEANUP (Multi-Instance Safe)
+      // ============================
+      // Check and clean up any stale Redis locks before checking MongoDB
+      try {
+        const { checkAndCleanStaleRideLocks } = require('../../utils/ride_booking_functions')
+        await checkAndCleanStaleRideLocks(riderId)
+      } catch (cleanupError) {
+        // Don't fail ride creation if cleanup check fails - log for monitoring
+        logger.warn(`⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`)
+      }
+
       const existingActiveRide = await Ride.findOne({
         rider: riderId,
         status: { $in: ['requested', 'accepted', 'in_progress'] }

@@ -12,7 +12,8 @@ const Driver = require('../../Models/Driver/driver.model')
 const {
   searchDriversWithProgressiveRadius,
   createNotification,
-  cancelRide
+  cancelRide,
+  clearWorkerLock
 } = require('../../utils/ride_booking_functions')
 
 const { getSocketIO } = require('../../utils/socket')
@@ -144,6 +145,18 @@ const rideBookingWorker = new Worker(
     logger.info(
       `✅ Ride ${rideId} processed | notifiedDrivers: ${notifiedDriverIds.length}`
     )
+
+    // ============================
+    // REDIS LOCK CLEANUP (Multi-Instance Safe)
+    // ============================
+    // Lock will expire via TTL (30s), but explicit cleanup ensures immediate release
+    // This is especially important if ride is cancelled/completed while worker is processing
+    try {
+      await clearWorkerLock(rideId)
+    } catch (cleanupError) {
+      // Don't fail job if cleanup fails - lock will expire via TTL
+      logger.warn(`⚠️ Failed to clear worker lock for ride ${rideId}: ${cleanupError.message}`)
+    }
   },
   {
     connection: redis,

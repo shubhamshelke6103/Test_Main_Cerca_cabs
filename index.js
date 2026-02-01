@@ -121,6 +121,68 @@ app.get('/', (req, res) => {
   res.send('Welcome to Cerca API! Demo')
 })
 
+// ============================
+// ADMIN UTILITIES (Redis Cleanup)
+// ============================
+// Admin endpoint to clear stale Redis data for a specific ride
+app.post('/admin/redis/clear-ride/:rideId', async (req, res) => {
+  try {
+    // TODO: Add admin authentication middleware
+    const { rideId } = req.params
+    const { clearRideRedisKeys } = require('./utils/ride_booking_functions')
+    
+    const result = await clearRideRedisKeys(rideId)
+    
+    if (result.cleared) {
+      res.status(200).json({
+        success: true,
+        message: `Redis keys cleared for ride ${rideId}`,
+        deletedCount: result.deletedCount,
+        errors: result.errors
+      })
+    } else {
+      res.status(400).json({
+        success: false,
+        message: `Failed to clear Redis keys for ride ${rideId}`,
+        error: result.error
+      })
+    }
+  } catch (error) {
+    logger.error('Error clearing Redis keys:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    })
+  }
+})
+
+// Admin endpoint to clear stale Redis data for a specific rider
+app.post('/admin/redis/clear-rider/:riderId', async (req, res) => {
+  try {
+    // TODO: Add admin authentication middleware
+    const { riderId } = req.params
+    const { checkAndCleanStaleRideLocks } = require('./utils/ride_booking_functions')
+    
+    const result = await checkAndCleanStaleRideLocks(riderId)
+    
+    res.status(200).json({
+      success: true,
+      message: `Stale lock check completed for rider ${riderId}`,
+      cleaned: result.cleaned,
+      reason: result.reason,
+      activeRideIds: result.activeRideIds || []
+    })
+  } catch (error) {
+    logger.error('Error checking stale locks:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    })
+  }
+})
+
 app.post('/upload', upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.')

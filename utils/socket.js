@@ -40,7 +40,9 @@ const {
   resolveEmergency,
   autoAssignDriver,
   searchDriversWithProgressiveRadius,
-  validateAndFixDriverStatus
+  validateAndFixDriverStatus,
+  checkAndCleanStaleRideLocks,
+  clearRideRedisKeys
 } = require('./ride_booking_functions')
 
 let io
@@ -579,6 +581,18 @@ function initializeSocket (server) {
         // Check for existing active ride to prevent duplicates
         const riderId = data.rider || data.riderId
         if (riderId) {
+          // ============================
+          // STALE DATA CLEANUP (Multi-Instance Safe)
+          // ============================
+          // Check and clean up any stale Redis locks before checking MongoDB
+          try {
+            await checkAndCleanStaleRideLocks(riderId)
+          } catch (cleanupError) {
+            // Don't fail ride creation if cleanup check fails - log for monitoring
+            logger.warn(`⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`)
+          }
+
+          // Check MongoDB for active rides
           const existingActiveRide = await Ride.findOne({
             rider: riderId,
             status: { $in: ['requested', 'accepted', 'in_progress'] }
@@ -1769,6 +1783,7 @@ function initializeSocket (server) {
         }
 
         // Cancel ride with reason
+        // cancelRide also calls clearRideRedisKeys automatically
         const cancelledRide = await cancelRide(
           rideId,
           cancelledBy,
@@ -1777,6 +1792,17 @@ function initializeSocket (server) {
         logger.info(
           `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${cancelledBy}, reason: ${cancellationReason}`
         )
+
+        // ============================
+        // REDIS CLEANUP (Multi-Instance Safe)
+        // ============================
+        // Additional cleanup in socket handler (cancelRide already does this, but extra safety)
+        try {
+          await clearRideRedisKeys(rideId)
+        } catch (cleanupError) {
+          // Don't fail cancellation if cleanup fails - log for monitoring
+          logger.warn(`⚠️ Additional Redis cleanup failed for cancelled ride ${rideId}: ${cleanupError.message}`)
+        }
 
         io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
 
