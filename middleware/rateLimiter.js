@@ -97,6 +97,28 @@ if (isRedisAvailable()) {
   logger.warn('⚠️ Redis not available, rate limiters will use memory stores (not shared across instances)')
 }
 
+// Helper function to safely create a rate limiter
+function createRateLimiter(config, store, name) {
+  try {
+    // Only add store if it's defined
+    if (store) {
+      config.store = store
+    }
+    
+    const limiter = rateLimit(config)
+    
+    if (typeof limiter !== 'function') {
+      throw new Error(`${name}: rateLimit did not return a function`)
+    }
+    
+    return limiter
+  } catch (error) {
+    logger.error(`❌ Failed to create ${name}:`, error.message || error)
+    // Return no-op middleware as fallback
+    return (req, res, next) => next()
+  }
+}
+
 // General API rate limiter (100 requests per minute per IP)
 const apiLimiterConfig = {
   windowMs: 60 * 1000, // 1 minute
@@ -114,22 +136,7 @@ const apiLimiterConfig = {
   }
 }
 
-// Assign unique store instance to API limiter
-if (apiLimiterStore) {
-  apiLimiterConfig.store = apiLimiterStore
-}
-
-let apiLimiter
-try {
-  apiLimiter = rateLimit(apiLimiterConfig)
-  if (typeof apiLimiter !== 'function') {
-    throw new Error('rateLimit did not return a function')
-  }
-} catch (error) {
-  logger.error('❌ Failed to create API rate limiter:', error)
-  // Create a no-op middleware as fallback
-  apiLimiter = (req, res, next) => next()
-}
+const apiLimiter = createRateLimiter(apiLimiterConfig, apiLimiterStore, 'apiLimiter')
 
 // Strict auth rate limiter (5 requests per minute per IP)
 const authLimiterConfig = {
@@ -149,18 +156,7 @@ const authLimiterConfig = {
   }
 }
 
-// Assign unique store instance to auth limiter
-if (authLimiterStore) {
-  authLimiterConfig.store = authLimiterStore
-}
-
-let authLimiter
-try {
-  authLimiter = rateLimit(authLimiterConfig)
-} catch (error) {
-  logger.error('❌ Failed to create auth rate limiter:', error)
-  authLimiter = (req, res, next) => next()
-}
+const authLimiter = createRateLimiter(authLimiterConfig, authLimiterStore, 'authLimiter')
 
 // Lenient read rate limiter (200 requests per minute per IP)
 const readLimiterConfig = {
@@ -179,18 +175,7 @@ const readLimiterConfig = {
   }
 }
 
-// Assign unique store instance to read limiter
-if (readLimiterStore) {
-  readLimiterConfig.store = readLimiterStore
-}
-
-let readLimiter
-try {
-  readLimiter = rateLimit(readLimiterConfig)
-} catch (error) {
-  logger.error('❌ Failed to create read rate limiter:', error)
-  readLimiter = (req, res, next) => next()
-}
+const readLimiter = createRateLimiter(readLimiterConfig, readLimiterStore, 'readLimiter')
 
 // Upload rate limiter (10 uploads per hour per IP)
 const uploadLimiterConfig = {
@@ -209,23 +194,22 @@ const uploadLimiterConfig = {
   }
 }
 
-// Assign unique store instance to upload limiter
-if (uploadLimiterStore) {
-  uploadLimiterConfig.store = uploadLimiterStore
-}
+const uploadLimiter = createRateLimiter(uploadLimiterConfig, uploadLimiterStore, 'uploadLimiter')
 
-let uploadLimiter
-try {
-  uploadLimiter = rateLimit(uploadLimiterConfig)
-} catch (error) {
-  logger.error('❌ Failed to create upload rate limiter:', error)
-  uploadLimiter = (req, res, next) => next()
+// Ensure all rate limiters are valid middleware functions
+// If any are undefined, replace with no-op middleware
+const ensureMiddleware = (middleware, name) => {
+  if (typeof middleware === 'function') {
+    return middleware
+  }
+  logger.warn(`⚠️ ${name} is not a function, using no-op middleware`)
+  return (req, res, next) => next()
 }
 
 module.exports = {
-  apiLimiter,
-  authLimiter,
-  readLimiter,
-  uploadLimiter
+  apiLimiter: ensureMiddleware(apiLimiter, 'apiLimiter'),
+  authLimiter: ensureMiddleware(authLimiter, 'authLimiter'),
+  readLimiter: ensureMiddleware(readLimiter, 'readLimiter'),
+  uploadLimiter: ensureMiddleware(uploadLimiter, 'uploadLimiter')
 }
 

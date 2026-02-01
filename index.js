@@ -89,7 +89,12 @@ if (enableWorkers) {
    MIDDLEWARES
 ======================= */
 // Rate limiting - apply general API limiter to all routes
-app.use(apiLimiter)
+// Ensure apiLimiter is a valid middleware function
+if (apiLimiter && typeof apiLimiter === 'function') {
+  app.use(apiLimiter)
+} else {
+  logger.warn('⚠️ apiLimiter is not available, skipping rate limiting')
+}
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -133,7 +138,11 @@ const upload = multer({
    ROUTES (ALL COMMONJS)
 ======================= */
 // Auth routes with strict rate limiting
-app.use('/users/login', authLimiter)
+if (authLimiter && typeof authLimiter === 'function') {
+  app.use('/users/login', authLimiter)
+} else {
+  logger.warn('⚠️ authLimiter is not available, skipping auth rate limiting')
+}
 app.use('/users', require('./Routes/User/user.routes'))
 app.use('/users', require('./Routes/User/wallet.routes'))
 app.use('/users', require('./Routes/User/referral.routes'))
@@ -226,7 +235,7 @@ app.get('/health/socket', (req, res) => {
   }
 })
 
-app.post('/upload', uploadLimiter, upload.single('image'), (req, res) => {
+app.post('/upload', (uploadLimiter && typeof uploadLimiter === 'function' ? uploadLimiter : (req, res, next) => next()), upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.')
   }
