@@ -23,48 +23,97 @@ const getSettings = async (req, res) => {
  */
 const updateSettings = async (req, res) => {
     try {
-        // Validate vehicleServices if provided
+        // Get existing settings first
+        const existingSettings = await Settings.findOne();
+        if (!existingSettings) {
+            return res.status(404).json({ message: 'Settings not found' });
+        }
+
+        // Prepare update object with proper merging for nested objects
+        const updateData = { ...req.body };
+
+        // Handle vehicleServices merge - preserve existing fields if not provided
         if (req.body.vehicleServices) {
-            const vehicleServices = req.body.vehicleServices;
+            const vehicleServices = { ...existingSettings.vehicleServices };
             
-            // Validate cercaSmall
-            if (vehicleServices.cercaSmall) {
-                if (vehicleServices.cercaSmall.price !== undefined && vehicleServices.cercaSmall.price < 0) {
-                    return res.status(400).json({ 
-                        message: 'Invalid price for Cerca Small. Price must be a positive number.' 
-                    });
+            // Merge each vehicle service, preserving required fields
+            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+                if (req.body.vehicleServices[serviceKey]) {
+                    vehicleServices[serviceKey] = {
+                        ...existingSettings.vehicleServices[serviceKey],
+                        ...req.body.vehicleServices[serviceKey],
+                        // Ensure required fields are preserved
+                        perMinuteRate: req.body.vehicleServices[serviceKey].perMinuteRate !== undefined
+                            ? req.body.vehicleServices[serviceKey].perMinuteRate
+                            : existingSettings.vehicleServices[serviceKey]?.perMinuteRate || 
+                              (serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4),
+                        price: req.body.vehicleServices[serviceKey].price !== undefined
+                            ? req.body.vehicleServices[serviceKey].price
+                            : existingSettings.vehicleServices[serviceKey]?.price || 
+                              (serviceKey === 'cercaSmall' ? 299 : serviceKey === 'cercaMedium' ? 499 : 699),
+                    };
                 }
-            }
+            });
             
-            // Validate cercaMedium
-            if (vehicleServices.cercaMedium) {
-                if (vehicleServices.cercaMedium.price !== undefined && vehicleServices.cercaMedium.price < 0) {
-                    return res.status(400).json({ 
-                        message: 'Invalid price for Cerca Medium. Price must be a positive number.' 
-                    });
-                }
-            }
+            updateData.vehicleServices = vehicleServices;
+        }
+
+        // Handle pricingConfigurations merge
+        if (req.body.pricingConfigurations) {
+            updateData.pricingConfigurations = {
+                ...existingSettings.pricingConfigurations,
+                ...req.body.pricingConfigurations
+            };
+        }
+
+        // Handle other nested objects similarly
+        if (req.body.systemSettings) {
+            updateData.systemSettings = {
+                ...existingSettings.systemSettings,
+                ...req.body.systemSettings
+            };
+        }
+
+        if (req.body.payoutConfigurations) {
+            updateData.payoutConfigurations = {
+                ...existingSettings.payoutConfigurations,
+                ...req.body.payoutConfigurations
+            };
+        }
+
+        // Validate vehicleServices if provided
+        if (updateData.vehicleServices) {
+            const vehicleServices = updateData.vehicleServices;
             
-            // Validate cercaLarge
-            if (vehicleServices.cercaLarge) {
-                if (vehicleServices.cercaLarge.price !== undefined && vehicleServices.cercaLarge.price < 0) {
-                    return res.status(400).json({ 
-                        message: 'Invalid price for Cerca Large. Price must be a positive number.' 
-                    });
+            // Validate all required fields exist
+            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+                if (vehicleServices[serviceKey]) {
+                    const service = vehicleServices[serviceKey];
+                    if (service.price === undefined || service.price < 0) {
+                        return res.status(400).json({ 
+                            message: `Invalid price for ${serviceKey}. Price must be a positive number.` 
+                        });
+                    }
+                    if (service.perMinuteRate === undefined || service.perMinuteRate < 0) {
+                        return res.status(400).json({ 
+                            message: `Invalid perMinuteRate for ${serviceKey}. perMinuteRate must be a positive number.` 
+                        });
+                    }
                 }
-            }
+            });
         }
         
-        const updatedSettings = await Settings.findOneAndUpdate({}, req.body, {
+        const updatedSettings = await Settings.findOneAndUpdate({}, updateData, {
             new: true,
             runValidators: true,
         });
-        if (!updatedSettings) {
-            return res.status(404).json({ message: 'Settings not found' });
-        }
+        
         res.status(200).json(updatedSettings);
     } catch (error) {
-        res.status(500).json({ message: 'Error updating settings', error });
+        res.status(500).json({ 
+            message: 'Error updating settings', 
+            error: error.message || error 
+        });
     }
 };
 
@@ -260,6 +309,49 @@ const getPublicSettings = async (req, res) => {
             });
         }
         
+        // Ensure perMinuteRate is included for each service
+        let vehicleServices = settings.vehicleServices || {
+            cercaSmall: {
+                name: 'Cerca Small',
+                price: 299,
+                perMinuteRate: 2,
+                seats: 4,
+                enabled: true,
+                imagePath: 'assets/cars/cerca-small.png'
+            },
+            cercaMedium: {
+                name: 'Cerca Medium',
+                price: 499,
+                perMinuteRate: 3,
+                seats: 6,
+                enabled: true,
+                imagePath: 'assets/cars/Cerca-medium.png'
+            },
+            cercaLarge: {
+                name: 'Cerca Large',
+                price: 699,
+                perMinuteRate: 4,
+                seats: 8,
+                enabled: true,
+                imagePath: 'assets/cars/cerca-large.png'
+            }
+        };
+
+        // Ensure perMinuteRate exists for each service
+        if (settings.vehicleServices) {
+            vehicleServices = { ...settings.vehicleServices };
+            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+                if (vehicleServices[serviceKey]) {
+                    vehicleServices[serviceKey] = {
+                        ...vehicleServices[serviceKey],
+                        perMinuteRate: vehicleServices[serviceKey].perMinuteRate !== undefined 
+                            ? vehicleServices[serviceKey].perMinuteRate
+                            : (serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4)
+                    };
+                }
+            });
+        }
+
         res.status(200).json({
             pricingConfigurations: settings.pricingConfigurations || {
                 baseFare: 0,
@@ -269,32 +361,7 @@ const getPublicSettings = async (req, res) => {
                 platformFees: 10,
                 driverCommissions: 90
             },
-            vehicleServices: settings.vehicleServices || {
-                cercaSmall: {
-                    name: 'Cerca Small',
-                    price: 299,
-                    perMinuteRate: 2,
-                    seats: 4,
-                    enabled: true,
-                    imagePath: 'assets/cars/cerca-small.png'
-                },
-                cercaMedium: {
-                    name: 'Cerca Medium',
-                    price: 499,
-                    perMinuteRate: 3,
-                    seats: 6,
-                    enabled: true,
-                    imagePath: 'assets/cars/Cerca-medium.png'
-                },
-                cercaLarge: {
-                    name: 'Cerca Large',
-                    price: 699,
-                    perMinuteRate: 4,
-                    seats: 8,
-                    enabled: true,
-                    imagePath: 'assets/cars/cerca-large.png'
-                }
-            }
+            vehicleServices: vehicleServices
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching public settings', error });
