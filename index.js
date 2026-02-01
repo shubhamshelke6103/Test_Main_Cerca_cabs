@@ -16,6 +16,7 @@ const { initializeSocket, getSocketHealth } = require('./utils/socket')
 const { connectDB, checkMongoDBHealth } = require('./db')
 const { redis, checkRedisHealth } = require('./config/redis')
 const { apiLimiter, authLimiter, readLimiter, uploadLimiter } = require('./middleware/rateLimiter')
+const mongoose = require('mongoose')
 
 const app = express()
 const port = process.env.PORT || 8000
@@ -25,10 +26,16 @@ app.set('trust proxy', 1)
 /* =======================
    DATABASE
 ======================= */
-connectDB().catch(err => {
-  logger.error('Failed to connect to database:', err)
-  process.exit(1)
-})
+// Connect to database and wait for connection before starting server
+(async () => {
+  try {
+    await connectDB()
+    logger.info('✅ Database connection established')
+  } catch (err) {
+    logger.error('❌ Failed to connect to database:', err)
+    process.exit(1)
+  }
+})()
 
 /* =======================
    SERVER & SOCKET
@@ -233,6 +240,16 @@ app.post('/upload', uploadLimiter, upload.single('image'), (req, res) => {
 /* =======================
    START SERVER
 ======================= */
-server.listen(port, () => {
-  logger.info(`🚀 Server running on http://localhost:${port}`)
+// Wait for MongoDB connection before starting server
+mongoose.connection.once('connected', () => {
+  server.listen(port, () => {
+    logger.info(`🚀 Server running on http://localhost:${port}`)
+  })
 })
+
+// If already connected, start server immediately
+if (mongoose.connection.readyState === 1) {
+  server.listen(port, () => {
+    logger.info(`🚀 Server running on http://localhost:${port}`)
+  })
+}

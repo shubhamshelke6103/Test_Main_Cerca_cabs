@@ -31,9 +31,9 @@ const mongoOptions = {
     // Heartbeat settings
     heartbeatFrequencyMS: 10000,
     
-    // Buffer settings
-    bufferMaxEntries: 0, // Disable mongoose buffering
-    bufferCommands: false, // Disable mongoose buffering
+    // Buffer settings - enable buffering to allow operations before connection
+    // This prevents errors when operations are called before connection completes
+    bufferCommands: true, // Enable mongoose buffering (default)
 };
 
 // Connection event handlers
