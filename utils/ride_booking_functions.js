@@ -1062,9 +1062,19 @@ const completeRide = async (rideId, fare) => {
       }
     }
 
-    logger.info(
-      `[Fare Tracking] Ride completed - rideId: ${rideId}, fare stored: ₹${ride.fare}, oldFare: ₹${oldFare}, difference: ₹${recalculatedFare - oldFare}`
-    )
+    // Structured logging for fare calculation
+    logger.info('fare.calculated', {
+      rideId,
+      baseFare: fareBreakdown?.baseFare || 0,
+      distanceFare: fareBreakdown?.distanceFare || 0,
+      timeFare: fareBreakdown?.timeFare || 0,
+      subtotal: fareBreakdown?.subtotal || 0,
+      finalFare: recalculatedFare,
+      minimumFareApplied: recalculatedFare > (fareBreakdown?.subtotal || 0),
+      oldFare,
+      fareDifference: recalculatedFare - oldFare,
+      timestamp: new Date().toISOString()
+    })
 
     // Return ride with fare difference info for payment adjustment
     ride._fareDifference = recalculatedFare - oldFare

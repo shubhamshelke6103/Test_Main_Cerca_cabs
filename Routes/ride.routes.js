@@ -9,7 +9,8 @@ const {
   getRidesByUserId,
   getRidesByDriverId,
   searchRide,
-  calculateFare
+  calculateFare,
+  calculateAllFares
 } = require('../Controllers/User/ride.controller');
 
 const router = express.Router();
@@ -21,6 +22,10 @@ router.post('/rides', createRide);
 // Calculate fare
 // POST /rides/calculate-fare
 router.post('/rides/calculate-fare', calculateFare);
+
+// Calculate fare for all vehicle types
+// POST /rides/calculate-all-fares
+router.post('/rides/calculate-all-fares', calculateAllFares);
 
 // Get all rides
 // GET /rides

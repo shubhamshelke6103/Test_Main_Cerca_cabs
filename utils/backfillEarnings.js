@@ -1,28 +1,51 @@
 /**
  * Backfill script to create AdminEarnings records for existing completed rides
  * 
- * Usage: node utils/backfillEarnings.js
+ * Usage: 
+ *   node utils/backfillEarnings.js                    # Dry run (preview only)
+ *   node utils/backfillEarnings.js --execute          # Execute backfill
+ *   node utils/backfillEarnings.js --fix              # Fix incorrect earnings
+ *   node utils/backfillEarnings.js --batch=100        # Process in batches
+ *   node utils/backfillEarnings.js --start-from=ID    # Resume from specific ride ID
  * 
  * This script:
  * 1. Finds all completed rides that don't have AdminEarnings records
  * 2. Creates AdminEarnings records for them using current settings
  * 3. Logs progress and results
+ * 4. Supports dry-run mode, batch processing, and incremental backfill
  */
 
 require('dotenv').config();
 const mongoose = require('mongoose');
-const connectDB = require('../db');
+const { connectDB } = require('../db');
 const logger = require('./logger');
 
 const Ride = require('../Models/Driver/ride.model');
 const AdminEarnings = require('../Models/Admin/adminEarnings.model');
 const Settings = require('../Models/Admin/settings.modal');
 
-async function backfillEarnings() {
+async function backfillEarnings(options = {}) {
+  const {
+    dryRun = !process.argv.includes('--execute'),
+    fixMode = process.argv.includes('--fix'),
+    batchSize = parseInt(process.argv.find(arg => arg.startsWith('--batch='))?.split('=')[1] || '100'),
+    startFromRideId = process.argv.find(arg => arg.startsWith('--start-from='))?.split('=')[1] || null
+  } = options;
+
   try {
     // Connect to database
     await connectDB();
     logger.info('✅ Connected to database');
+    
+    if (dryRun) {
+      logger.info('🔍 DRY RUN MODE - No changes will be made');
+    } else {
+      logger.info('🔧 EXECUTE MODE - Changes will be saved');
+    }
+    
+    if (fixMode) {
+      logger.info('🔧 FIX MODE - Will correct incorrect earnings calculations');
+    }
 
     // Get settings for commission calculation
     const settings = await Settings.findOne();
@@ -57,26 +80,71 @@ async function backfillEarnings() {
     const existingRideIds = new Set(existingEarnings.map(e => e.rideId.toString()));
     logger.info(`📋 Found ${existingRideIds.size} existing earnings records`);
 
-    // Filter rides that don't have earnings records
-    const ridesToProcess = completedRides.filter(ride => {
-      const rideId = ride._id.toString();
-      return !existingRideIds.has(rideId);
-    });
+    // Filter rides that don't have earnings records (or need fixing in fix mode)
+    let ridesToProcess = [];
+    
+    if (fixMode) {
+      // In fix mode, find rides with incorrect earnings
+      const { findIncorrectEarnings } = require('./earningsValidator');
+      const incorrectResult = await findIncorrectEarnings();
+      logger.info(`🔧 Found ${incorrectResult.incorrectCount || 0} rides with incorrect earnings`);
+      
+      // Get ride IDs that need fixing
+      const incorrectRideIds = new Set(
+        (incorrectResult.incorrectEarnings || []).map(e => e.rideId)
+      );
+      
+      ridesToProcess = completedRides.filter(ride => {
+        const rideId = ride._id.toString();
+        return incorrectRideIds.has(rideId);
+      });
+    } else {
+      // Normal mode: find rides without earnings
+      ridesToProcess = completedRides.filter(ride => {
+        const rideId = ride._id.toString();
+        return !existingRideIds.has(rideId);
+      });
+    }
 
-    logger.info(`🔄 Processing ${ridesToProcess.length} rides without earnings records`);
+    // Filter by startFromRideId if provided (for incremental backfill)
+    if (startFromRideId) {
+      const startIndex = ridesToProcess.findIndex(ride => ride._id.toString() === startFromRideId);
+      if (startIndex >= 0) {
+        ridesToProcess = ridesToProcess.slice(startIndex);
+        logger.info(`📍 Resuming from ride ID: ${startFromRideId}`);
+      } else {
+        logger.warn(`⚠️ Start ride ID ${startFromRideId} not found, processing all rides`);
+      }
+    }
+
+    logger.info(`🔄 Processing ${ridesToProcess.length} rides${fixMode ? ' with incorrect earnings' : ' without earnings records'}`);
 
     if (ridesToProcess.length === 0) {
-      logger.info('✅ All completed rides already have earnings records. Nothing to backfill.');
+      logger.info(`✅ ${fixMode ? 'No rides with incorrect earnings found' : 'All completed rides already have earnings records'}. Nothing to ${fixMode ? 'fix' : 'backfill'}.`);
       process.exit(0);
     }
 
     let successCount = 0;
     let errorCount = 0;
     const errors = [];
+    let processedCount = 0;
 
-    // Process each ride
-    for (const ride of ridesToProcess) {
-      try {
+    // Process in batches
+    const batches = [];
+    for (let i = 0; i < ridesToProcess.length; i += batchSize) {
+      batches.push(ridesToProcess.slice(i, i + batchSize));
+    }
+
+    logger.info(`📦 Processing in ${batches.length} batches of ${batchSize} rides each`);
+
+    // Process each batch
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      logger.info(`\n📦 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} rides)`);
+
+      // Process each ride in batch
+      for (const ride of batch) {
+        try {
         // Validate ride data
         if (!ride._id) {
           logger.warn(`⚠️ Skipping ride with missing ID`);
@@ -117,38 +185,77 @@ async function backfillEarnings() {
           ? grossFare * (driverCommissions / 100)
           : grossFare - platformFee;
 
-        // Create earnings record
-        await AdminEarnings.create({
-          rideId: rideId,
-          driverId: driverId.toString(),
-          riderId: riderId.toString(),
-          grossFare: grossFare,
-          platformFee: Math.round(platformFee * 100) / 100,
-          driverEarning: Math.round(driverEarning * 100) / 100,
-          rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date(),
-          paymentStatus: 'pending'
-        });
+        // Calculate rounded values
+        let roundedPlatformFee = Math.round(platformFee * 100) / 100;
+        let roundedDriverEarning = Math.round(driverEarning * 100) / 100;
 
-        successCount++;
-        
-        if (successCount % 10 === 0) {
-          logger.info(`📊 Progress: ${successCount}/${ridesToProcess.length} processed`);
+        // Verify calculation accuracy
+        const tolerance = 0.01;
+        const calculatedTotal = roundedPlatformFee + roundedDriverEarning;
+        if (Math.abs(grossFare - calculatedTotal) > tolerance) {
+          logger.warn(`⚠️ Calculation mismatch for ride ${rideId} - adjusting driverEarning`);
+          roundedDriverEarning = Math.round((grossFare - roundedPlatformFee) * 100) / 100;
         }
-      } catch (error) {
-        errorCount++;
-        const rideId = ride._id?.toString() || 'unknown';
-        logger.error(`❌ Error processing ride ${rideId}:`, error.message);
-        errors.push({ rideId, error: error.message });
-      }
-    }
+
+        if (dryRun) {
+          // Dry run: just log what would be created/updated
+          logger.info(`[DRY RUN] Would ${fixMode ? 'update' : 'create'} earnings for ride ${rideId}:`);
+          logger.info(`  grossFare: ₹${grossFare}, platformFee: ₹${roundedPlatformFee}, driverEarning: ₹${roundedDriverEarning}`);
+          successCount++;
+        } else {
+          // Execute: create or update earnings record
+          if (fixMode) {
+            // Update existing earnings record
+            await AdminEarnings.findOneAndUpdate(
+              { rideId: rideId },
+              {
+                grossFare: grossFare,
+                platformFee: roundedPlatformFee,
+                driverEarning: roundedDriverEarning,
+                rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date()
+              },
+              { new: true }
+            );
+          } else {
+            // Create new earnings record
+            await AdminEarnings.create({
+              rideId: rideId,
+              driverId: driverId.toString(),
+              riderId: riderId.toString(),
+              grossFare: grossFare,
+              platformFee: roundedPlatformFee,
+              driverEarning: roundedDriverEarning,
+              rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date(),
+              paymentStatus: 'pending'
+            });
+          }
+          successCount++;
+        }
+        
+          processedCount++;
+          if (processedCount % 10 === 0) {
+            logger.info(`📊 Progress: ${processedCount}/${ridesToProcess.length} processed`);
+          }
+        } catch (error) {
+          errorCount++;
+          const rideId = ride._id?.toString() || 'unknown';
+          logger.error(`❌ Error processing ride ${rideId}:`, error.message);
+          errors.push({ rideId, error: error.message });
+        }
+      } // End of ride loop
+    } // End of batch loop
 
     // Summary
     logger.info('\n' + '='.repeat(60));
-    logger.info('📊 BACKFILL SUMMARY');
+    logger.info(`📊 ${fixMode ? 'FIX' : 'BACKFILL'} SUMMARY ${dryRun ? '(DRY RUN)' : ''}`);
     logger.info('='.repeat(60));
-    logger.info(`✅ Successfully processed: ${successCount} rides`);
+    logger.info(`✅ Successfully ${dryRun ? 'would process' : 'processed'}: ${successCount} rides`);
     logger.info(`❌ Errors: ${errorCount} rides`);
-    logger.info(`📦 Total rides processed: ${ridesToProcess.length}`);
+    logger.info(`📦 Total rides ${dryRun ? 'would be' : ''} processed: ${ridesToProcess.length}`);
+    
+    if (dryRun && successCount > 0) {
+      logger.info('\n💡 To execute this backfill, run with --execute flag');
+    }
     
     if (errors.length > 0) {
       logger.info('\n❌ Errors encountered:');
@@ -161,7 +268,19 @@ async function backfillEarnings() {
     }
 
     logger.info('='.repeat(60));
-    logger.info('✅ Backfill completed!');
+    logger.info(`✅ ${fixMode ? 'Fix' : 'Backfill'} ${dryRun ? 'preview' : ''} completed!`);
+    
+    // Validation after backfill
+    if (!dryRun && successCount > 0) {
+      logger.info('\n🔍 Validating results...');
+      const { findMissingEarnings } = require('./earningsValidator');
+      const missingResult = await findMissingEarnings();
+      if (missingResult.missingCount === 0) {
+        logger.info('✅ Validation passed - all completed rides have earnings records');
+      } else {
+        logger.warn(`⚠️ Validation warning - ${missingResult.missingCount} rides still missing earnings`);
+      }
+    }
 
     process.exit(0);
   } catch (error) {

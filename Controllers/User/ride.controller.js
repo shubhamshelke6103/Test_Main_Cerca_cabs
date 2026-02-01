@@ -373,36 +373,32 @@ const calculateFare = async (req, res) => {
       })
     }
 
-    const { perKmRate, minimumFare } = settings.pricingConfigurations
+    const { perKmRate, minimumFare, platformFees, driverCommissions } = settings.pricingConfigurations
 
-    // Map vehicle type to service name
-    const serviceNameMap = {
-      small: 'sedan',
-      medium: 'suv',
-      large: 'auto'
+    // Map vehicle type directly to vehicleService keys
+    const vehicleServiceKeyMap = {
+      small: 'cercaSmall',
+      medium: 'cercaMedium',
+      large: 'cercaLarge'
     }
-    const serviceName = serviceNameMap[vehicleType] || vehicleType || 'sedan'
+    const vehicleServiceKey = vehicleServiceKeyMap[vehicleType] || 'cercaSmall'
 
-    // Find service
-    const service = settings.services.find(
-      s => s.name.toLowerCase() === serviceName.toLowerCase()
-    )
+    // Get vehicle service directly from vehicleServices
+    const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
 
-    if (!service) {
+    if (!vehicleService || !vehicleService.enabled) {
       return res.status(400).json({
         success: false,
-        message: `Invalid vehicle type: ${vehicleType}`
+        message: `Invalid or disabled vehicle type: ${vehicleType}`
       })
     }
 
-    // Map service to vehicleService to get perMinuteRate
-    const vehicleServiceKey = mapServiceToVehicleService(service.name)
-    const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
-    const perMinuteRate = vehicleService?.perMinuteRate || 0
+    const basePrice = vehicleService.price || 0
+    const perMinuteRate = vehicleService.perMinuteRate || 0
 
     // Calculate fare breakdown
     const fareBreakdown = calculateFareWithTime(
-      service.price,
+      basePrice,
       distance,
       duration,
       perKmRate,
@@ -424,10 +420,18 @@ const calculateFare = async (req, res) => {
       if (coupon) {
         const canUse = coupon.canUserUse(userId)
         if (canUse.canUse) {
+          // Map vehicleServiceKey to service names for coupon validation
+          const serviceNameMap = {
+            cercaSmall: 'hatchback',
+            cercaMedium: 'sedan',
+            cercaLarge: 'suv'
+          }
+          const serviceName = serviceNameMap[vehicleServiceKey] || 'hatchback'
+
           const serviceApplicable =
             !coupon.applicableServices ||
             coupon.applicableServices.length === 0 ||
-            coupon.applicableServices.includes(service.name)
+            coupon.applicableServices.includes(serviceName)
 
           if (serviceApplicable) {
             const discountResult = coupon.calculateDiscount(
@@ -443,6 +447,15 @@ const calculateFare = async (req, res) => {
       }
     }
 
+    // Calculate driver and admin earnings
+    const driverEarnings = driverCommissions
+      ? Math.round((finalFare * (driverCommissions / 100)) * 100) / 100
+      : Math.round((finalFare - (finalFare * (platformFees / 100))) * 100) / 100
+    const platformFee = platformFees
+      ? Math.round((finalFare * (platformFees / 100)) * 100) / 100
+      : 0
+    const adminEarnings = platformFee
+
     res.status(200).json({
       success: true,
       data: {
@@ -457,9 +470,14 @@ const calculateFare = async (req, res) => {
           fareAfterMinimum: fareBreakdown.fareAfterMinimum,
           promoCode: promoCodeApplied,
           discount: Math.round(discount * 100) / 100,
-          finalFare: Math.round(finalFare * 100) / 100
+          finalFare: Math.round(finalFare * 100) / 100,
+          // Earnings breakdown
+          driverEarnings: driverEarnings,
+          platformFees: platformFee,
+          adminEarnings: adminEarnings
         },
-        vehicleType: vehicleType || 'small'
+        vehicleType: vehicleType || 'small',
+        vehicleServiceKey: vehicleServiceKey
       }
     })
   } catch (error) {
@@ -467,6 +485,197 @@ const calculateFare = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error calculating fare',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * @desc    Calculate fare for all enabled vehicle types at once
+ * @route   POST /rides/calculate-all-fares
+ */
+const calculateAllFares = async (req, res) => {
+  try {
+    const {
+      pickupLocation,
+      dropoffLocation,
+      promoCode,
+      userId,
+      estimatedDuration
+    } = req.body
+
+    // Validate required fields
+    if (!pickupLocation || !dropoffLocation) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pickup and dropoff locations are required'
+      })
+    }
+
+    // Extract coordinates
+    let pickupLat, pickupLng, dropoffLat, dropoffLng
+
+    if (
+      pickupLocation.coordinates &&
+      Array.isArray(pickupLocation.coordinates)
+    ) {
+      ;[pickupLng, pickupLat] = pickupLocation.coordinates
+    } else if (pickupLocation.latitude && pickupLocation.longitude) {
+      pickupLat = pickupLocation.latitude
+      pickupLng = pickupLocation.longitude
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid pickup location format'
+      })
+    }
+
+    if (
+      dropoffLocation.coordinates &&
+      Array.isArray(dropoffLocation.coordinates)
+    ) {
+      ;[dropoffLng, dropoffLat] = dropoffLocation.coordinates
+    } else if (dropoffLocation.latitude && dropoffLocation.longitude) {
+      dropoffLat = dropoffLocation.latitude
+      dropoffLng = dropoffLocation.longitude
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid dropoff location format'
+      })
+    }
+
+    // Calculate distance using Haversine formula
+    const distance = calculateHaversineDistance(
+      pickupLat,
+      pickupLng,
+      dropoffLat,
+      dropoffLng
+    )
+
+    // Estimate duration if not provided (using average speed of 35 km/h for city driving)
+    let duration = estimatedDuration
+    if (!duration || duration <= 0) {
+      const averageSpeedKmh = 35.0
+      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
+    }
+
+    // Fetch admin settings
+    const settings = await Settings.findOne()
+    if (!settings) {
+      return res.status(500).json({
+        success: false,
+        message: 'Admin settings not found'
+      })
+    }
+
+    const { perKmRate, minimumFare, platformFees, driverCommissions } = settings.pricingConfigurations
+    const vehicleServices = settings.vehicleServices || {}
+
+    // Calculate fare for each enabled vehicle service
+    const fares = {}
+    const vehicleServiceKeys = ['cercaSmall', 'cercaMedium', 'cercaLarge']
+
+    for (const vehicleServiceKey of vehicleServiceKeys) {
+      const vehicleService = vehicleServices[vehicleServiceKey]
+
+      // Skip if service doesn't exist or is disabled
+      if (!vehicleService || !vehicleService.enabled) {
+        continue
+      }
+
+      const basePrice = vehicleService.price || 0
+      const perMinuteRate = vehicleService.perMinuteRate || 0
+
+      // Calculate fare breakdown
+      const fareBreakdown = calculateFareWithTime(
+        basePrice,
+        distance,
+        duration,
+        perKmRate,
+        perMinuteRate,
+        minimumFare
+      )
+
+      let finalFare = fareBreakdown.fareAfterMinimum
+      let discount = 0
+      let promoCodeApplied = null
+
+      // Apply promo code if provided
+      if (promoCode && userId) {
+        const Coupon = require('../../Models/Admin/coupon.modal')
+        const coupon = await Coupon.findOne({
+          couponCode: promoCode.toUpperCase().trim()
+        })
+
+        if (coupon) {
+          const canUse = coupon.canUserUse(userId)
+          if (canUse.canUse) {
+            // Map vehicleServiceKey to service names for coupon validation
+            const serviceNameMap = {
+              cercaSmall: 'hatchback',
+              cercaMedium: 'sedan',
+              cercaLarge: 'suv'
+            }
+            const serviceName = serviceNameMap[vehicleServiceKey] || 'hatchback'
+
+            const serviceApplicable =
+              !coupon.applicableServices ||
+              coupon.applicableServices.length === 0 ||
+              coupon.applicableServices.includes(serviceName)
+
+            if (serviceApplicable) {
+              const discountResult = coupon.calculateDiscount(
+                fareBreakdown.fareAfterMinimum
+              )
+              if (discountResult.discount > 0) {
+                discount = discountResult.discount
+                finalFare = discountResult.finalFare
+                promoCodeApplied = coupon.couponCode
+              }
+            }
+          }
+        }
+      }
+
+      // Calculate driver and admin earnings
+      const driverEarnings = driverCommissions
+        ? Math.round((finalFare * (driverCommissions / 100)) * 100) / 100
+        : Math.round((finalFare - (finalFare * (platformFees / 100))) * 100) / 100
+      const platformFee = platformFees
+        ? Math.round((finalFare * (platformFees / 100)) * 100) / 100
+        : 0
+      const adminEarnings = platformFee
+
+      fares[vehicleServiceKey] = {
+        baseFare: fareBreakdown.baseFare,
+        distanceFare: fareBreakdown.distanceFare,
+        timeFare: fareBreakdown.timeFare,
+        subtotal: fareBreakdown.subtotal,
+        minimumFare: minimumFare,
+        fareAfterMinimum: fareBreakdown.fareAfterMinimum,
+        promoCode: promoCodeApplied,
+        discount: Math.round(discount * 100) / 100,
+        finalFare: Math.round(finalFare * 100) / 100,
+        driverEarnings: driverEarnings,
+        platformFees: platformFee,
+        adminEarnings: adminEarnings
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        distance: Math.round(distance * 100) / 100,
+        estimatedDuration: duration,
+        fares: fares
+      }
+    })
+  } catch (error) {
+    logger.error('Error calculating all fares:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error calculating fares',
       error: error.message
     })
   }
@@ -481,5 +690,6 @@ module.exports = {
   getRidesByUserId,
   getRidesByDriverId,
   searchRide,
-  calculateFare
+  calculateFare,
+  calculateAllFares
 }

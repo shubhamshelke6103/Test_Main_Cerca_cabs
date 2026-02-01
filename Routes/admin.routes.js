@@ -25,6 +25,14 @@ const {
     getEarningsStats,
     getEarningsAnalytics,
 } = require('../Controllers/Admin/driverEarnings.controller.js');
+const {
+    verifyRideEarnings,
+    verifyDriverEarnings,
+    findMissingEarningsRecords,
+    triggerBackfill,
+    findIncorrectEarningsRecords,
+    validateTotals,
+} = require('../Controllers/Admin/earningsVerification.controller.js');
 
 const { authenticateAdmin, requireRole } = require('../utils/adminAuth');
 
@@ -67,5 +75,13 @@ router.get('/drivers/earnings/analytics', getEarningsAnalytics);
 router.get('/drivers/:driverId/earnings', getDriverEarningsById);
 router.patch('/drivers/earnings/:earningId/status', updateEarningStatus);
 router.patch('/drivers/earnings/bulk-status', bulkUpdateEarningStatus);
+
+// Routes for earnings verification
+router.post('/earnings/verify-ride/:rideId', verifyRideEarnings);
+router.post('/earnings/verify-driver/:driverId', verifyDriverEarnings);
+router.post('/earnings/find-missing', findMissingEarningsRecords);
+router.post('/earnings/backfill', triggerBackfill);
+router.post('/earnings/find-incorrect', findIncorrectEarningsRecords);
+router.post('/earnings/validate-totals', validateTotals);
 
 module.exports = router;

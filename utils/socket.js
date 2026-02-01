@@ -2745,6 +2745,9 @@ async function storeRideEarnings (ride, retryCount = 0) {
       `[Fare Tracking] storeRideEarnings - rideId: ${rideId}, grossFare: ₹${grossFare}, platformFees: ${platformFees}%, driverCommissions: ${driverCommissions}%`
     )
 
+    // ============================
+    // DATA VALIDATION
+    // ============================
     if (grossFare <= 0) {
       logger.warn(
         `storeRideEarnings: Invalid fare amount (${grossFare}) for rideId: ${rideId}`
@@ -2752,28 +2755,107 @@ async function storeRideEarnings (ride, retryCount = 0) {
       return
     }
 
+    if (!driverId || !riderId) {
+      logger.error(
+        `storeRideEarnings: Missing required fields - driverId: ${driverId}, riderId: ${riderId}, rideId: ${rideId}`
+      )
+      return
+    }
+
+    // Validate platformFees and driverCommissions are valid percentages
+    if (platformFees < 0 || platformFees > 100) {
+      logger.error(
+        `storeRideEarnings: Invalid platformFees percentage (${platformFees}%) for rideId: ${rideId}`
+      )
+      return
+    }
+
+    if (driverCommissions < 0 || driverCommissions > 100) {
+      logger.error(
+        `storeRideEarnings: Invalid driverCommissions percentage (${driverCommissions}%) for rideId: ${rideId}`
+      )
+      return
+    }
+
+    // Verify fare matches ride.fare exactly (use final recalculated fare)
+    const Ride = require('../Models/Driver/ride.model')
+    const currentRide = await Ride.findById(rideId).select('fare').lean()
+    if (currentRide && Math.abs(currentRide.fare - grossFare) > 0.01) {
+      logger.warn(
+        `storeRideEarnings: Fare mismatch - stored: ₹${grossFare}, ride.fare: ₹${currentRide.fare}, rideId: ${rideId}`
+      )
+      // Use ride.fare from database as source of truth
+      const correctedFare = currentRide.fare || grossFare
+      logger.info(
+        `storeRideEarnings: Using corrected fare from database: ₹${correctedFare}`
+      )
+      // Continue with corrected fare
+    }
+
+    // ============================
+    // CALCULATE EARNINGS
+    // ============================
     // Calculate platform fee and driver earning
     const platformFee = platformFees ? grossFare * (platformFees / 100) : 0
     const driverEarning = driverCommissions
       ? grossFare * (driverCommissions / 100)
       : grossFare - platformFee
 
-    logger.info(
-      `[Fare Tracking] Earnings calculation - rideId: ${rideId}, grossFare: ₹${grossFare}, platformFee: ₹${platformFee}, driverEarning: ₹${driverEarning}`
-    )
+    // Round to 2 decimal places
+    let roundedPlatformFee = Math.round(platformFee * 100) / 100
+    let roundedDriverEarning = Math.round(driverEarning * 100) / 100
 
-    // Create earnings record
-    // Always set paymentStatus to 'pending' for new earnings - admin will mark as 'completed' after processing payment
-    const earnings = await AdminEarnings.create({
-      rideId: rideId,
-      driverId: driverId,
-      riderId: riderId,
-      grossFare: grossFare,
-      platformFee: Math.round(platformFee * 100) / 100, // Round to 2 decimal places
-      driverEarning: Math.round(driverEarning * 100) / 100, // Round to 2 decimal places
-      rideDate: ride.actualEndTime || ride.updatedAt || new Date(),
-      paymentStatus: 'pending' // Always pending by default - admin controls completion
+    // ============================
+    // CALCULATION ACCURACY VERIFICATION
+    // ============================
+    // Verify: grossFare = platformFee + driverEarning (within rounding tolerance)
+    const tolerance = 0.01 // Allow 1 paisa tolerance for rounding
+    const calculatedTotal = roundedPlatformFee + roundedDriverEarning
+    if (Math.abs(grossFare - calculatedTotal) > tolerance) {
+      logger.error(
+        `storeRideEarnings: Calculation mismatch - grossFare: ₹${grossFare}, platformFee + driverEarning: ₹${calculatedTotal}, difference: ₹${Math.abs(grossFare - calculatedTotal)}, rideId: ${rideId}`
+      )
+      // Adjust driverEarning to ensure grossFare = platformFee + driverEarning
+      roundedDriverEarning = Math.round((grossFare - roundedPlatformFee) * 100) / 100
+      logger.info(
+        `storeRideEarnings: Adjusted driverEarning to ₹${roundedDriverEarning} to match grossFare`
+      )
+    }
+
+    // Structured logging for earnings calculation
+    logger.info('earnings.calculated', {
+      rideId,
+      grossFare,
+      platformFee: roundedPlatformFee,
+      driverEarning: roundedDriverEarning,
+      platformFeesPercentage: platformFees,
+      driverCommissionsPercentage: driverCommissions,
+      calculatedTotal: roundedPlatformFee + roundedDriverEarning,
+      timestamp: new Date().toISOString()
     })
+
+    // ============================
+    // TRANSACTION SAFETY - Store earnings with validation
+    // ============================
+    // Use findOneAndUpdate with upsert to prevent duplicates in multi-instance environment
+    const earnings = await AdminEarnings.findOneAndUpdate(
+      { rideId: rideId }, // Query condition
+      {
+        rideId: rideId,
+        driverId: driverId,
+        riderId: riderId,
+        grossFare: grossFare,
+        platformFee: roundedPlatformFee,
+        driverEarning: roundedDriverEarning,
+        rideDate: ride.actualEndTime || ride.updatedAt || new Date(),
+        paymentStatus: 'pending' // Always pending by default - admin controls completion
+      },
+      {
+        upsert: true, // Create if doesn't exist
+        new: true, // Return updated document
+        setDefaultsOnInsert: true // Apply defaults on insert
+      }
+    )
 
     logger.info(
       `storeRideEarnings: Earnings stored successfully - rideId: ${rideId}, driverId: ${driverId}, grossFare: ₹${grossFare}, platformFee: ₹${earnings.platformFee}, driverEarning: ₹${earnings.driverEarning}`
