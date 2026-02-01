@@ -63,11 +63,18 @@ const rideBookingWorker = new Worker(
     // ============================
     // FIND DRIVERS
     // ============================
+    // Get vehicleType from ride for filtering drivers
+    const vehicleType = ride.vehicleType || null
+    if (vehicleType) {
+      logger.info(`🚗 Searching drivers for vehicle type: ${vehicleType}`)
+    }
+
     const { drivers, radiusUsed } =
       await searchDriversWithProgressiveRadius(
         ride.pickupLocation,
         [3000, 6000, 9000, 12000, 15000, 20000],
-        ride.bookingType || null
+        ride.bookingType || null,
+        vehicleType // Pass vehicleType to filter drivers
       )
 
     logger.info(

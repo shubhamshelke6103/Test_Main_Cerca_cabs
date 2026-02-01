@@ -301,18 +301,59 @@ const searchNearbyDrivers = async (userId, location) => {
  * @param {string} serviceName - Service name (e.g., "sedan", "suv", "auto", "Cerca Small", etc.)
  * @returns {string} - Vehicle service key ("cercaSmall", "cercaMedium", "cercaLarge")
  */
+/**
+ * Map service name from user app to vehicle service key
+ * Mapping: Sedan → Cerca Medium, SUV → Cerca Large, Hatchback → Cerca Small
+ * @param {string} serviceName - Service name from user app ('sedan', 'suv', 'auto', 'hatchback')
+ * @returns {string} - Vehicle service key ('cercaSmall', 'cercaMedium', 'cercaLarge')
+ */
 const mapServiceToVehicleService = (serviceName) => {
   const normalized = serviceName.toLowerCase()
-  // Map common service names to vehicle services
-  if (normalized.includes('small') || normalized === 'sedan') {
-    return 'cercaSmall'
-  } else if (normalized.includes('medium') || normalized === 'suv') {
+  // Map service names to vehicle services
+  // Sedan → Cerca Medium
+  if (normalized === 'sedan' || normalized.includes('medium')) {
     return 'cercaMedium'
-  } else if (normalized.includes('large') || normalized === 'auto') {
+  }
+  // SUV → Cerca Large
+  else if (normalized === 'suv' || normalized.includes('large')) {
     return 'cercaLarge'
+  }
+  // Hatchback → Cerca Small (also auto for legacy support)
+  else if (normalized === 'hatchback' || normalized === 'auto' || normalized.includes('small')) {
+    return 'cercaSmall'
   }
   // Default to small if unknown
   return 'cercaSmall'
+}
+
+/**
+ * Map vehicle service key to driver vehicle type
+ * Used for filtering drivers by vehicle type
+ * @param {string} vehicleServiceKey - Vehicle service key ('cercaSmall', 'cercaMedium', 'cercaLarge')
+ * @returns {string} - Driver vehicle type ('hatchback', 'sedan', 'suv')
+ */
+const mapVehicleServiceToDriverType = (vehicleServiceKey) => {
+  const normalized = vehicleServiceKey.toLowerCase()
+  if (normalized === 'cercasmall') {
+    return 'hatchback'
+  } else if (normalized === 'cercamedium') {
+    return 'sedan'
+  } else if (normalized === 'cercalarge') {
+    return 'suv'
+  }
+  // Default fallback
+  return 'hatchback'
+}
+
+/**
+ * Map service name to driver vehicle type
+ * Used for filtering drivers during ride matching
+ * @param {string} serviceName - Service name from user app ('sedan', 'suv', 'auto', 'hatchback')
+ * @returns {string} - Driver vehicle type ('hatchback', 'sedan', 'suv')
+ */
+const mapServiceToDriverType = (serviceName) => {
+  const vehicleServiceKey = mapServiceToVehicleService(serviceName)
+  return mapVehicleServiceToDriverType(vehicleServiceKey)
 }
 
 /**
@@ -476,38 +517,50 @@ const createRide = async rideData => {
 
     const { perKmRate, minimumFare } = settings.pricingConfigurations
 
-    // Find the service (case-insensitive lookup)
+    // Validate service and map to vehicleService
     const selectedService = rideData.service
     if (!selectedService) {
+      const availableVehicleServices = settings.vehicleServices 
+        ? Object.keys(settings.vehicleServices).join(', ')
+        : 'none'
       throw new Error(
-        'Service is required. Available services: ' +
-          settings.services.map(s => s.name).join(', ')
+        `Service is required. Available vehicle services: ${availableVehicleServices}`
       )
     }
 
-    const service = settings.services.find(
-      s => s.name.toLowerCase() === selectedService.toLowerCase()
-    )
-
-    if (!service) {
-      const availableServices =
-        settings.services.map(s => s.name).join(', ') || 'none'
-      throw new Error(
-        `Invalid service: "${selectedService}". Available services: ${availableServices}`
-      )
-    }
-
-    // Map service to vehicleService to get perMinuteRate
-    const vehicleServiceKey = mapServiceToVehicleService(service.name)
+    // Map service name to vehicleService key (e.g., 'sedan' → 'cercaMedium')
+    const vehicleServiceKey = mapServiceToVehicleService(selectedService)
     const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
-    const perMinuteRate = vehicleService?.perMinuteRate || 0
+
+    if (!vehicleService) {
+      const availableVehicleServices = settings.vehicleServices 
+        ? Object.keys(settings.vehicleServices).join(', ')
+        : 'none'
+      throw new Error(
+        `Invalid service: "${selectedService}". Available vehicle services: ${availableVehicleServices}`
+      )
+    }
+
+    // Check if vehicle service is enabled
+    if (vehicleService.enabled === false) {
+      throw new Error(
+        `Vehicle service "${vehicleServiceKey}" is currently disabled. Please select another vehicle type.`
+      )
+    }
+
+    // Get price and perMinuteRate from vehicleService
+    const servicePrice = vehicleService.price || 0
+    const perMinuteRate = vehicleService.perMinuteRate || 0
+
+    // Map to driver vehicle type for filtering
+    const driverVehicleType = mapServiceToDriverType(selectedService)
 
     // Get estimated duration from rideData (frontend should provide this)
     const estimatedDuration = rideData.estimatedDuration || 0
 
-    // Log service found for debugging
+    // Log service mapping for debugging
     logger.info(
-      `[Service Mapping] Frontend sent service: "${selectedService}", Backend found service: "${service.name}", price: ₹${service.price}, perMinuteRate: ₹${perMinuteRate}/min, estimatedDuration: ${estimatedDuration}min`
+      `[Service Mapping] Frontend sent service: "${selectedService}" → vehicleService: "${vehicleServiceKey}" → driverType: "${driverVehicleType}", price: ₹${servicePrice}, perMinuteRate: ₹${perMinuteRate}/min, estimatedDuration: ${estimatedDuration}min`
     )
 
     // Calculate fare with time component
@@ -518,12 +571,12 @@ const createRide = async rideData => {
       // Frontend provided fare - validate it but trust frontend calculation
       fare = rideData.fare
       logger.info(
-        `[Fare Validation] Frontend fare: ₹${fare}, service: ${service.name}, service.price: ₹${service.price}, frontend distance: ${distance}km, estimatedDuration: ${estimatedDuration}min, minimumFare: ₹${minimumFare}`
+        `[Fare Validation] Frontend fare: ₹${fare}, vehicleService: ${vehicleServiceKey}, servicePrice: ₹${servicePrice}, frontend distance: ${distance}km, estimatedDuration: ${estimatedDuration}min, minimumFare: ₹${minimumFare}`
       )
       
       // Calculate expected fare breakdown for logging/validation
       fareBreakdown = calculateFareWithTime(
-        service.price,
+        servicePrice,
         distance,
         estimatedDuration,
         perKmRate,
@@ -553,7 +606,7 @@ const createRide = async rideData => {
     } else {
       // No fare provided, calculate it with time component
       fareBreakdown = calculateFareWithTime(
-        service.price,
+        servicePrice,
         distance,
         estimatedDuration,
         perKmRate,
@@ -562,12 +615,12 @@ const createRide = async rideData => {
       )
       fare = fareBreakdown.fareAfterMinimum
       logger.info(
-        `[Fare Validation] Calculated fare: ₹${fare} for ride (service: ${service.name}, distance: ${distance}km, duration: ${estimatedDuration}min, base: ₹${service.price}, perMinuteRate: ₹${perMinuteRate}/min)`
+        `[Fare Validation] Calculated fare: ₹${fare} for ride (vehicleService: ${vehicleServiceKey}, distance: ${distance}km, duration: ${estimatedDuration}min, base: ₹${servicePrice}, perMinuteRate: ₹${perMinuteRate}/min)`
       )
     }
     
     logger.info(
-      `[Fare Validation] Final fare decision: ₹${fare} for ride (service: ${service.name}, distance: ${distance}km, duration: ${estimatedDuration}min)`
+      `[Fare Validation] Final fare decision: ₹${fare} for ride (vehicleService: ${vehicleServiceKey}, distance: ${distance}km, duration: ${estimatedDuration}min)`
     )
 
     // Apply promo code if provided
@@ -583,11 +636,12 @@ const createRide = async rideData => {
         // Check if user can use this coupon
         const canUse = coupon.canUserUse(riderId)
         if (canUse.canUse) {
-          // Check service applicability
+          // Check service applicability (coupons may use service names like 'sedan', 'suv', etc.)
           const serviceApplicable =
             !coupon.applicableServices ||
             coupon.applicableServices.length === 0 ||
-            coupon.applicableServices.includes(service.name)
+            coupon.applicableServices.includes(selectedService) ||
+            coupon.applicableServices.includes(vehicleServiceKey)
 
           // Check ride type applicability
           const rideTypeApplicable =
@@ -683,7 +737,10 @@ const createRide = async rideData => {
       paymentMethod: rideData.paymentMethod || 'CASH',
       pickupAddress: rideData.pickupAddress,
       dropoffAddress: rideData.dropoffAddress,
-      service: service.name,
+      // Store vehicle type and service information
+      vehicleType: driverVehicleType,
+      vehicleService: vehicleServiceKey,
+      service: selectedService, // Legacy field for backward compatibility
       promoCode: rideData.promoCode || null,
       discount: discount,
       // Store fare breakdown for transparency
@@ -1421,16 +1478,34 @@ const recalculateRideFare = async (rideId) => {
 
     const { perKmRate, minimumFare } = settings.pricingConfigurations
 
-    // Find service
-    const service = settings.services.find(
-      s => s.name.toLowerCase() === ride.service?.toLowerCase()
-    )
-    if (!service) throw new Error(`Service not found: ${ride.service}`)
+    // Get vehicleService from ride document (preferred) or map from service field (backward compatibility)
+    let vehicleServiceKey = ride.vehicleService
+    let servicePrice = 0
+    let perMinuteRate = 0
 
-    // Map service to vehicleService to get perMinuteRate
-    const vehicleServiceKey = mapServiceToVehicleService(service.name)
-    const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
-    const perMinuteRate = vehicleService?.perMinuteRate || 0
+    if (vehicleServiceKey && settings.vehicleServices?.[vehicleServiceKey]) {
+      // Use vehicleService from ride document
+      const vehicleService = settings.vehicleServices[vehicleServiceKey]
+      servicePrice = vehicleService.price || 0
+      perMinuteRate = vehicleService.perMinuteRate || 0
+      logger.info(
+        `[Fare Recalculation] Using vehicleService from ride: ${vehicleServiceKey}, price: ₹${servicePrice}, perMinuteRate: ₹${perMinuteRate}/min`
+      )
+    } else if (ride.service) {
+      // Fallback: Map from service field (backward compatibility)
+      vehicleServiceKey = mapServiceToVehicleService(ride.service)
+      const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
+      if (!vehicleService) {
+        throw new Error(`Vehicle service not found: ${vehicleServiceKey} (mapped from service: ${ride.service})`)
+      }
+      servicePrice = vehicleService.price || 0
+      perMinuteRate = vehicleService.perMinuteRate || 0
+      logger.info(
+        `[Fare Recalculation] Mapped service "${ride.service}" to vehicleService: ${vehicleServiceKey}, price: ₹${servicePrice}, perMinuteRate: ₹${perMinuteRate}/min`
+      )
+    } else {
+      throw new Error(`Ride missing both vehicleService and service fields: ${rideId}`)
+    }
 
     // Get actual duration (should be calculated by updateRideEndTime)
     const actualDuration = ride.actualDuration || 0
@@ -1442,7 +1517,7 @@ const recalculateRideFare = async (rideId) => {
 
     // Calculate fare breakdown with actual duration
     const fareBreakdown = calculateFareWithTime(
-      service.price,
+      servicePrice,
       distance,
       actualDuration,
       perKmRate,
@@ -1464,10 +1539,12 @@ const recalculateRideFare = async (rideId) => {
         // Validate coupon is still valid
         const canUse = coupon.canUserUse(ride.rider._id || ride.rider)
         if (canUse.canUse) {
+          // Check service applicability (coupons may use service names or vehicleService keys)
           const serviceApplicable =
             !coupon.applicableServices ||
             coupon.applicableServices.length === 0 ||
-            coupon.applicableServices.includes(service.name)
+            coupon.applicableServices.includes(ride.service) ||
+            coupon.applicableServices.includes(vehicleServiceKey)
 
           if (serviceApplicable) {
             const discountResult = coupon.calculateDiscount(fareBreakdown.fareAfterMinimum)
@@ -1925,7 +2002,8 @@ const autoAssignDriver = async (rideId, pickupLocation, maxDistance = 5000) => {
 const searchDriversWithProgressiveRadius = async (
   pickupLocation,
   radii = [3000, 6000, 9000, 12000, 15000, 20000],
-  bookingType = null // Optional: 'INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'
+  bookingType = null, // Optional: 'INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'
+  vehicleType = null // Optional: 'sedan', 'suv', 'hatchback', 'auto' - filters drivers by vehicle type
 ) => {
   try {
     // Ensure pickupLocation has coordinates array
@@ -2030,14 +2108,29 @@ const searchDriversWithProgressiveRadius = async (
         driverQuery.isBusy = false
       }
 
+      // Filter by vehicle type if provided
+      if (vehicleType) {
+        driverQuery['vehicleInfo.vehicleType'] = vehicleType
+        logger.info(`   🚗 Filtering drivers by vehicle type: ${vehicleType}`)
+      }
+
       // Now apply filters - including socketId to ensure only connected drivers
       const drivers = await Driver.find(driverQuery)
         .select('socketId') // Explicitly select socketId field
         .limit(10) // Limit to 10 drivers per radius
 
-      const filterDescription = bookingType === 'FULL_DAY' || bookingType === 'RENTAL'
-        ? 'isActive: true, isBusy: false OR (isBusy: true with future busyUntil), isOnline: true, socketId exists'
-        : 'isActive: true, isBusy: false, isOnline: true, socketId exists'
+      const filterDescription = (() => {
+        let desc = 'isActive: true, isOnline: true, socketId exists'
+        if (bookingType === 'FULL_DAY' || bookingType === 'RENTAL') {
+          desc += ', isBusy: false OR (isBusy: true with future busyUntil)'
+        } else {
+          desc += ', isBusy: false'
+        }
+        if (vehicleType) {
+          desc += `, vehicleType: ${vehicleType}`
+        }
+        return desc
+      })()
       logger.info(
         `   ✅ Found ${drivers.length} drivers after applying filters (${filterDescription})`
       )
@@ -2183,6 +2276,8 @@ module.exports = {
   updateDriverLocation,
   searchNearbyDrivers,
   mapServiceToVehicleService,
+  mapVehicleServiceToDriverType,
+  mapServiceToDriverType,
   calculateFareWithTime,
   createRide,
   assignDriverToRide,

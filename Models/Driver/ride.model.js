@@ -125,6 +125,23 @@ const rideSchema = new mongoose.Schema({
     estimatedArrivalTime: Date,
     driverArrivedAt: Date,
 
+    // Vehicle type and service information
+    vehicleType: {
+        type: String,
+        enum: ['sedan', 'suv', 'hatchback', 'auto'],
+        required: false,
+    },
+    vehicleService: {
+        type: String,
+        enum: ['cercaSmall', 'cercaMedium', 'cercaLarge'],
+        required: false,
+    },
+    // Legacy service field (kept for backward compatibility)
+    service: {
+        type: String,
+        required: false,
+    },
+
     // Fare breakdown for transparency
     fareBreakdown: {
         baseFare: Number,
