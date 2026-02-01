@@ -5,9 +5,11 @@ const logger = require('../utils/logger')
 
 // Custom Redis store for express-rate-limit v7
 class RedisStore {
-  constructor(client, prefix = 'rl:') {
+  constructor(client, prefix = 'rl:', windowMs = 60000) {
     this.client = client
     this.prefix = prefix
+    this.windowMs = windowMs
+    this.windowSeconds = Math.ceil(windowMs / 1000)
   }
 
   async increment(key, cb) {
@@ -15,8 +17,8 @@ class RedisStore {
     try {
       const count = await this.client.incr(redisKey)
       if (count === 1) {
-        // Set expiration on first increment
-        await this.client.expire(redisKey, 60) // 60 seconds default
+        // Set expiration on first increment based on windowMs
+        await this.client.expire(redisKey, this.windowSeconds)
       }
       const ttl = await this.client.ttl(redisKey)
       cb(null, { totalHits: count, resetTime: new Date(Date.now() + ttl * 1000) })
@@ -40,32 +42,59 @@ class RedisStore {
   }
 }
 
-// Initialize Redis store if Redis is available
-// Note: Redis connection is async, so we check status but don't fail if not ready
-let redisStore
-try {
-  // Check if redis object exists and has a valid status
-  if (redis && typeof redis.status === 'string') {
-    const status = redis.status.toLowerCase()
-    if (status === 'ready' || status === 'connect' || status === 'connecting') {
-      try {
-        redisStore = new RedisStore(redis, 'rl:')
-        logger.info('✅ Rate limiter using Redis store (shared across instances)')
-      } catch (storeError) {
-        logger.warn('⚠️ Failed to create Redis store, using memory store:', storeError.message)
-        redisStore = undefined
+// Helper function to create RedisStore instances with unique prefixes
+// Each rate limiter must have its own store instance (express-rate-limit v7 requirement)
+function createRedisStore(prefix, windowMs = 60000) {
+  try {
+    // Check if redis object exists and has a valid status
+    if (redis && typeof redis.status === 'string') {
+      const status = redis.status.toLowerCase()
+      if (status === 'ready' || status === 'connect' || status === 'connecting') {
+        try {
+          const store = new RedisStore(redis, prefix, windowMs)
+          return store
+        } catch (storeError) {
+          logger.warn(`⚠️ Failed to create Redis store with prefix "${prefix}", using memory store:`, storeError.message)
+          return undefined
+        }
+      } else {
+        logger.warn(`⚠️ Redis status is "${status}", rate limiter with prefix "${prefix}" will use memory store`)
+        return undefined
       }
     } else {
-      logger.warn(`⚠️ Redis status is "${status}", rate limiter will use memory store (not shared across instances)`)
-      redisStore = undefined
+      return undefined
     }
-  } else {
-    logger.warn('⚠️ Redis not available, rate limiter will use memory store (not shared across instances)')
-    redisStore = undefined
+  } catch (error) {
+    logger.warn(`⚠️ Failed to initialize Redis store with prefix "${prefix}", using memory store:`, error.message)
+    return undefined
   }
-} catch (error) {
-  logger.warn('⚠️ Failed to initialize Redis store for rate limiting, using memory store:', error.message)
-  redisStore = undefined // Fallback to memory store
+}
+
+// Check if Redis is available (for logging)
+function isRedisAvailable() {
+  try {
+    if (redis && typeof redis.status === 'string') {
+      const status = redis.status.toLowerCase()
+      return status === 'ready' || status === 'connect' || status === 'connecting'
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+// Create separate RedisStore instances for each rate limiter with unique prefixes
+// Each limiter MUST have its own store instance (express-rate-limit v7 requirement)
+// Pass windowMs to ensure correct expiration times
+const apiLimiterStore = createRedisStore('rl:api:', 60 * 1000) // 1 minute
+const authLimiterStore = createRedisStore('rl:auth:', 60 * 1000) // 1 minute
+const readLimiterStore = createRedisStore('rl:read:', 60 * 1000) // 1 minute
+const uploadLimiterStore = createRedisStore('rl:upload:', 60 * 60 * 1000) // 1 hour
+
+if (isRedisAvailable()) {
+  logger.info('✅ Rate limiters using Redis stores (shared across instances)')
+} else {
+  logger.warn('⚠️ Redis not available, rate limiters will use memory stores (not shared across instances)')
 }
 
 // General API rate limiter (100 requests per minute per IP)
@@ -85,9 +114,9 @@ const apiLimiterConfig = {
   }
 }
 
-// Only add store if Redis is available
-if (redisStore) {
-  apiLimiterConfig.store = redisStore
+// Assign unique store instance to API limiter
+if (apiLimiterStore) {
+  apiLimiterConfig.store = apiLimiterStore
 }
 
 let apiLimiter
@@ -120,8 +149,9 @@ const authLimiterConfig = {
   }
 }
 
-if (redisStore) {
-  authLimiterConfig.store = redisStore
+// Assign unique store instance to auth limiter
+if (authLimiterStore) {
+  authLimiterConfig.store = authLimiterStore
 }
 
 let authLimiter
@@ -149,8 +179,9 @@ const readLimiterConfig = {
   }
 }
 
-if (redisStore) {
-  readLimiterConfig.store = redisStore
+// Assign unique store instance to read limiter
+if (readLimiterStore) {
+  readLimiterConfig.store = readLimiterStore
 }
 
 let readLimiter
@@ -178,8 +209,9 @@ const uploadLimiterConfig = {
   }
 }
 
-if (redisStore) {
-  uploadLimiterConfig.store = redisStore
+// Assign unique store instance to upload limiter
+if (uploadLimiterStore) {
+  uploadLimiterConfig.store = uploadLimiterStore
 }
 
 let uploadLimiter
