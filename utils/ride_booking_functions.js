@@ -975,9 +975,12 @@ const completeRide = async (rideId, fare) => {
       )
     }
 
-    // First update end time to calculate actualDuration
-    await updateRideEndTime(rideId)
-    
+    // First update end time to calculate actualDuration (but don't update isBusy yet)
+    const endTime = new Date()
+    const actualDuration = currentRide?.actualStartTime
+      ? Math.round((endTime - currentRide.actualStartTime) / 60000) // in minutes
+      : 0
+
     // Recalculate fare with actual duration
     let recalculatedFare = fare
     let fareBreakdown = null
@@ -997,10 +1000,12 @@ const completeRide = async (rideId, fare) => {
       // Use provided fare if recalculation fails
     }
 
-    // Update ride with recalculated fare and fare breakdown
+    // Update ride with recalculated fare, fare breakdown, end time, duration, and status
     const updateData = {
       status: 'completed',
-      fare: recalculatedFare
+      fare: recalculatedFare,
+      actualEndTime: endTime,
+      actualDuration: actualDuration
     }
     
     if (fareBreakdown) {
@@ -1025,6 +1030,37 @@ const completeRide = async (rideId, fare) => {
       { new: true }
     ).populate('driver rider')
     if (!ride) throw new Error('Ride not found')
+
+    // NOW update driver isBusy to false AFTER ride status is 'completed'
+    // This ensures validateAndFixDriverStatus won't find this ride as active
+    if (ride.driver) {
+      const driverId = ride.driver._id || ride.driver
+      
+      // Ensure driver exists before updating
+      const driverExists = await Driver.findById(driverId)
+      if (!driverExists) {
+        logger.warn(`completeRide: Driver ${driverId} not found, skipping isBusy reset`)
+      } else {
+        // Reset isBusy for this completed ride
+        await Driver.findByIdAndUpdate(driverId, {
+          isBusy: false,
+          busyUntil: null
+        })
+        
+        logger.info(
+          `✅ completeRide: Driver ${driverId} isBusy reset to false after ride ${rideId} completion`
+        )
+
+        // Validate driver status to check for OTHER active rides
+        // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
+        const validationResult = await validateAndFixDriverStatus(driverId)
+        if (validationResult.corrected) {
+          logger.info(
+            `✅ completeRide: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+          )
+        }
+      }
+    }
 
     logger.info(
       `[Fare Tracking] Ride completed - rideId: ${rideId}, fare stored: ₹${ride.fare}, oldFare: ₹${oldFare}, difference: ₹${recalculatedFare - oldFare}`
@@ -1576,6 +1612,9 @@ const recalculateRideFare = async (rideId) => {
 }
 
 // Update ride with actual end time and calculate duration
+// Note: This function does NOT update driver isBusy status
+// Driver isBusy is updated in completeRide() AFTER ride status is set to 'completed'
+// This prevents race condition where validateAndFixDriverStatus sees ride as 'in_progress'
 const updateRideEndTime = async rideId => {
   try {
     const ride = await Ride.findById(rideId)
@@ -1595,35 +1634,8 @@ const updateRideEndTime = async rideId => {
       { new: true }
     ).populate('driver rider')
 
-    // Update driver status to not busy
-    if (updatedRide.driver) {
-      const driverId = updatedRide.driver._id || updatedRide.driver
-      
-      // Ensure driver exists before updating
-      const driverExists = await Driver.findById(driverId)
-      if (!driverExists) {
-        logger.warn(`updateRideEndTime: Driver ${driverId} not found, skipping isBusy reset`)
-      } else {
-        // Reset isBusy for this completed ride
-        await Driver.findByIdAndUpdate(driverId, {
-          isBusy: false,
-          busyUntil: null
-        })
-        
-        logger.info(
-          `✅ updateRideEndTime: Driver ${driverId} isBusy reset to false after ride ${rideId} completion`
-        )
-
-        // Validate driver status to check for OTHER active rides
-        // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
-        const validationResult = await validateAndFixDriverStatus(driverId)
-        if (validationResult.corrected) {
-          logger.info(
-            `✅ updateRideEndTime: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
-          )
-        }
-      }
-    }
+    // Note: Driver isBusy is NOT updated here to avoid race condition
+    // It will be updated in completeRide() after ride status is set to 'completed'
 
     return updatedRide
   } catch (error) {
