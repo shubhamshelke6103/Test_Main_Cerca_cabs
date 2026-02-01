@@ -137,36 +137,59 @@ const upload = multer({
 /* =======================
    ROUTES (ALL COMMONJS)
 ======================= */
+// Helper function to safely require and use routes
+function useRoute(path, routePath) {
+  try {
+    const route = require(routePath)
+    if (route && typeof route === 'function') {
+      app.use(path, route)
+      logger.info(`✅ Route loaded: ${path}`)
+    } else {
+      logger.error(`❌ Route ${routePath} did not export a valid router - got ${typeof route}`)
+    }
+  } catch (error) {
+    logger.error(`❌ Failed to load route ${routePath}:`, error.message || error)
+    // Don't crash the server, just log the error
+  }
+}
+
 // Auth routes - rate limiting temporarily disabled
 // if (authLimiter && typeof authLimiter === 'function') {
 //   app.use('/users/login', authLimiter)
 // }
-app.use('/users', require('./Routes/User/user.routes'))
-app.use('/users', require('./Routes/User/wallet.routes'))
-app.use('/users', require('./Routes/User/referral.routes'))
 
-app.use('/drivers', require('./Routes/Driver/driver.routes'))
-app.use('/drivers', require('./Routes/Driver/earnings.routes'))
-app.use('/drivers', require('./Routes/Driver/payout.routes'))
-app.use('/drivers', require('./Routes/Driver/message.routes'))
-app.use('/drivers', require('./Routes/Driver/rating.routes'))
+// Load routes with error handling
+try {
+  useRoute('/users', './Routes/User/user.routes')
+  useRoute('/users', './Routes/User/wallet.routes')
+  useRoute('/users', './Routes/User/referral.routes')
 
-app.use('/admin', require('./Routes/admin.routes'))
-app.use('/admin', require('./Routes/Admin/dashboard.routes'))
-app.use('/admin', require('./Routes/Admin/users.routes'))
-app.use('/admin', require('./Routes/Admin/drivers.routes'))
-app.use('/admin', require('./Routes/Admin/rides.routes'))
-app.use('/admin', require('./Routes/Admin/payments.routes'))
+  useRoute('/drivers', './Routes/Driver/driver.routes')
+  useRoute('/drivers', './Routes/Driver/earnings.routes')
+  useRoute('/drivers', './Routes/Driver/payout.routes')
+  useRoute('/drivers', './Routes/Driver/message.routes')
+  useRoute('/drivers', './Routes/Driver/rating.routes')
 
-app.use('/settings', require('./Routes/admin.routes'))
-app.use('/coupons', require('./Routes/coupon.routes'))
-app.use('/address', require('./Routes/User/address.route'))
-app.use('/notifications', require('./Routes/User/notification.routes'))
-app.use('/emergencies', require('./Routes/User/emergency.routes'))
-app.use('/api/v1/payment', require('./Routes/payment.route'))
-app.use('/api/google-maps', require('./Routes/googleMaps.routes'))
-app.use('/api/offers', require('./Routes/User/offer.routes'))
-app.use('/rides', require('./Routes/ride.routes'))
+  useRoute('/admin', './Routes/admin.routes')
+  useRoute('/admin', './Routes/Admin/dashboard.routes')
+  useRoute('/admin', './Routes/Admin/users.routes')
+  useRoute('/admin', './Routes/Admin/drivers.routes')
+  useRoute('/admin', './Routes/Admin/rides.routes')
+  useRoute('/admin', './Routes/Admin/payments.routes')
+
+  useRoute('/settings', './Routes/admin.routes')
+  useRoute('/coupons', './Routes/coupon.routes')
+  useRoute('/address', './Routes/User/address.route')
+  useRoute('/notifications', './Routes/User/notification.routes')
+  useRoute('/emergencies', './Routes/User/emergency.routes')
+  useRoute('/api/v1/payment', './Routes/payment.route')
+  useRoute('/api/google-maps', './Routes/googleMaps.routes')
+  useRoute('/api/offers', './Routes/User/offer.routes')
+  useRoute('/rides', './Routes/ride.routes')
+} catch (error) {
+  logger.error('❌ Error loading routes:', error.message || error)
+  // Continue anyway - server should still start
+}
 
 /* =======================
    HEALTH & UPLOAD
