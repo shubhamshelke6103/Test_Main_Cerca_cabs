@@ -10,21 +10,24 @@ const {
 const router = express.Router();
 
 // Submit a rating
-router.post('/', submitRating);
+// POST /drivers/ratings
+router.post('/ratings', submitRating);
 
 // Get ratings for a specific entity (Driver or User)
-// GET /ratings/Driver/DRIVER_ID or /ratings/User/USER_ID
-router.get('/:entityModel/:entityId', getRatingsForEntity);
+// GET /drivers/ratings/Driver/DRIVER_ID or /drivers/ratings/User/USER_ID
+router.get('/ratings/:entityModel/:entityId', getRatingsForEntity);
 
 // Get rating stats for an entity
-// GET /ratings/Driver/DRIVER_ID/stats
-router.get('/:entityModel/:entityId/stats', getRatingStats);
+// GET /drivers/ratings/Driver/DRIVER_ID/stats
+router.get('/ratings/:entityModel/:entityId/stats', getRatingStats);
 
 // Get rating for a specific ride
-router.get('/ride/:rideId', getRatingByRide);
+// GET /drivers/ratings/ride/:rideId
+router.get('/ratings/ride/:rideId', getRatingByRide);
 
 // Delete a rating (admin only)
-router.delete('/:id', deleteRating);
+// DELETE /drivers/ratings/:id
+router.delete('/ratings/:id', deleteRating);
 
 module.exports = router;
 
