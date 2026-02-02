@@ -103,6 +103,54 @@ function initializeSocket (server) {
     })
 
     // ============================
+    // SUPPORT CHAT: USER JOIN CHAT
+    // ============================
+    socket.on('support:join_chat', async data => {
+      try {
+        const { issueId, userId } = data || {}
+        
+        if (!issueId) {
+          logger.warn('❌ [SUPPORT JOIN CHAT] issueId missing')
+          return
+        }
+
+        // Store userId on socket if provided
+        if (userId) {
+          socket.data.userId = userId
+        }
+
+        const effectiveUserId = userId || socket.data.userId
+        if (!effectiveUserId) {
+          logger.warn('❌ [SUPPORT JOIN CHAT] userId missing')
+          return
+        }
+
+        const issue = await SupportIssue.findById(issueId)
+        if (!issue) {
+          logger.warn(`❌ [SUPPORT JOIN CHAT] issue not found - issueId=${issueId}`)
+          return
+        }
+
+        // Verify user owns this issue
+        if (issue.userId.toString() !== effectiveUserId) {
+          logger.warn(`❌ [SUPPORT JOIN CHAT] unauthorized - userId=${effectiveUserId}, issueUserId=${issue.userId}`)
+          return
+        }
+
+        // Join the issue room
+        socket.join(`support_issue_${issueId}`)
+        socket.join(`support_user_${effectiveUserId}`)
+        
+        logger.info(`✅ [SUPPORT JOIN CHAT] userId=${effectiveUserId} joined room support_issue_${issueId}`)
+        
+        // Acknowledge successful join
+        socket.emit('support:joined', { issueId, status: issue.status })
+      } catch (err) {
+        logger.error('support:join_chat error:', err)
+      }
+    })
+
+    // ============================
     // SUPPORT CHAT: USER REQUEST
     // ============================
     socket.on('support:request', async data => {
@@ -371,6 +419,34 @@ function initializeSocket (server) {
         )
       } catch (err) {
         logger.error('support:message error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: TYPING INDICATOR
+    // ============================
+    socket.on('support:typing', async data => {
+      try {
+        const { issueId, isTyping } = data || {}
+        
+        if (!issueId) {
+          return
+        }
+
+        const senderType = socket.data.adminId ? 'ADMIN' : 'USER'
+        const senderId = socket.data.adminId || socket.data.userId
+
+        // Broadcast typing status to the issue room (except sender)
+        socket.to(`support_issue_${issueId}`).emit('support:typing', {
+          issueId,
+          senderType,
+          senderId,
+          isTyping: !!isTyping
+        })
+
+        logger.debug(`⌨️ [SUPPORT TYPING] issueId=${issueId}, senderType=${senderType}, isTyping=${isTyping}`)
+      } catch (err) {
+        logger.error('support:typing error:', err)
       }
     })
 
