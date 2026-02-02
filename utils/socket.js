@@ -168,6 +168,18 @@ function initializeSocket (server) {
           issueType
         })
 
+        // Emit stats update
+        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
+        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        io.to('admin_support_online').emit('support:stats_updated', {
+          stats: {
+            waiting: waitingCount,
+            active: activeCount,
+            resolved: resolvedCount
+          }
+        })
+
         // Notify user
         socket.emit('support:waiting', {
           issueId: issue._id,
@@ -242,6 +254,24 @@ function initializeSocket (server) {
           issueId,
           message: 'You are now connected with support'
         })
+
+        // Emit support:accept event for real-time updates
+        io.to('admin_support_online').emit('support:accept', {
+          issueId,
+          adminId,
+          userId: issue.userId
+        })
+
+        // Emit stats update
+        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
+        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        io.to('admin_support_online').emit('support:stats_updated', {
+          stats: {
+            waiting: waitingCount,
+            active: activeCount
+          }
+        })
+
         logger.info(
           `🔗 [SUPPORT CHAT ACTIVE] issueId=${issueId}, adminId=${adminId}, userId=${issue.userId}`
         )
@@ -317,20 +347,27 @@ function initializeSocket (server) {
           `✉️ [SUPPORT MESSAGE AUTHORIZED] issueId=${issueId}, senderType=${senderType}, senderId=${senderId}`
         )
 
-        await SupportMessage.create({
+        const savedMessage = await SupportMessage.create({
           issueId,
           senderType,
           senderId,
           message: trimmedMessage
         })
 
-        io.to(`support_issue_${issueId}`).emit('support:message', {
-          senderType,
-          message: trimmedMessage,
-          createdAt: new Date()
-        })
+        // Emit complete message object with all required fields
+        const messagePayload = {
+          _id: savedMessage._id.toString(),
+          issueId: savedMessage.issueId.toString(),
+          senderType: savedMessage.senderType,
+          senderId: savedMessage.senderId?.toString() || '',
+          message: savedMessage.message,
+          createdAt: savedMessage.createdAt,
+          updatedAt: savedMessage.updatedAt
+        }
+
+        io.to(`support_issue_${issueId}`).emit('support:message', messagePayload)
         logger.info(
-          `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}`
+          `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}, messageId=${savedMessage._id}`
         )
       } catch (err) {
         logger.error('support:message error:', err)
@@ -382,6 +419,23 @@ function initializeSocket (server) {
 
         // Notify both sides
         io.to(`support_issue_${issueId}`).emit('support:ended', {
+          issueId
+        })
+
+        // Emit stats update
+        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
+        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        io.to('admin_support_online').emit('support:stats_updated', {
+          stats: {
+            waiting: waitingCount,
+            active: activeCount,
+            resolved: resolvedCount
+          }
+        })
+
+        // Emit support:ended event for dashboard updates
+        io.to('admin_support_online').emit('support:ended', {
           issueId
         })
 
