@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
 const path = require('path')
 const fs = require('fs')
+const mongoose = require('mongoose')
 // const rideBookingQueue = require('../../src/queues/rideBooking.queue')
 const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
@@ -178,7 +179,14 @@ const getAllRides = async (req, res) => {
  */
 const getRideById = async (req, res) => {
   try {
-    const ride = await Ride.findById(req.params.id).populate('driver rider')
+    const rideId = req.params.id
+    
+    // Reject non-ObjectId values (like favicon.ico, robots.txt, etc.)
+    if (!mongoose.Types.ObjectId.isValid(rideId)) {
+      return res.status(404).json({ message: 'Ride not found' })
+    }
+    
+    const ride = await Ride.findById(rideId).populate('driver rider')
     if (!ride) {
       return res.status(404).json({ message: 'Ride not found' })
     }

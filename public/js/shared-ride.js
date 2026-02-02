@@ -29,9 +29,17 @@
 
     // Initialize
     function init() {
-        // Get token from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        shareToken = urlParams.get('token');
+        // Get token from URL path (format: /shared-ride/{token})
+        const pathParts = window.location.pathname.split('/');
+        const tokenIndex = pathParts.indexOf('shared-ride');
+        
+        if (tokenIndex !== -1 && pathParts[tokenIndex + 1]) {
+            shareToken = pathParts[tokenIndex + 1];
+        } else {
+            // Fallback: try query parameter (for backward compatibility)
+            const urlParams = new URLSearchParams(window.location.search);
+            shareToken = urlParams.get('token');
+        }
 
         if (!shareToken) {
             showError('Invalid share link. No token provided.');
