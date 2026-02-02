@@ -45,6 +45,10 @@ const {
   clearRideRedisKeys
 } = require('./ride_booking_functions')
 
+const SupportIssue = require('../Models/support/supportIssue.model')
+const SupportMessage = require('../Models/support/supportMessage.model')
+const SupportFeedback = require('../Models/support/supportFeedback.model')
+
 let io
 
 function initializeSocket (server) {
@@ -56,15 +60,17 @@ function initializeSocket (server) {
     transports: ['polling', 'websocket'],
     pingInterval: 25000,
     pingTimeout: 60000,
-    allowEIO3: true, 
-    cookie:{
+    allowEIO3: true,
+    cookie: {
       httpOnly: false,
       sameSite: 'lax'
     }
   })
 
-   io.engine.on('connection', (socket) => {
-    socket.request.headers['x-forwarded-for'] = socket.request.headers['x-forwarded-for'] || socket.request.connection.remoteAddress
+  io.engine.on('connection', socket => {
+    socket.request.headers['x-forwarded-for'] =
+      socket.request.headers['x-forwarded-for'] ||
+      socket.request.connection.remoteAddress
   })
 
   // 🔥 MULTI-SERVER FIX — Redis Adapter
@@ -75,6 +81,265 @@ function initializeSocket (server) {
 
   io.on('connection', socket => {
     logger.info(`Socket connected: ${socket.id}`)
+
+    // ============================
+    // ADMIN SUPPORT CONNECTION
+    // ============================
+    socket.on('adminSupportConnect', async data => {
+      try {
+        const { adminId } = data || {}
+        if (!adminId) return
+
+        socket.data.adminId = adminId
+        socket.join('admin_support_online')
+        socket.join(`admin_${adminId}`)
+
+        logger.info(
+          `🛠️ Admin connected for support - adminId: ${adminId}, socketId: ${socket.id}`
+        )
+      } catch (err) {
+        logger.error('adminSupportConnect error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: USER REQUEST
+    // ============================
+    socket.on('support:request', async data => {
+      try {
+        const { userId, issueType } = data || {}
+        if (!userId) return
+
+        // 🔐 SAVE USER ID ON SOCKET (ADD THIS)
+        socket.data.userId = userId
+
+        // 🔒 DUPLICATE ISSUE CHECK
+        const existingIssue = await SupportIssue.findOne({
+          userId,
+          status: {
+            $in: [
+              'WAITING_FOR_ADMIN',
+              'ADMIN_ASSIGNED',
+              'CHAT_ACTIVE',
+              'FEEDBACK_PENDING'
+            ]
+          }
+        })
+
+        if (existingIssue) {
+          socket.emit('support:already_active', {
+            issueId: existingIssue._id,
+            status: existingIssue.status,
+            message: 'You already have an active support chat'
+          })
+          return
+        }
+
+        // ✅ CREATE NEW ISSUE
+        const issue = await SupportIssue.create({
+          userId,
+          issueType
+        })
+
+        // Join personal support room
+        socket.join(`support_user_${userId}`)
+
+        // Notify admins
+        io.to('admin_support_online').emit('support:new_issue', {
+          issueId: issue._id,
+          userId,
+          issueType
+        })
+
+        // Notify user
+        socket.emit('support:waiting', {
+          issueId: issue._id,
+          message: 'Connecting you to support...'
+        })
+      } catch (err) {
+        logger.error('support:request error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: ADMIN ACCEPT
+    // ============================
+    socket.on('support:accept', async data => {
+      try {
+        const { issueId } = data || {}
+        const adminId = socket.data.adminId
+        if (!issueId || !adminId) return
+
+        // ============================
+        // ADMIN LOAD CONTROL (ADD HERE)
+        // ============================
+        const MAX_SUPPORT_CHATS_PER_ADMIN = 3
+
+        const activeCount =
+          (await redis.get(`admin:${adminId}:support_count`)) || 0
+
+        if (Number(activeCount) >= MAX_SUPPORT_CHATS_PER_ADMIN) {
+          socket.emit('support:limit_reached', {
+            message: 'Support chat limit reached'
+          })
+          return
+        }
+
+        // ============================
+        // FETCH & VALIDATE ISSUE
+        // ============================
+        const issue = await SupportIssue.findById(issueId)
+        if (!issue || issue.status !== 'WAITING_FOR_ADMIN') return
+
+        // ============================
+        // ASSIGN ADMIN
+        // ============================
+        issue.adminId = adminId
+        issue.status = 'CHAT_ACTIVE'
+        await issue.save()
+
+        // 🔢 Increment admin active chat count
+        await redis.incr(`admin:${adminId}:support_count`)
+
+        const room = `support_issue_${issueId}`
+
+        // Admin joins issue room
+        socket.join(room)
+
+        // Force user to join issue room (multi-server safe)
+        io.in(`support_user_${issue.userId}`).socketsJoin(room)
+
+        // Notify user
+        io.to(`support_user_${issue.userId}`).emit('support:connected', {
+          issueId,
+          message: 'You are now connected with support'
+        })
+      } catch (err) {
+        logger.error('support:accept error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: MESSAGE
+    // ============================
+    socket.on('support:message', async data => {
+      try {
+        const { issueId, message } = data || {}
+        if (!issueId || !message) return
+
+        const issue = await SupportIssue.findById(issueId)
+        if (!issue) return
+
+        // ============================
+        // 🔒 AUTHORIZATION CHECK (ADD)
+        // ============================
+
+        // If admin is sending message, ensure admin is assigned to this issue
+        if (
+          socket.data.adminId &&
+          issue.adminId?.toString() !== socket.data.adminId
+        ) {
+          logger.warn(
+            `Unauthorized admin message attempt - adminId: ${socket.data.adminId}, issueId: ${issueId}`
+          )
+          return
+        }
+
+        // If user is sending message, ensure user owns this issue
+        if (
+          socket.data.userId &&
+          issue.userId.toString() !== socket.data.userId
+        ) {
+          logger.warn(
+            `Unauthorized user message attempt - userId: ${socket.data.userId}, issueId: ${issueId}`
+          )
+          return
+        }
+
+        // ============================
+        // MESSAGE SAVE & EMIT
+        // ============================
+        const senderType = socket.data.adminId ? 'ADMIN' : 'USER'
+        const senderId = socket.data.adminId || socket.data.userId
+
+        await SupportMessage.create({
+          issueId,
+          senderType,
+          senderId,
+          message
+        })
+
+        io.to(`support_issue_${issueId}`).emit('support:message', {
+          senderType,
+          message,
+          createdAt: new Date()
+        })
+      } catch (err) {
+        logger.error('support:message error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: END
+    // ============================
+    socket.on('support:end', async data => {
+      try {
+        const { issueId } = data || {}
+        if (!issueId) return
+
+        const issue = await SupportIssue.findById(issueId)
+        if (!issue) return
+
+        issue.status = 'FEEDBACK_PENDING'
+        await issue.save()
+
+        // 🔥 DECREMENT ADMIN LOAD COUNTER (ADD HERE)
+        if (issue.adminId) {
+          await redis.decr(`admin:${issue.adminId}:support_count`)
+        }
+
+        await SupportMessage.create({
+          issueId,
+          senderType: 'SYSTEM',
+          message: 'Hope your issue is resolved.'
+        })
+
+        io.to(`support_issue_${issueId}`).emit('support:ended')
+      } catch (err) {
+        logger.error('support:end error:', err)
+      }
+    })
+
+    // ============================
+    // SUPPORT CHAT: FEEDBACK
+    // ============================
+    socket.on('support:feedback', async data => {
+      try {
+        const { issueId, resolved, rating, comment } = data || {}
+        if (!issueId) return
+
+        await SupportFeedback.create({
+          issueId,
+          resolved,
+          rating,
+          comment
+        })
+
+        const issue = await SupportIssue.findById(issueId)
+
+        if (resolved) {
+          issue.status = 'RESOLVED'
+        } else {
+          issue.status = 'ESCALATED'
+          issue.escalated = true
+        }
+
+        issue.resolvedAt = new Date()
+        await issue.save()
+      } catch (err) {
+        logger.error('support:feedback error:', err)
+      }
+    })
 
     // ============================
     // RIDER CONNECTION
@@ -589,7 +854,9 @@ function initializeSocket (server) {
             await checkAndCleanStaleRideLocks(riderId)
           } catch (cleanupError) {
             // Don't fail ride creation if cleanup check fails - log for monitoring
-            logger.warn(`⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`)
+            logger.warn(
+              `⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`
+            )
           }
 
           // Check MongoDB for active rides
@@ -1801,7 +2068,9 @@ function initializeSocket (server) {
           await clearRideRedisKeys(rideId)
         } catch (cleanupError) {
           // Don't fail cancellation if cleanup fails - log for monitoring
-          logger.warn(`⚠️ Additional Redis cleanup failed for cancelled ride ${rideId}: ${cleanupError.message}`)
+          logger.warn(
+            `⚠️ Additional Redis cleanup failed for cancelled ride ${rideId}: ${cleanupError.message}`
+          )
         }
 
         io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
@@ -2620,6 +2889,51 @@ function initializeSocket (server) {
           })
         }
 
+        // ============================
+        // SUPPORT ADMIN DISCONNECT HANDLING (ADD)
+        // ============================
+        if (socket.data?.adminId) {
+          const adminId = socket.data.adminId
+
+          logger.warn(
+            `🛑 Support admin disconnected - adminId: ${adminId}, socketId: ${socket.id}`
+          )
+
+          // Find active support chats handled by this admin
+          const activeIssues = await SupportIssue.find({
+            adminId,
+            status: 'CHAT_ACTIVE'
+          })
+
+          for (const issue of activeIssues) {
+            // Reset issue so another admin can take it
+            issue.status = 'WAITING_FOR_ADMIN'
+            issue.adminId = null
+            await issue.save()
+
+            // 🔥 IMPORTANT: decrement admin active chat counter
+            await redis.decr(`admin:${adminId}:support_count`)
+
+            // Notify user
+            io.to(`support_user_${issue.userId}`).emit(
+              'support:admin_disconnected',
+              {
+                issueId: issue._id,
+                message:
+                  'Support agent disconnected. Reconnecting you to another agent...'
+              }
+            )
+
+            // Re-notify available admins
+            io.to('admin_support_online').emit('support:new_issue', {
+              issueId: issue._id,
+              userId: issue.userId,
+              issueType: issue.issueType,
+              reason: 'ADMIN_DISCONNECTED'
+            })
+          }
+        }
+
         logger.info(`Socket disconnected successfully - socketId: ${socket.id}`)
       } catch (err) {
         logger.error('disconnect cleanup error:', err)
@@ -2813,10 +3127,13 @@ async function storeRideEarnings (ride, retryCount = 0) {
     const calculatedTotal = roundedPlatformFee + roundedDriverEarning
     if (Math.abs(grossFare - calculatedTotal) > tolerance) {
       logger.error(
-        `storeRideEarnings: Calculation mismatch - grossFare: ₹${grossFare}, platformFee + driverEarning: ₹${calculatedTotal}, difference: ₹${Math.abs(grossFare - calculatedTotal)}, rideId: ${rideId}`
+        `storeRideEarnings: Calculation mismatch - grossFare: ₹${grossFare}, platformFee + driverEarning: ₹${calculatedTotal}, difference: ₹${Math.abs(
+          grossFare - calculatedTotal
+        )}, rideId: ${rideId}`
       )
       // Adjust driverEarning to ensure grossFare = platformFee + driverEarning
-      roundedDriverEarning = Math.round((grossFare - roundedPlatformFee) * 100) / 100
+      roundedDriverEarning =
+        Math.round((grossFare - roundedPlatformFee) * 100) / 100
       logger.info(
         `storeRideEarnings: Adjusted driverEarning to ₹${roundedDriverEarning} to match grossFare`
       )
