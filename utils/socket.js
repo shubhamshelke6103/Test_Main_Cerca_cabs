@@ -9,6 +9,7 @@ const Ride = require('../Models/Driver/ride.model')
 const Message = require('../Models/Driver/message.model')
 const AdminEarnings = require('../Models/Admin/adminEarnings.model')
 const Settings = require('../Models/Admin/settings.modal')
+const { validateShareToken } = require('./shareToken.service')
 // const rideBookingQueue = require('../src/queues/rideBooking.queue')
 const { rideBookingQueue } = require('../src/queues/rideBooking.queue')
 const {
@@ -50,6 +51,28 @@ const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
 
 let io
+
+/**
+ * Helper function to broadcast ride updates to shared ride rooms
+ * @param {string} rideId - Ride ID
+ * @param {string} eventName - Event name to emit
+ * @param {Object} data - Data to send
+ */
+async function broadcastToSharedRide(rideId, eventName, data) {
+  try {
+    const ride = await Ride.findById(rideId).select('shareToken isShared').lean()
+    if (ride && ride.shareToken && ride.isShared) {
+      io.to(`shared_ride_${ride.shareToken}`).emit(eventName, {
+        rideId: rideId.toString(),
+        ...data,
+        timestamp: new Date()
+      })
+      logger.info(`Broadcasted ${eventName} to shared ride room for ride ${rideId}`)
+    }
+  } catch (err) {
+    logger.error(`Error broadcasting to shared ride for ride ${rideId}:`, err)
+  }
+}
 
 function initializeSocket (server) {
   io = new Server(server, {
@@ -529,6 +552,28 @@ function initializeSocket (server) {
           issueId
         })
 
+        // Emit status changed event for real-time updates
+        io.to(`support_issue_${issueId}`).emit('support:status_changed', {
+          issueId,
+          status: issue.status,
+          userId: issue.userId.toString(),
+          adminId: issue.adminId?.toString()
+        })
+        io.to(`support_user_${issue.userId}`).emit('support:status_changed', {
+          issueId,
+          status: issue.status
+        })
+        if (issue.adminId) {
+          io.to(`admin_${issue.adminId}`).emit('support:status_changed', {
+            issueId,
+            status: issue.status
+          })
+        }
+        io.to('admin_support_online').emit('support:status_changed', {
+          issueId,
+          status: issue.status
+        })
+
         // Emit stats update
         const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
         const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
@@ -578,6 +623,40 @@ function initializeSocket (server) {
 
         issue.resolvedAt = new Date()
         await issue.save()
+
+        // Emit status changed event for real-time updates
+        io.to(`support_issue_${issueId}`).emit('support:status_changed', {
+          issueId,
+          status: issue.status,
+          userId: issue.userId.toString(),
+          adminId: issue.adminId?.toString()
+        })
+        io.to(`support_user_${issue.userId}`).emit('support:status_changed', {
+          issueId,
+          status: issue.status
+        })
+        if (issue.adminId) {
+          io.to(`admin_${issue.adminId}`).emit('support:status_changed', {
+            issueId,
+            status: issue.status
+          })
+        }
+        io.to('admin_support_online').emit('support:status_changed', {
+          issueId,
+          status: issue.status
+        })
+
+        // Emit stats update
+        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
+        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        io.to('admin_support_online').emit('support:stats_updated', {
+          stats: {
+            waiting: waitingCount,
+            active: activeCount,
+            resolved: resolvedCount
+          }
+        })
       } catch (err) {
         logger.error('support:feedback error:', err)
       }
@@ -1443,6 +1522,20 @@ function initializeSocket (server) {
         // ============================
         io.to(roomName).emit('rideAccepted', rideWithMetadata)
 
+        // Broadcast to shared ride room
+        await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
+          status: 'accepted',
+          ride: {
+            _id: assignedRide._id,
+            status: assignedRide.status,
+            driver: assignedRide.driver ? {
+              name: assignedRide.driver.name,
+              rating: assignedRide.driver.rating,
+              vehicleInfo: assignedRide.driver.vehicleInfo
+            } : null
+          }
+        })
+
         // ============================
         // CREATE NOTIFICATIONS
         // ============================
@@ -1825,6 +1918,16 @@ function initializeSocket (server) {
 
         // Notify rider
         io.to(`ride_${ride._id}`).emit('driverArrived', ride)
+
+        // Broadcast to shared ride room
+        await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
+          status: 'arrived',
+          ride: {
+            _id: ride._id,
+            status: ride.status,
+            driverArrivedAt: ride.driverArrivedAt
+          }
+        })
         logger.info(
           `Driver arrival notification sent to rider - rideId: ${rideId}`
         )
@@ -1935,6 +2038,16 @@ function initializeSocket (server) {
 
         // io.emit('rideStarted', startedRide)
         io.to(`ride_${startedRide._id}`).emit('rideStarted', startedRide)
+
+        // Broadcast to shared ride room
+        await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
+          status: 'in_progress',
+          ride: {
+            _id: startedRide._id,
+            status: startedRide.status,
+            actualStartTime: startedRide.actualStartTime
+          }
+        })
       } catch (err) {
         logger.error('rideStarted error:', err)
         socket.emit('rideError', { message: 'Failed to start ride' })
@@ -1967,8 +2080,96 @@ function initializeSocket (server) {
             `Ride location update sent to rider - rideId: ${data.rideId}`
           )
         }
+
+        // Broadcast to shared ride room if ride is shared
+        if (data.rideId) {
+          Ride.findById(data.rideId)
+            .then(ride => {
+              if (ride && ride.shareToken && ride.isShared) {
+                io.to(`shared_ride_${ride.shareToken}`).emit('sharedRideLocationUpdate', {
+                  rideId: data.rideId,
+                  location: data.location,
+                  timestamp: new Date()
+                })
+              }
+            })
+            .catch(err => {
+              logger.error('Error checking shared ride for location update:', err)
+            })
+        }
       } catch (err) {
         logger.error('rideLocationUpdate error:', err)
+      }
+    })
+
+    // ============================
+    // SHARED RIDE SOCKET EVENTS
+    // ============================
+    socket.on('joinSharedRide', async data => {
+      try {
+        const { shareToken } = data || {}
+        if (!shareToken) {
+          socket.emit('sharedRideError', {
+            message: 'Share token is required'
+          })
+          return
+        }
+
+        // Find ride by share token
+        const ride = await Ride.findOne({ shareToken })
+        if (!ride) {
+          socket.emit('sharedRideError', {
+            message: 'Ride not found or link is invalid'
+          })
+          return
+        }
+
+        // Validate token
+        const validation = validateShareToken(shareToken, ride.shareTokenExpiresAt)
+        if (!validation.isValid) {
+          socket.emit('sharedRideError', {
+            message: validation.message,
+            reason: validation.reason
+          })
+          return
+        }
+
+        // Check if ride is completed or cancelled
+        if (ride.status === 'completed' || ride.status === 'cancelled') {
+          socket.emit('sharedRideError', {
+            message: 'This ride has ended',
+            reason: 'RIDE_ENDED'
+          })
+          return
+        }
+
+        // Join shared ride room
+        socket.join(`shared_ride_${shareToken}`)
+        logger.info(`Socket ${socket.id} joined shared ride room: shared_ride_${shareToken.substring(0, 8)}...`)
+
+        // Send confirmation
+        socket.emit('sharedRideJoined', {
+          success: true,
+          rideId: ride._id.toString()
+        })
+      } catch (err) {
+        logger.error('joinSharedRide error:', err)
+        socket.emit('sharedRideError', {
+          message: 'Error joining shared ride',
+          error: err.message
+        })
+      }
+    })
+
+    socket.on('leaveSharedRide', async data => {
+      try {
+        const { shareToken } = data || {}
+        if (shareToken) {
+          socket.leave(`shared_ride_${shareToken}`)
+          logger.info(`Socket ${socket.id} left shared ride room: shared_ride_${shareToken.substring(0, 8)}...`)
+        }
+      } catch (err) {
+        logger.error('leaveSharedRide error:', err)
       }
     })
 
@@ -2239,6 +2440,22 @@ function initializeSocket (server) {
           logger.info(
             `Ride completion confirmation sent to driver - rideId: ${rideId}`
           )
+        }
+
+        // Expire share token and broadcast to shared ride room
+        if (completedRide.shareToken && completedRide.isShared) {
+          completedRide.isShared = false
+          completedRide.shareTokenExpiresAt = new Date()
+          await completedRide.save()
+          
+          await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
+            status: 'completed',
+            ride: {
+              _id: completedRide._id,
+              status: completedRide.status,
+              actualEndTime: completedRide.actualEndTime
+            }
+          })
         }
 
         // Create notifications

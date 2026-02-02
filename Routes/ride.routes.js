@@ -10,8 +10,12 @@ const {
   getRidesByDriverId,
   searchRide,
   calculateFare,
-  calculateAllFares
+  calculateAllFares,
+  generateShareLink,
+  getSharedRide,
+  revokeShareLink
 } = require('../Controllers/User/ride.controller');
+const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 
 const router = express.Router();
 
@@ -54,5 +58,15 @@ router.get('/driver/:driverId', getRidesByDriverId);
 // Search for nearby drivers for a user (your controller uses req.params.id and req.body.pickupLocation)
 // POST /rides/search/:id
 router.post('/search/:id', searchRide);
+
+// Ride sharing endpoints
+// POST /rides/:rideId/share - Generate share link (requires auth)
+router.post('/:rideId/share', generateShareLink);
+
+// GET /rides/shared/:shareToken - Get shared ride data (public, no auth)
+router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
+
+// DELETE /rides/:rideId/share - Revoke share link (requires auth)
+router.delete('/:rideId/share', revokeShareLink);
 
 module.exports = router;

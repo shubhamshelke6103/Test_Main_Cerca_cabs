@@ -229,6 +229,24 @@ const rideSchema = new mongoose.Schema({
         ref: 'Driver'
     }],
 
+    // Ride sharing fields
+    shareToken: {
+        type: String,
+        unique: true,
+        sparse: true,
+        index: true
+    },
+    shareTokenExpiresAt: {
+        type: Date
+    },
+    isShared: {
+        type: Boolean,
+        default: false
+    },
+    shareCreatedAt: {
+        type: Date
+    },
+
 }, {
     timestamps: true
 });
@@ -237,6 +255,7 @@ const rideSchema = new mongoose.Schema({
 rideSchema.index({ status: 1, createdAt: -1 });
 rideSchema.index({ pickupLocation: '2dsphere' });
 rideSchema.index({ dropoffLocation: '2dsphere' });
+rideSchema.index({ shareToken: 1 });
 
 // Keep updatedAt synced
 rideSchema.pre('save', function (next) {

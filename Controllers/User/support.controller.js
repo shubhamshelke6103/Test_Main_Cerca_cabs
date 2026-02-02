@@ -2,6 +2,7 @@ const SupportIssue = require('../../Models/support/supportIssue.model')
 const SupportMessage = require('../../Models/support/supportMessage.model')
 const SupportFeedback = require('../../Models/support/supportFeedback.model')
 const logger = require('../../utils/logger')
+const { getSocketIO } = require('../../utils/socket')
 
 exports.getUserIssues = async (req, res) => {
   try {
@@ -159,6 +160,47 @@ exports.submitFeedback = async (req, res) => {
     }
     issue.resolvedAt = new Date()
     await issue.save()
+
+    // Emit status changed event for real-time updates
+    try {
+      const io = getSocketIO()
+      io.to(`support_issue_${issueId}`).emit('support:status_changed', {
+        issueId,
+        status: issue.status,
+        userId: issue.userId.toString(),
+        adminId: issue.adminId?.toString()
+      })
+      io.to(`support_user_${issue.userId}`).emit('support:status_changed', {
+        issueId,
+        status: issue.status
+      })
+      if (issue.adminId) {
+        io.to(`admin_${issue.adminId}`).emit('support:status_changed', {
+          issueId,
+          status: issue.status
+        })
+      }
+      io.to('admin_support_online').emit('support:status_changed', {
+        issueId,
+        status: issue.status
+      })
+
+      // Emit stats update
+      const SupportIssueModel = require('../../Models/support/supportIssue.model')
+      const waitingCount = await SupportIssueModel.countDocuments({ status: 'WAITING_FOR_ADMIN' })
+      const activeCount = await SupportIssueModel.countDocuments({ status: 'CHAT_ACTIVE' })
+      const resolvedCount = await SupportIssueModel.countDocuments({ status: 'RESOLVED' })
+      io.to('admin_support_online').emit('support:stats_updated', {
+        stats: {
+          waiting: waitingCount,
+          active: activeCount,
+          resolved: resolvedCount
+        }
+      })
+    } catch (socketError) {
+      logger.error('Error emitting status_changed event:', socketError)
+      // Don't fail the request if socket emission fails
+    }
 
     logger.info(`Feedback submitted - issueId: ${issueId}, rating: ${rating}, resolved: ${resolved}`)
 

@@ -2,6 +2,7 @@ const Ride = require('../../Models/Driver/ride.model')
 const Settings = require('../../Models/Admin/settings.modal')
 const logger = require('../../utils/logger')
 const crypto = require('crypto')
+const jwt = require('jsonwebtoken')
 // const rideBookingQueue = require('../../src/queues/rideBooking.queue')
 const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
@@ -11,6 +12,8 @@ const {
   calculateHaversineDistance
 } = rideBookingFunctions
 const Driver = require('../../Models/Driver/driver.model')
+const { generateTokenForRide, validateShareToken } = require('../../utils/shareToken.service')
+const { sanitizeRideData } = require('../../middleware/shareToken.middleware')
 
 /**
  * @desc    Create a new ride
@@ -681,6 +684,246 @@ const calculateAllFares = async (req, res) => {
   }
 }
 
+/**
+ * Helper function to extract userId from JWT token
+ * @param {Object} req - Express request object
+ * @returns {string|null} User ID or null if not found
+ */
+function getUserIdFromToken(req) {
+  try {
+    const authHeader = req.headers.authorization || req.headers.Authorization || ''
+    if (!authHeader.startsWith('Bearer ')) {
+      return null
+    }
+    const token = authHeader.split(' ')[1]
+    const decoded = jwt.verify(token, "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%")
+    return decoded.id || decoded.userId || null
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * @desc    Generate share link for a ride
+ * @route   POST /rides/:rideId/share
+ */
+const generateShareLink = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const userId = getUserIdFromToken(req)
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      })
+    }
+
+    // Find the ride
+    const ride = await Ride.findById(rideId)
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      })
+    }
+
+    // Verify ride belongs to user
+    if (ride.rider.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to share this ride'
+      })
+    }
+
+    // Check if ride is active (can only share active rides)
+    const activeStatuses = ['requested', 'accepted', 'arrived', 'in_progress']
+    if (!activeStatuses.includes(ride.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Can only share active rides'
+      })
+    }
+
+    // Generate token if not exists or expired
+    let shareToken = ride.shareToken
+    let shareTokenExpiresAt = ride.shareTokenExpiresAt
+
+    if (!shareToken || (shareTokenExpiresAt && new Date() > new Date(shareTokenExpiresAt))) {
+      const tokenData = generateTokenForRide(ride)
+      shareToken = tokenData.token
+      shareTokenExpiresAt = tokenData.expiresAt
+
+      // Update ride with share token
+      ride.shareToken = shareToken
+      ride.shareTokenExpiresAt = shareTokenExpiresAt
+      ride.isShared = true
+      ride.shareCreatedAt = new Date()
+      await ride.save()
+    } else {
+      // Update isShared flag if token exists
+      if (!ride.isShared) {
+        ride.isShared = true
+        ride.shareCreatedAt = ride.shareCreatedAt || new Date()
+        await ride.save()
+      }
+    }
+
+    // Generate share URL
+    const baseUrl = process.env.SHARE_BASE_URL || process.env.FRONTEND_URL || 'https://cerca.app'
+    const shareUrl = `${baseUrl}/shared-ride?token=${shareToken}`
+
+    logger.info(`Share link generated for ride ${rideId} by user ${userId}`)
+
+    res.status(200).json({
+      success: true,
+      data: {
+        shareUrl,
+        shareToken,
+        expiresAt: shareTokenExpiresAt,
+        isShared: true
+      }
+    })
+  } catch (error) {
+    logger.error('Error generating share link:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error generating share link',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * @desc    Get shared ride data by token (public endpoint)
+ * @route   GET /rides/shared/:shareToken
+ */
+const getSharedRide = async (req, res) => {
+  try {
+    const { shareToken } = req.params
+
+    if (!shareToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Share token is required'
+      })
+    }
+
+    // Find ride by share token
+    const ride = await Ride.findOne({ shareToken })
+      .populate('driver', 'name rating vehicleInfo')
+      .populate('rider', 'fullName')
+
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found or link is invalid'
+      })
+    }
+
+    // Validate token
+    const validation = validateShareToken(shareToken, ride.shareTokenExpiresAt)
+    if (!validation.isValid) {
+      // If expired, update ride status
+      if (validation.reason === 'EXPIRED') {
+        ride.isShared = false
+        await ride.save()
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+        reason: validation.reason
+      })
+    }
+
+    // Check if ride is completed or cancelled (expire share)
+    if (ride.status === 'completed' || ride.status === 'cancelled') {
+      ride.isShared = false
+      ride.shareTokenExpiresAt = new Date()
+      await ride.save()
+
+      return res.status(400).json({
+        success: false,
+        message: 'This ride has ended',
+        reason: 'RIDE_ENDED'
+      })
+    }
+
+    // Sanitize ride data (remove sensitive information)
+    const sanitizedRide = sanitizeRideData(ride)
+
+    logger.info(`Shared ride accessed: ${ride._id} with token ${shareToken.substring(0, 8)}...`)
+
+    res.status(200).json({
+      success: true,
+      data: sanitizedRide
+    })
+  } catch (error) {
+    logger.error('Error fetching shared ride:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching shared ride',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * @desc    Revoke share link for a ride
+ * @route   DELETE /rides/:rideId/share
+ */
+const revokeShareLink = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const userId = getUserIdFromToken(req)
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      })
+    }
+
+    // Find the ride
+    const ride = await Ride.findById(rideId)
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      })
+    }
+
+    // Verify ride belongs to user
+    if (ride.rider.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to revoke this share link'
+      })
+    }
+
+    // Revoke share
+    ride.shareToken = null
+    ride.shareTokenExpiresAt = null
+    ride.isShared = false
+    await ride.save()
+
+    logger.info(`Share link revoked for ride ${rideId} by user ${userId}`)
+
+    res.status(200).json({
+      success: true,
+      message: 'Share link revoked successfully'
+    })
+  } catch (error) {
+    logger.error('Error revoking share link:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error revoking share link',
+      error: error.message
+    })
+  }
+}
+
 module.exports = {
   createRide,
   getAllRides,
@@ -691,5 +934,8 @@ module.exports = {
   getRidesByDriverId,
   searchRide,
   calculateFare,
-  calculateAllFares
+  calculateAllFares,
+  generateShareLink,
+  getSharedRide,
+  revokeShareLink
 }
