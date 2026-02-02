@@ -230,7 +230,10 @@
 
         // Add driver marker if location available
         if (rideData.driver && rideData.driver.location) {
+            console.log('📍 Initial driver location found:', rideData.driver.location);
             updateDriverLocation(rideData.driver.location);
+        } else {
+            console.log('⚠️ No initial driver location available');
         }
     }
 
@@ -277,29 +280,56 @@
             });
 
             socket.on('connect', () => {
-                console.log('Socket connected');
+                console.log('✅ Socket connected, joining shared ride room with token:', shareToken.substring(0, 8) + '...');
                 socket.emit('joinSharedRide', { shareToken: shareToken });
             });
 
             socket.on('sharedRideJoined', (data) => {
-                console.log('Joined shared ride room:', data);
+                console.log('✅ Joined shared ride room:', data);
             });
 
             socket.on('sharedRideError', (data) => {
-                console.error('Shared ride error:', data);
+                console.error('❌ Shared ride error:', data);
+                showError(data.message || 'Error connecting to ride updates', false);
             });
 
-            // Listen for location updates
-            socket.on('rideLocationUpdate', (data) => {
-                console.log('Location update received:', data);
-                if (data.driverLocation) {
+            // Listen for location updates (correct event name for shared rides)
+            socket.on('sharedRideLocationUpdate', (data) => {
+                console.log('📍 Location update received:', data);
+                if (data.location && data.location.coordinates) {
+                    updateDriverLocation(data.location);
+                } else if (data.driverLocation) {
+                    // Fallback for different data structure
                     updateDriverLocation(data.driverLocation);
                 }
             });
 
-            // Listen for status updates
+            // Listen for status updates (correct event name for shared rides)
+            socket.on('sharedRideStatusUpdate', (data) => {
+                console.log('🔄 Status update received:', data);
+                if (data.status) {
+                    rideData.status = data.status;
+                    updateStatus(data.status);
+                }
+                // Update other ride data if provided
+                if (data.ride) {
+                    Object.assign(rideData, data.ride);
+                    displayRideData();
+                }
+            });
+
+            // Also listen for regular ride events (in case they're broadcasted)
+            socket.on('rideLocationUpdate', (data) => {
+                console.log('📍 Regular location update received:', data);
+                if (data.location && data.location.coordinates) {
+                    updateDriverLocation(data.location);
+                } else if (data.driverLocation) {
+                    updateDriverLocation(data.driverLocation);
+                }
+            });
+
             socket.on('rideStatusUpdate', (data) => {
-                console.log('Status update received:', data);
+                console.log('🔄 Regular status update received:', data);
                 if (data.status) {
                     rideData.status = data.status;
                     updateStatus(data.status);
@@ -307,13 +337,13 @@
             });
 
             socket.on('rideCompleted', (data) => {
-                console.log('Ride completed:', data);
+                console.log('✅ Ride completed:', data);
                 updateStatus('completed');
                 showError('This ride has ended', false);
             });
 
             socket.on('rideCancelled', (data) => {
-                console.log('Ride cancelled:', data);
+                console.log('❌ Ride cancelled:', data);
                 updateStatus('cancelled');
                 showError('This ride has been cancelled', false);
             });

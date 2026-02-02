@@ -865,7 +865,7 @@ const getSharedRide = async (req, res) => {
 
     // Find ride by share token
     const ride = await Ride.findOne({ shareToken })
-      .populate('driver', 'name rating vehicleInfo')
+      .populate('driver', 'name rating vehicleInfo location')
       .populate('rider', 'fullName')
 
     if (!ride) {

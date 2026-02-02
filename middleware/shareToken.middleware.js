@@ -124,6 +124,7 @@ function sanitizeRideData(ride) {
     driver: ride.driver ? {
       name: ride.driver.name,
       rating: ride.driver.rating,
+      location: ride.driver.location || null, // Include driver location for tracking
       vehicleInfo: ride.driver.vehicleInfo ? {
         make: ride.driver.vehicleInfo.make,
         model: ride.driver.vehicleInfo.model,
