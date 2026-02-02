@@ -155,6 +155,83 @@ const deleteUser = async (req, res) => {
 };
 
 /**
+ * @desc    Validate JWT token
+ * @route   GET /users/validate-token
+ */
+const validateToken = async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization || req.headers.Authorization || '';
+        
+        if (!authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                success: false,
+                valid: false,
+                message: 'No token provided'
+            });
+        }
+
+        const token = authHeader.split(' ')[1];
+        
+        try {
+            const decoded = jwt.verify(
+                token,
+                "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%"
+            );
+            
+            const userId = decoded.id || decoded.userId;
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    valid: false,
+                    message: 'Invalid token format'
+                });
+            }
+
+            // Optionally verify user still exists
+            const user = await User.findById(userId);
+            if (!user) {
+                return res.status(401).json({
+                    success: false,
+                    valid: false,
+                    message: 'User not found'
+                });
+            }
+
+            // Check if user is blocked
+            if (user.isActive === false) {
+                return res.status(403).json({
+                    success: false,
+                    valid: false,
+                    message: 'User account is blocked'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                valid: true,
+                message: 'Token is valid',
+                userId: user._id
+            });
+        } catch (jwtError) {
+            logger.warn('Token validation failed:', jwtError.message);
+            return res.status(401).json({
+                success: false,
+                valid: false,
+                message: 'Invalid or expired token'
+            });
+        }
+    } catch (error) {
+        logger.error('Error validating token:', error);
+        res.status(500).json({
+            success: false,
+            valid: false,
+            message: 'Error validating token',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Get user by email
  * @route   GET /users/email/:email
  */
@@ -328,4 +405,5 @@ module.exports = {
   loginUserByMobile,
   getUserWallet,
   updateUserWallet,
+  validateToken,
 };
