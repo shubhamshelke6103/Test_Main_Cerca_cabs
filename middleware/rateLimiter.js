@@ -12,7 +12,7 @@ class RedisStore {
     this.windowSeconds = Math.ceil(windowMs / 1000)
   }
 
-  async increment(key, cb) {
+  async increment(key) {
     const redisKey = `${this.prefix}${key}`
     try {
       const count = await this.client.incr(redisKey)
@@ -21,9 +21,17 @@ class RedisStore {
         await this.client.expire(redisKey, this.windowSeconds)
       }
       const ttl = await this.client.ttl(redisKey)
-      cb(null, { totalHits: count, resetTime: new Date(Date.now() + ttl * 1000) })
+      return {
+        totalHits: count,
+        resetTime: new Date(Date.now() + ttl * 1000)
+      }
     } catch (err) {
-      cb(err)
+      // Return default values on error
+      logger.error('Redis store increment error:', err)
+      return {
+        totalHits: 1,
+        resetTime: new Date(Date.now() + this.windowMs)
+      }
     }
   }
 
