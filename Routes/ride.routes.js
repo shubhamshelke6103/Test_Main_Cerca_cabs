@@ -13,7 +13,8 @@ const {
   calculateAllFares,
   generateShareLink,
   getSharedRide,
-  revokeShareLink
+  revokeShareLink,
+  serveSharedRidePage
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 
@@ -36,6 +37,9 @@ router.post('/calculate-all-fares', calculateAllFares);
 router.get('/', getAllRides);
 
 // Ride sharing endpoints - MUST come before /:id routes to avoid route conflicts
+// GET /shared-ride/:shareToken - Serve HTML page for shared ride tracking (public, no auth)
+router.get('/shared-ride/:shareToken', sharedRideRateLimiter, serveSharedRidePage);
+
 // GET /rides/shared/:shareToken - Get shared ride data (public, no auth)
 router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
 

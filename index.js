@@ -117,6 +117,8 @@ app.use('/api/offers', require('./Routes/User/offer.routes'))
 app.use('/api/rides', require('./Routes/ride.routes'))
 // Mount ride routes at /rides as well for backward compatibility with frontend
 app.use('/rides', require('./Routes/ride.routes'))
+// Mount shared ride page route at root level for easy access
+app.use('/', require('./Routes/ride.routes'))
 
 /* =======================
    HEALTH & UPLOAD

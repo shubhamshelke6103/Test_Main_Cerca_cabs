@@ -3,6 +3,8 @@ const Settings = require('../../Models/Admin/settings.modal')
 const logger = require('../../utils/logger')
 const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
+const path = require('path')
+const fs = require('fs')
 // const rideBookingQueue = require('../../src/queues/rideBooking.queue')
 const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
@@ -781,8 +783,41 @@ const generateShareLink = async (req, res) => {
     }
 
     // Generate share URL
-    const baseUrl = process.env.SHARE_BASE_URL || process.env.FRONTEND_URL || 'https://cerca.app'
-    const shareUrl = `${baseUrl}/shared-ride?token=${shareToken}`
+    // Priority: SHARE_BASE_URL env var > FRONTEND_URL env var > derive from API domain > default fallback
+    let baseUrl = process.env.SHARE_BASE_URL || process.env.FRONTEND_URL
+    
+    // If no env var set, try to derive from API domain
+    // If API is api.myserverdevops.com, frontend is likely myserverdevops.com
+    if (!baseUrl) {
+      const apiUrl = process.env.API_URL || 'https://api.myserverdevops.com'
+      try {
+        const apiUrlObj = new URL(apiUrl)
+        // Convert api.myserverdevops.com -> myserverdevops.com
+        // Or api.cerca.app -> cerca.app
+        const hostname = apiUrlObj.hostname
+        if (hostname.startsWith('api.')) {
+          baseUrl = `${apiUrlObj.protocol}//${hostname.substring(4)}` // Remove 'api.' prefix
+        } else if (hostname.includes('api-')) {
+          // Handle api-subdomain patterns
+          baseUrl = `${apiUrlObj.protocol}//${hostname.replace('api-', '')}`
+        } else {
+          // If API is at root, try common frontend subdomains
+          baseUrl = `${apiUrlObj.protocol}//app.${hostname}`
+        }
+      } catch (e) {
+        logger.warn('Could not parse API URL for share link generation:', e)
+      }
+    }
+    
+    // Use API domain for share links (since HTML page is served by Express backend)
+    // The share link should point to the backend server where the HTML page is hosted
+    const apiUrl = process.env.API_URL || req.protocol + '://' + req.get('host') || 'https://api.myserverdevops.com'
+    
+    // Generate share URL pointing to Express HTML page
+    // Format: https://api.myserverdevops.com/shared-ride/{token}
+    const shareUrl = `${apiUrl}/shared-ride/${shareToken}`
+    
+    logger.info(`Share URL generated: ${shareUrl} (API URL: ${apiUrl})`)
 
     logger.info(`Share link generated for ride ${rideId} by user ${userId}`)
 
@@ -881,6 +916,69 @@ const getSharedRide = async (req, res) => {
 }
 
 /**
+ * @desc    Serve shared ride HTML page
+ * @route   GET /shared-ride/:shareToken
+ */
+const serveSharedRidePage = async (req, res) => {
+  try {
+    const { shareToken } = req.params
+
+    if (!shareToken) {
+      return res.status(400).send('Invalid share link. No token provided.')
+    }
+
+    // Validate token by checking if ride exists
+    const ride = await Ride.findOne({ shareToken })
+      .populate('driver', 'name rating vehicleInfo')
+      .populate('rider', 'fullName')
+
+    if (!ride) {
+      return res.status(404).send('Ride not found or link is invalid')
+    }
+
+    // Validate token expiration
+    const validation = validateShareToken(shareToken, ride.shareTokenExpiresAt)
+    if (!validation.isValid) {
+      if (validation.reason === 'EXPIRED') {
+        ride.isShared = false
+        await ride.save()
+      }
+      return res.status(400).send(`Share link ${validation.reason === 'EXPIRED' ? 'has expired' : 'is invalid'}`)
+    }
+
+    // Check if ride is completed or cancelled
+    if (ride.status === 'completed' || ride.status === 'cancelled') {
+      ride.isShared = false
+      ride.shareTokenExpiresAt = new Date()
+      await ride.save()
+      return res.status(400).send('This ride has ended')
+    }
+
+    // Read and serve HTML file
+    // Path from Controllers/User/ride.controller.js to public/views/shared-ride.html
+    const htmlPath = path.join(__dirname, '../../public/views/shared-ride.html')
+    
+    try {
+      if (!fs.existsSync(htmlPath)) {
+        logger.error(`HTML file not found at: ${htmlPath}`)
+        return res.status(500).send('Page not found')
+      }
+      
+      const htmlContent = fs.readFileSync(htmlPath, 'utf8')
+      res.setHeader('Content-Type', 'text/html')
+      res.status(200).send(htmlContent)
+    } catch (fileError) {
+      logger.error('Error reading HTML file:', fileError)
+      logger.error('Attempted path:', htmlPath)
+      res.status(500).send('Error loading page')
+    }
+  } catch (error) {
+    logger.error('Error serving shared ride page:', error)
+    res.status(500).send('Error loading page')
+  }
+}
+
+/**
  * @desc    Revoke share link for a ride
  * @route   DELETE /rides/:rideId/share
  */
@@ -948,5 +1046,6 @@ module.exports = {
   calculateAllFares,
   generateShareLink,
   getSharedRide,
-  revokeShareLink
+  revokeShareLink,
+  serveSharedRidePage
 }

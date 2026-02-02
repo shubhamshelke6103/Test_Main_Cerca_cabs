@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Ride - Cerca</title>
+    <link rel="stylesheet" href="/css/shared-ride.css">
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDQq0QpnwQKzDR99ObP1frWj_uRTQ54pbo&libraries=places,geometry"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <h1>Cerca</h1>
+            </div>
+            <div class="status-badge" id="statusBadge">
+                <span id="statusText">Loading...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Loading State -->
+    <div id="loadingContainer" class="loading-container">
+        <div class="spinner"></div>
+        <p>Loading ride information...</p>
+    </div>
+
+    <!-- Error State -->
+    <div id="errorContainer" class="error-container" style="display: none;">
+        <div class="error-icon">⚠️</div>
+        <h2>Unable to Load Ride</h2>
+        <p id="errorMessage"></p>
+        <button id="retryButton" class="btn btn-primary" style="display: none;">Retry</button>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="main-content" style="display: none;">
+        <!-- Map Container -->
+        <div id="mapContainer" class="map-container"></div>
+
+        <!-- Ride Info Cards -->
+        <div class="cards-container">
+            <!-- Status Card -->
+            <div class="card status-card">
+                <div class="card-header">
+                    <h3>Ride Status</h3>
+                </div>
+                <div class="card-body">
+                    <div class="status-info">
+                        <span class="status-icon" id="statusIcon">📍</span>
+                        <div>
+                            <p class="status-label" id="statusLabel">Status</p>
+                            <p class="status-value" id="statusValue">-</p>
+                        </div>
+                    </div>
+                    <div class="eta-info" id="etaInfo" style="display: none;">
+                        <span class="eta-label">Estimated Arrival</span>
+                        <span class="eta-value" id="etaValue">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Driver Card -->
+            <div class="card driver-card" id="driverCard" style="display: none;">
+                <div class="card-header">
+                    <h3>Driver Information</h3>
+                </div>
+                <div class="card-body">
+                    <div class="driver-info">
+                        <div class="driver-avatar">
+                            <div class="avatar-placeholder" id="driverInitials">D</div>
+                        </div>
+                        <div class="driver-details">
+                            <h4 id="driverName">-</h4>
+                            <div class="driver-rating">
+                                <span class="star">⭐</span>
+                                <span id="driverRating">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="vehicle-info" id="vehicleInfo" style="display: none;">
+                        <div class="vehicle-detail">
+                            <span class="vehicle-label">Vehicle</span>
+                            <span class="vehicle-value" id="vehicleDetails">-</span>
+                        </div>
+                        <div class="vehicle-detail">
+                            <span class="vehicle-label">License Plate</span>
+                            <span class="vehicle-value" id="licensePlate">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Route Card -->
+            <div class="card route-card">
+                <div class="card-header">
+                    <h3>Route</h3>
+                </div>
+                <div class="card-body">
+                    <div class="route-item">
+                        <div class="route-icon pickup-icon">📍</div>
+                        <div class="route-details">
+                            <p class="route-label">Pickup</p>
+                            <p class="route-address" id="pickupAddress">-</p>
+                        </div>
+                    </div>
+                    <div class="route-item">
+                        <div class="route-icon dropoff-icon">🎯</div>
+                        <div class="route-details">
+                            <p class="route-label">Destination</p>
+                            <p class="route-address" id="dropoffAddress">-</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ride Details Card -->
+            <div class="card details-card">
+                <div class="card-header">
+                    <h3>Ride Details</h3>
+                </div>
+                <div class="card-body">
+                    <div class="detail-item">
+                        <span class="detail-label">Distance</span>
+                        <span class="detail-value" id="distance">-</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Estimated Fare</span>
+                        <span class="detail-value" id="fare">-</span>
+                    </div>
+                    <div class="detail-item" id="durationItem" style="display: none;">
+                        <span class="detail-label">Estimated Duration</span>
+                        <span class="detail-value" id="duration">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/shared-ride.js"></script>
+</body>
+</html>
+
