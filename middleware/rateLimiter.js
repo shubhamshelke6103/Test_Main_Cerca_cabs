@@ -210,6 +210,8 @@ module.exports = {
   apiLimiter: ensureMiddleware(apiLimiter, 'apiLimiter'),
   authLimiter: ensureMiddleware(authLimiter, 'authLimiter'),
   readLimiter: ensureMiddleware(readLimiter, 'readLimiter'),
-  uploadLimiter: ensureMiddleware(uploadLimiter, 'uploadLimiter')
+  uploadLimiter: ensureMiddleware(uploadLimiter, 'uploadLimiter'),
+  createRateLimiter,
+  createRedisStore
 }
 

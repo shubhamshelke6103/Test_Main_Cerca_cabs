@@ -1,7 +1,10 @@
 const { validateShareToken } = require('../utils/shareToken.service')
 const Ride = require('../Models/Driver/ride.model')
 const logger = require('../utils/logger')
-const { createRateLimiter } = require('./rateLimiter')
+const { createRateLimiter, createRedisStore } = require('./rateLimiter')
+
+// Create Redis store for shared ride rate limiter
+const sharedRideStore = createRedisStore('rl:sharedRide:', 60 * 1000) // 1 minute window
 
 // Rate limiter for public shared ride endpoint
 // 10 requests per minute per IP
@@ -11,9 +14,19 @@ const sharedRideRateLimiter = createRateLimiter(
     max: 10, // 10 requests per minute
     message: 'Too many requests. Please try again later.',
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip, // Use IP address for rate limiting
+    handler: (req, res) => {
+      logger.warn(`Rate limit exceeded for shared ride access from IP: ${req.ip}`)
+      res.status(429).json({
+        success: false,
+        message: 'Too many requests. Please try again later.',
+        retryAfter: req.rateLimit?.resetTime ? Math.ceil(req.rateLimit.resetTime / 1000) : 60
+      })
+    }
   },
-  'shared_ride:'
+  sharedRideStore,
+  'sharedRideRateLimiter'
 )
 
 /**
