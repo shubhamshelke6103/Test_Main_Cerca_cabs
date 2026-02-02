@@ -261,7 +261,23 @@ function initializeSocket (server) {
       )
       try {
         const { issueId, message } = data || {}
-        if (!issueId || !message) return
+        if (!issueId || !message) {
+          socket.emit('support:error', { message: 'Issue ID and message are required' })
+          return
+        }
+
+        // Validate message length (max 1000 chars as per model)
+        if (message.length > 1000) {
+          socket.emit('support:error', { message: 'Message too long. Maximum 1000 characters allowed.' })
+          return
+        }
+
+        // Trim and validate non-empty message
+        const trimmedMessage = message.trim()
+        if (!trimmedMessage) {
+          socket.emit('support:error', { message: 'Message cannot be empty' })
+          return
+        }
 
         const issue = await SupportIssue.findById(issueId)
         if (!issue) return
@@ -305,12 +321,12 @@ function initializeSocket (server) {
           issueId,
           senderType,
           senderId,
-          message
+          message: trimmedMessage
         })
 
         io.to(`support_issue_${issueId}`).emit('support:message', {
           senderType,
-          message,
+          message: trimmedMessage,
           createdAt: new Date()
         })
         logger.info(

@@ -90,6 +90,7 @@ const upload = multer({
 app.use('/users', require('./Routes/User/user.routes'))
 app.use('/users', require('./Routes/User/wallet.routes'))
 app.use('/users', require('./Routes/User/referral.routes'))
+app.use('/users', require('./Routes/User/support.routes'))
 
 app.use('/drivers', require('./Routes/Driver/driver.routes'))
 app.use('/drivers', require('./Routes/Driver/earnings.routes'))
@@ -103,6 +104,7 @@ app.use('/admin', require('./Routes/Admin/users.routes'))
 app.use('/admin', require('./Routes/Admin/drivers.routes'))
 app.use('/admin', require('./Routes/Admin/rides.routes'))
 app.use('/admin', require('./Routes/Admin/payments.routes'))
+app.use('/admin', require('./Routes/Admin/support.routes'))
 
 app.use('/settings', require('./Routes/admin.routes'))
 app.use('/coupons', require('./Routes/coupon.routes'))
