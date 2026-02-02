@@ -264,11 +264,11 @@ function initializeSocket (server) {
 
         // Emit stats update
         const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
-        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        const statsActiveCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
         io.to('admin_support_online').emit('support:stats_updated', {
           stats: {
             waiting: waitingCount,
-            active: activeCount
+            active: statsActiveCount
           }
         })
 
