@@ -417,6 +417,37 @@ function initializeSocket (server) {
         logger.info(
           `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}, messageId=${savedMessage._id}`
         )
+
+        // Calculate and emit unread count for the recipient
+        // Count messages sent by the sender (the recipient now has one more unread message)
+        // For simplicity, count all messages sent by the sender in the last 24 hours
+        const unreadCount = await SupportMessage.countDocuments({
+          issueId,
+          senderType: senderType, // Messages sent by the sender
+          createdAt: { $gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+        })
+
+        // Emit unread count to the recipient
+        if (senderType === 'ADMIN') {
+          // Admin sent message, notify user
+          io.to(`support_user_${issue.userId}`).emit('support:unread_count', {
+            issueId,
+            unreadCount: unreadCount
+          })
+        } else {
+          // User sent message, notify admin (if assigned)
+          if (issue.adminId) {
+            io.to(`admin_${issue.adminId}`).emit('support:unread_count', {
+              issueId,
+              unreadCount: unreadCount
+            })
+          }
+          // Also notify all admins in support room
+          io.to('admin_support_online').emit('support:unread_count', {
+            issueId,
+            unreadCount: unreadCount
+          })
+        }
       } catch (err) {
         logger.error('support:message error:', err)
       }
