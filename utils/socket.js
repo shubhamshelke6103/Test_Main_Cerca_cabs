@@ -107,17 +107,19 @@ function initializeSocket (server) {
     // ============================
     socket.on('support:request', async data => {
       logger.info(
-    `🙋 [SUPPORT REQUEST RECEIVED] socketId=${socket.id}, payload=${JSON.stringify(data)}`
-  )
+        `🙋 [SUPPORT REQUEST RECEIVED] socketId=${
+          socket.id
+        }, payload=${JSON.stringify(data)}`
+      )
       try {
         const { userId, issueType } = data || {}
         if (!userId) return
 
         // 🔐 SAVE USER ID ON SOCKET (ADD THIS)
         socket.data.userId = userId
-         logger.info(
-      `🔐 [SUPPORT USER ATTACHED] userId=${userId}, socketId=${socket.id}`
-    )
+        logger.info(
+          `🔐 [SUPPORT USER ATTACHED] userId=${userId}, socketId=${socket.id}`
+        )
 
         // 🔒 DUPLICATE ISSUE CHECK
         const existingIssue = await SupportIssue.findOne({
@@ -134,8 +136,8 @@ function initializeSocket (server) {
 
         if (existingIssue) {
           logger.warn(
-        `⚠️ [DUPLICATE SUPPORT REQUEST] userId=${userId}, issueId=${existingIssue._id}`
-      )
+            `⚠️ [DUPLICATE SUPPORT REQUEST] userId=${userId}, issueId=${existingIssue._id}`
+          )
           socket.emit('support:already_active', {
             issueId: existingIssue._id,
             status: existingIssue.status,
@@ -153,11 +155,11 @@ function initializeSocket (server) {
         // Join personal support room
         socket.join(`support_user_${userId}`)
 
-         logger.info(
-      `📢 [SUPPORT ISSUE CREATED] issueId=${issue._id}, userId=${userId}, issueType=${issueType}`
-    )
+        logger.info(
+          `📢 [SUPPORT ISSUE CREATED] issueId=${issue._id}, userId=${userId}, issueType=${issueType}`
+        )
 
-    logger.info(`📣 [NOTIFYING ADMINS] room=admin_support_online`)
+        logger.info(`📣 [NOTIFYING ADMINS] room=admin_support_online`)
 
         // Notify admins
         io.to('admin_support_online').emit('support:new_issue', {
@@ -181,8 +183,10 @@ function initializeSocket (server) {
     // ============================
     socket.on('support:accept', async data => {
       logger.info(
-    `🟩 [SUPPORT ACCEPT REQUEST] adminId=${socket.data.adminId}, payload=${JSON.stringify(data)}`
-  )
+        `🟩 [SUPPORT ACCEPT REQUEST] adminId=${
+          socket.data.adminId
+        }, payload=${JSON.stringify(data)}`
+      )
       try {
         const { issueId } = data || {}
         const adminId = socket.data.adminId
@@ -224,14 +228,14 @@ function initializeSocket (server) {
         // Admin joins issue room
         socket.join(room)
         logger.info(
-      `🏠 [ADMIN JOINED ISSUE ROOM] adminId=${adminId}, room=${room}`
-    )
+          `🏠 [ADMIN JOINED ISSUE ROOM] adminId=${adminId}, room=${room}`
+        )
 
         // Force user to join issue room (multi-server safe)
         io.in(`support_user_${issue.userId}`).socketsJoin(room)
         logger.info(
-      `🏠 [USER FORCED INTO ISSUE ROOM] userId=${issue.userId}, room=${room}`
-    )
+          `🏠 [USER FORCED INTO ISSUE ROOM] userId=${issue.userId}, room=${room}`
+        )
 
         // Notify user
         io.to(`support_user_${issue.userId}`).emit('support:connected', {
@@ -239,8 +243,8 @@ function initializeSocket (server) {
           message: 'You are now connected with support'
         })
         logger.info(
-      `🔗 [SUPPORT CHAT ACTIVE] issueId=${issueId}, adminId=${adminId}, userId=${issue.userId}`
-    )
+          `🔗 [SUPPORT CHAT ACTIVE] issueId=${issueId}, adminId=${adminId}, userId=${issue.userId}`
+        )
       } catch (err) {
         logger.error('support:accept error:', err)
       }
@@ -251,8 +255,10 @@ function initializeSocket (server) {
     // ============================
     socket.on('support:message', async data => {
       logger.info(
-    `💬 [SUPPORT MESSAGE RECEIVED] socketId=${socket.id}, payload=${JSON.stringify(data)}`
-  )
+        `💬 [SUPPORT MESSAGE RECEIVED] socketId=${
+          socket.id
+        }, payload=${JSON.stringify(data)}`
+      )
       try {
         const { issueId, message } = data || {}
         if (!issueId || !message) return
@@ -291,9 +297,9 @@ function initializeSocket (server) {
         // ============================
         const senderType = socket.data.adminId ? 'ADMIN' : 'USER'
         const senderId = socket.data.adminId || socket.data.userId
-         logger.info(
-      `✉️ [SUPPORT MESSAGE AUTHORIZED] issueId=${issueId}, senderType=${senderType}, senderId=${senderId}`
-    )
+        logger.info(
+          `✉️ [SUPPORT MESSAGE AUTHORIZED] issueId=${issueId}, senderType=${senderType}, senderId=${senderId}`
+        )
 
         await SupportMessage.create({
           issueId,
@@ -308,9 +314,8 @@ function initializeSocket (server) {
           createdAt: new Date()
         })
         logger.info(
-      `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}`
-    )
-
+          `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}`
+        )
       } catch (err) {
         logger.error('support:message error:', err)
       }
@@ -320,32 +325,51 @@ function initializeSocket (server) {
     // SUPPORT CHAT: END
     // ============================
     socket.on('support:end', async data => {
-      logger.info(
-  `🔚 [SUPPORT CHAT END] issueId=${issueId}, adminId=${issue.adminId}`
-)
-
       try {
+        // ✅ FIRST: extract issueId
         const { issueId } = data || {}
-        if (!issueId) return
 
+        if (!issueId) {
+          logger.warn('❌ [SUPPORT CHAT END] issueId missing in payload')
+          return
+        }
+
+        // ✅ THEN: fetch issue
         const issue = await SupportIssue.findById(issueId)
-        if (!issue) return
+        if (!issue) {
+          logger.warn(
+            `❌ [SUPPORT CHAT END] issue not found - issueId=${issueId}`
+          )
+          return
+        }
 
+        // ✅ NOW logging is safe
+        logger.info(
+          `🔚 [SUPPORT CHAT END] issueId=${issueId}, adminId=${issue.adminId}`
+        )
+
+        // Update issue status
         issue.status = 'FEEDBACK_PENDING'
         await issue.save()
 
-        // 🔥 DECREMENT ADMIN LOAD COUNTER (ADD HERE)
+        // 🔥 Decrement admin load counter
         if (issue.adminId) {
           await redis.decr(`admin:${issue.adminId}:support_count`)
         }
 
+        // Save system message
         await SupportMessage.create({
           issueId,
           senderType: 'SYSTEM',
           message: 'Hope your issue is resolved.'
         })
 
-        io.to(`support_issue_${issueId}`).emit('support:ended')
+        // Notify both sides
+        io.to(`support_issue_${issueId}`).emit('support:ended', {
+          issueId
+        })
+
+        logger.info(`✅ [SUPPORT CHAT CLOSED SUCCESSFULLY] issueId=${issueId}`)
       } catch (err) {
         logger.error('support:end error:', err)
       }
