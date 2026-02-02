@@ -35,17 +35,15 @@ router.post('/calculate-all-fares', calculateAllFares);
 // GET /rides
 router.get('/', getAllRides);
 
-// Get a single ride by ID
-// GET /rides/:id
-router.get('/:id', getRideById);
+// Ride sharing endpoints - MUST come before /:id routes to avoid route conflicts
+// GET /rides/shared/:shareToken - Get shared ride data (public, no auth)
+router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
 
-// Update a ride by ID
-// PUT /rides/:id
-router.put('/:id', updateRide);
+// POST /rides/:rideId/share - Generate share link (requires auth)
+router.post('/:rideId/share', generateShareLink);
 
-// Delete a ride by ID
-// DELETE /rides/:id
-router.delete('/:id', deleteRide);
+// DELETE /rides/:rideId/share - Revoke share link (requires auth)
+router.delete('/:rideId/share', revokeShareLink);
 
 // Get rides for a specific user
 // GET /rides/user/:userId
@@ -59,14 +57,16 @@ router.get('/driver/:driverId', getRidesByDriverId);
 // POST /rides/search/:id
 router.post('/search/:id', searchRide);
 
-// Ride sharing endpoints
-// POST /rides/:rideId/share - Generate share link (requires auth)
-router.post('/:rideId/share', generateShareLink);
+// Get a single ride by ID - MUST come after all specific routes
+// GET /rides/:id
+router.get('/:id', getRideById);
 
-// GET /rides/shared/:shareToken - Get shared ride data (public, no auth)
-router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
+// Update a ride by ID
+// PUT /rides/:id
+router.put('/:id', updateRide);
 
-// DELETE /rides/:rideId/share - Revoke share link (requires auth)
-router.delete('/:rideId/share', revokeShareLink);
+// Delete a ride by ID
+// DELETE /rides/:id
+router.delete('/:id', deleteRide);
 
 module.exports = router;

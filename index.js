@@ -114,7 +114,7 @@ app.use('/emergencies', require('./Routes/User/emergency.routes'))
 app.use('/api/v1/payment', require('./Routes/payment.route'))
 app.use('/api/google-maps', require('./Routes/googleMaps.routes'))
 app.use('/api/offers', require('./Routes/User/offer.routes'))
-app.use('/rides', require('./Routes/ride.routes'))
+app.use('/api/rides', require('./Routes/ride.routes'))
 
 /* =======================
    HEALTH & UPLOAD

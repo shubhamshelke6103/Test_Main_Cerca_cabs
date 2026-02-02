@@ -709,10 +709,21 @@ function getUserIdFromToken(req) {
  */
 const generateShareLink = async (req, res) => {
   try {
+    logger.info(`[generateShareLink] Request received: ${req.method} ${req.path}`)
+    logger.info(`[generateShareLink] Params:`, req.params)
+    logger.info(`[generateShareLink] Headers:`, {
+      authorization: req.headers.authorization ? 'Bearer ***' : 'missing',
+      'content-type': req.headers['content-type']
+    })
+
     const { rideId } = req.params
+    logger.info(`[generateShareLink] Ride ID: ${rideId}`)
+
     const userId = getUserIdFromToken(req)
+    logger.info(`[generateShareLink] User ID extracted: ${userId || 'null'}`)
 
     if (!userId) {
+      logger.warn(`[generateShareLink] Authentication failed - no user ID`)
       return res.status(401).json({
         success: false,
         message: 'Authentication required'
