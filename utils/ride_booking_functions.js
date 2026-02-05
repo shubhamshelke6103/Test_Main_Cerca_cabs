@@ -771,10 +771,20 @@ const createRide = async rideData => {
     }
 
     // Generate share token for OTHER rides
+    logger.info(
+      `🔍 [ShareToken Check] rideData.rideFor = '${rideData.rideFor}' (type: ${typeof rideData.rideFor}), checking if === 'OTHER'`
+    )
     if (rideData.rideFor === 'OTHER') {
       const crypto = require('crypto')
       const shareToken = crypto.randomBytes(8).toString('hex')
       rideDoc.shareToken = shareToken
+      logger.info(
+        `✅ [ShareToken Generated] rideFor='OTHER' detected, shareToken: ${shareToken}`
+      )
+    } else {
+      logger.info(
+        `⏭️ [ShareToken Skipped] rideFor is '${rideData.rideFor}', not 'OTHER', skipping shareToken generation`
+      )
     }
 
     // Single insert; returns the created document including generated OTPs

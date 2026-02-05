@@ -1130,8 +1130,12 @@ function initializeSocket (server) {
           }, service: ${data?.service}`
         )
 
-        //// ⭐ NEW CODE — rideFor default
-        data.rideFor = data.rideFor || 'SELF'
+        //// ⭐ NEW CODE — rideFor default and normalization
+        data.rideFor = (data.rideFor || 'SELF').toUpperCase()
+
+        logger.info(
+          `📋 Ride booking - rideFor: ${data.rideFor}, passenger: ${data.passenger?.name || 'none'}`
+        )
 
         //// ⭐ NEW CODE — passenger validation
         if (data.rideFor === 'OTHER') {
