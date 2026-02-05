@@ -1,121 +1,154 @@
-const mongoose = require('mongoose');
-const { randomInt } = require('crypto');
+const mongoose = require('mongoose')
+const { randomInt } = require('crypto')
 
 // cryptographically-strong 4-digit OTP
-const genOtp = () => String(randomInt(1000, 10000));
+const genOtp = () => String(randomInt(1000, 10000))
 
-const rideSchema = new mongoose.Schema({
+const rideSchema = new mongoose.Schema(
+  {
     rider: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-    },
-    driver: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Driver',
-        required: false,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
     },
 
-    pickupAddress: {
-        type: String
+    driver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Driver'
     },
-    dropoffAddress: {
-        type: String
+
+    // =========================
+    // Ride Ownership
+    // =========================
+    rideFor: {
+      type: String,
+      enum: ['SELF', 'OTHER'],
+      default: 'SELF'
     },
+
+    passenger: {
+      name: {
+        type: String,
+        trim: true
+      },
+
+      phone: {
+        type: String,
+        match: /^[6-9]\d{9}$/ // Indian mobile validation
+      },
+
+      relation: {
+        type: String,
+        trim: true
+      },
+
+      notes: {
+        type: String,
+        trim: true
+      }
+    },
+
+    // ⭐ Future Ready (if passenger has account later)
+    passengerUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+
+    // ⭐ OTP Receiver (Production Ready)
+    otpReceiver: {
+      type: String,
+      enum: ['RIDER', 'PASSENGER'],
+      default: 'RIDER'
+    },
+
+    pickupAddress: String,
+    dropoffAddress: String,
 
     pickupLocation: {
-        type: {
-            type: String,
-            enum: ['Point'],
-            default: 'Point',
-        },
-        coordinates: {
-            type: [Number], // [longitude, latitude]
-            required: true,
-        },
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        required: true
+      }
     },
-
-    driverSocketId: { type: String },
-    userSocketId: { type: String },
 
     dropoffLocation: {
-        type: {
-            type: String,
-            enum: ['Point'],
-            default: 'Point',
-        },
-        coordinates: {
-            type: [Number],
-            required: true,
-        },
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        required: true
+      }
     },
 
-    fare: {
-        type: Number,
-        required: false,
-    },
+    driverSocketId: String,
+    userSocketId: String,
 
-    distanceInKm: {
-        type: Number,
-        required: false,
-    },
+    fare: Number,
+    distanceInKm: Number,
 
     status: {
-        type: String,
-        enum: ['requested', 'accepted', 'in_progress', 'completed', 'cancelled'],
-        default: 'requested',
+      type: String,
+      enum: ['requested', 'accepted', 'in_progress', 'completed', 'cancelled'],
+      default: 'requested'
     },
 
-    // 🔹 Existing (kept as-is)
+    // =========================
+    // Booking Types
+    // =========================
     rideType: {
-        type: String,
-        enum: ['normal', 'whole_day', 'custom'],
-        default: 'normal',
+      type: String,
+      enum: ['normal', 'whole_day', 'custom'],
+      default: 'normal'
     },
 
-    // ✅ NEW — booking behavior (NO breaking change)
     bookingType: {
-        type: String,
-        enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'],
-        default: 'INSTANT',
+      type: String,
+      enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'],
+      default: 'INSTANT'
     },
 
-    // ✅ NEW — flexible booking data
     bookingMeta: {
-        startTime: Date,      // full-day / rental
-        endTime: Date,        // full-day / rental
-        days: Number,         // rental (7, 15, etc.)
-        dates: [Date],        // date-wise booking
+      startTime: Date,
+      endTime: Date,
+      days: Number,
+      dates: [Date]
     },
 
     cancelledBy: {
-        type: String,
-        enum: ['rider', 'driver', 'system'],
-        default: null,
+      type: String,
+      enum: ['rider', 'driver', 'system'],
+      default: null
     },
 
-    // 🔹 Existing custom schedule (kept for backward compatibility)
     customSchedule: {
-        startDate: Date,
-        endDate: Date,
-        startTime: String,
-        endTime: String,
+      startDate: Date,
+      endDate: Date,
+      startTime: String,
+      endTime: String
     },
 
     startOtp: {
-        type: String,
-        default: genOtp,
+      type: String,
+      default: genOtp
     },
 
     stopOtp: {
-        type: String,
-        default: genOtp,
+      type: String,
+      default: genOtp
     },
 
     paymentMethod: {
-        type: String,
-        enum: ['CASH', 'RAZORPAY', 'WALLET'],
-        default: 'CASH',
+      type: String,
+      enum: ['CASH', 'RAZORPAY', 'WALLET'],
+      default: 'CASH'
     },
 
     actualStartTime: Date,
@@ -125,144 +158,175 @@ const rideSchema = new mongoose.Schema({
     estimatedArrivalTime: Date,
     driverArrivedAt: Date,
 
-    // Vehicle type and service information
+    // =========================
+    // Vehicle & Service
+    // =========================
     vehicleType: {
-        type: String,
-        enum: ['sedan', 'suv', 'hatchback', 'auto'],
-        required: false,
-    },
-    vehicleService: {
-        type: String,
-        enum: ['cercaSmall', 'cercaMedium', 'cercaLarge'],
-        required: false,
-    },
-    // Legacy service field (kept for backward compatibility)
-    service: {
-        type: String,
-        required: false,
+      type: String,
+      enum: ['sedan', 'suv', 'hatchback', 'auto']
     },
 
-    // Fare breakdown for transparency
+    vehicleService: {
+      type: String,
+      enum: ['cercaSmall', 'cercaMedium', 'cercaLarge']
+    },
+
+    service: String,
+
+    // =========================
+    // Fare Transparency
+    // =========================
     fareBreakdown: {
-        baseFare: Number,
-        distanceFare: Number,
-        timeFare: Number,
-        subtotal: Number,
-        fareAfterMinimum: Number,
-        discount: Number,
-        finalFare: Number
+      baseFare: Number,
+      distanceFare: Number,
+      timeFare: Number,
+      subtotal: Number,
+      fareAfterMinimum: Number,
+      discount: Number,
+      finalFare: Number
     },
 
     riderRating: {
-        type: Number,
-        min: 1,
-        max: 5,
+      type: Number,
+      min: 1,
+      max: 5
     },
 
     driverRating: {
-        type: Number,
-        min: 1,
-        max: 5,
+      type: Number,
+      min: 1,
+      max: 5
     },
 
     tips: {
-        type: Number,
-        default: 0,
+      type: Number,
+      default: 0
     },
 
     discount: {
-        type: Number,
-        default: 0,
+      type: Number,
+      default: 0
     },
 
-    promoCode: {
-        type: String,
-    },
+    promoCode: String,
 
     cancellationReason: {
-        type: String,
-        maxlength: 500,
+      type: String,
+      maxlength: 500
     },
 
     cancellationFee: {
-        type: Number,
-        default: 0,
+      type: Number,
+      default: 0
     },
 
     refundAmount: {
-        type: Number,
-        default: 0,
+      type: Number,
+      default: 0
     },
 
     paymentStatus: {
-        type: String,
-        enum: ['pending', 'completed', 'failed', 'refunded', 'partial'],
-        default: 'pending',
+      type: String,
+      enum: ['pending', 'completed', 'failed', 'refunded', 'partial'],
+      default: 'pending'
     },
 
     transactionId: String,
-
-    razorpayPaymentId: {
-        type: String,
-        default: null,
-    },
+    razorpayPaymentId: String,
 
     walletAmountUsed: {
-        type: Number,
-        default: 0,
-        min: 0,
+      type: Number,
+      default: 0,
+      min: 0
     },
 
     razorpayAmountPaid: {
-        type: Number,
-        default: 0,
-        min: 0,
+      type: Number,
+      default: 0,
+      min: 0
     },
 
-    rejectedDrivers: [{
+    rejectedDrivers: [
+      {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Driver'
-    }],
+      }
+    ],
 
-    notifiedDrivers: [{
+    notifiedDrivers: [
+      {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Driver'
-    }],
+      }
+    ],
 
-    // Ride sharing fields
+    // =========================
+    // Ride Sharing
+    // =========================
     shareToken: {
-        type: String,
-        unique: true,
-        sparse: true,
-        index: true
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true
     },
-    shareTokenExpiresAt: {
-        type: Date
-    },
+
+    shareTokenExpiresAt: Date,
+
     isShared: {
-        type: Boolean,
-        default: false
-    },
-    shareCreatedAt: {
-        type: Date
+      type: Boolean,
+      default: false
     },
 
-}, {
+    shareCreatedAt: Date
+  },
+  {
     timestamps: true
-});
+  }
+)
 
-// Indexes
-rideSchema.index({ status: 1, createdAt: -1 });
-rideSchema.index({ pickupLocation: '2dsphere' });
-rideSchema.index({ dropoffLocation: '2dsphere' });
-rideSchema.index({ shareToken: 1 });
+/* =====================================================
+   ⭐ ENTERPRISE VALIDATION HOOK
+===================================================== */
+rideSchema.pre('validate', function (next) {
 
-// Keep updatedAt synced
+  // Remove passenger data if ride is SELF
+  if (this.rideFor === 'SELF') {
+    this.passenger = undefined
+    this.passengerUser = undefined
+    this.otpReceiver = 'RIDER'
+  }
+
+  // Validate passenger if OTHER
+  if (this.rideFor === 'OTHER') {
+    if (!this.passenger?.name || !this.passenger?.phone) {
+      return next(new Error('Passenger name and phone are required for OTHER ride'))
+    }
+
+    this.otpReceiver = 'PASSENGER'
+  }
+
+  next()
+})
+
+/* =====================================================
+   ⭐ INDEXES
+===================================================== */
+
+rideSchema.index({ status: 1, createdAt: -1 })
+rideSchema.index({ pickupLocation: '2dsphere' })
+rideSchema.index({ dropoffLocation: '2dsphere' })
+rideSchema.index({ shareToken: 1 })
+rideSchema.index({ 'passenger.phone': 1 })
+
+/* =====================================================
+   ⭐ Keep updatedAt synced
+===================================================== */
+
 rideSchema.pre('save', function (next) {
-    this.updatedAt = Date.now();
-    next();
-});
+  this.updatedAt = Date.now()
+  next()
+})
 
-const Ride = mongoose.model('Ride', rideSchema);
+const Ride = mongoose.model('Ride', rideSchema)
 
-module.exports = Ride;
+module.exports = Ride

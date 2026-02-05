@@ -58,16 +58,20 @@ let io
  * @param {string} eventName - Event name to emit
  * @param {Object} data - Data to send
  */
-async function broadcastToSharedRide(rideId, eventName, data) {
+async function broadcastToSharedRide (rideId, eventName, data) {
   try {
-    const ride = await Ride.findById(rideId).select('shareToken isShared').lean()
+    const ride = await Ride.findById(rideId)
+      .select('shareToken isShared')
+      .lean()
     if (ride && ride.shareToken && ride.isShared) {
       io.to(`shared_ride_${ride.shareToken}`).emit(eventName, {
         rideId: rideId.toString(),
         ...data,
         timestamp: new Date()
       })
-      logger.info(`Broadcasted ${eventName} to shared ride room for ride ${rideId}`)
+      logger.info(
+        `Broadcasted ${eventName} to shared ride room for ride ${rideId}`
+      )
     }
   } catch (err) {
     logger.error(`Error broadcasting to shared ride for ride ${rideId}:`, err)
@@ -131,7 +135,7 @@ function initializeSocket (server) {
     socket.on('support:join_chat', async data => {
       try {
         const { issueId, userId } = data || {}
-        
+
         if (!issueId) {
           logger.warn('❌ [SUPPORT JOIN CHAT] issueId missing')
           return
@@ -150,22 +154,28 @@ function initializeSocket (server) {
 
         const issue = await SupportIssue.findById(issueId)
         if (!issue) {
-          logger.warn(`❌ [SUPPORT JOIN CHAT] issue not found - issueId=${issueId}`)
+          logger.warn(
+            `❌ [SUPPORT JOIN CHAT] issue not found - issueId=${issueId}`
+          )
           return
         }
 
         // Verify user owns this issue
         if (issue.userId.toString() !== effectiveUserId) {
-          logger.warn(`❌ [SUPPORT JOIN CHAT] unauthorized - userId=${effectiveUserId}, issueUserId=${issue.userId}`)
+          logger.warn(
+            `❌ [SUPPORT JOIN CHAT] unauthorized - userId=${effectiveUserId}, issueUserId=${issue.userId}`
+          )
           return
         }
 
         // Join the issue room
         socket.join(`support_issue_${issueId}`)
         socket.join(`support_user_${effectiveUserId}`)
-        
-        logger.info(`✅ [SUPPORT JOIN CHAT] userId=${effectiveUserId} joined room support_issue_${issueId}`)
-        
+
+        logger.info(
+          `✅ [SUPPORT JOIN CHAT] userId=${effectiveUserId} joined room support_issue_${issueId}`
+        )
+
         // Acknowledge successful join
         socket.emit('support:joined', { issueId, status: issue.status })
       } catch (err) {
@@ -240,9 +250,15 @@ function initializeSocket (server) {
         })
 
         // Emit stats update
-        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
-        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
-        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        const waitingCount = await SupportIssue.countDocuments({
+          status: 'WAITING_FOR_ADMIN'
+        })
+        const activeCount = await SupportIssue.countDocuments({
+          status: 'CHAT_ACTIVE'
+        })
+        const resolvedCount = await SupportIssue.countDocuments({
+          status: 'RESOLVED'
+        })
         io.to('admin_support_online').emit('support:stats_updated', {
           stats: {
             waiting: waitingCount,
@@ -334,8 +350,12 @@ function initializeSocket (server) {
         })
 
         // Emit stats update
-        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
-        const statsActiveCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
+        const waitingCount = await SupportIssue.countDocuments({
+          status: 'WAITING_FOR_ADMIN'
+        })
+        const statsActiveCount = await SupportIssue.countDocuments({
+          status: 'CHAT_ACTIVE'
+        })
         io.to('admin_support_online').emit('support:stats_updated', {
           stats: {
             waiting: waitingCount,
@@ -363,13 +383,17 @@ function initializeSocket (server) {
       try {
         const { issueId, message } = data || {}
         if (!issueId || !message) {
-          socket.emit('support:error', { message: 'Issue ID and message are required' })
+          socket.emit('support:error', {
+            message: 'Issue ID and message are required'
+          })
           return
         }
 
         // Validate message length (max 1000 chars as per model)
         if (message.length > 1000) {
-          socket.emit('support:error', { message: 'Message too long. Maximum 1000 characters allowed.' })
+          socket.emit('support:error', {
+            message: 'Message too long. Maximum 1000 characters allowed.'
+          })
           return
         }
 
@@ -436,7 +460,10 @@ function initializeSocket (server) {
           updatedAt: savedMessage.updatedAt
         }
 
-        io.to(`support_issue_${issueId}`).emit('support:message', messagePayload)
+        io.to(`support_issue_${issueId}`).emit(
+          'support:message',
+          messagePayload
+        )
         logger.info(
           `📤 [SUPPORT MESSAGE EMITTED] issueId=${issueId}, room=support_issue_${issueId}, messageId=${savedMessage._id}`
         )
@@ -482,7 +509,7 @@ function initializeSocket (server) {
     socket.on('support:typing', async data => {
       try {
         const { issueId, isTyping } = data || {}
-        
+
         if (!issueId) {
           return
         }
@@ -498,7 +525,9 @@ function initializeSocket (server) {
           isTyping: !!isTyping
         })
 
-        logger.debug(`⌨️ [SUPPORT TYPING] issueId=${issueId}, senderType=${senderType}, isTyping=${isTyping}`)
+        logger.debug(
+          `⌨️ [SUPPORT TYPING] issueId=${issueId}, senderType=${senderType}, isTyping=${isTyping}`
+        )
       } catch (err) {
         logger.error('support:typing error:', err)
       }
@@ -575,9 +604,15 @@ function initializeSocket (server) {
         })
 
         // Emit stats update
-        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
-        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
-        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        const waitingCount = await SupportIssue.countDocuments({
+          status: 'WAITING_FOR_ADMIN'
+        })
+        const activeCount = await SupportIssue.countDocuments({
+          status: 'CHAT_ACTIVE'
+        })
+        const resolvedCount = await SupportIssue.countDocuments({
+          status: 'RESOLVED'
+        })
         io.to('admin_support_online').emit('support:stats_updated', {
           stats: {
             waiting: waitingCount,
@@ -647,9 +682,15 @@ function initializeSocket (server) {
         })
 
         // Emit stats update
-        const waitingCount = await SupportIssue.countDocuments({ status: 'WAITING_FOR_ADMIN' })
-        const activeCount = await SupportIssue.countDocuments({ status: 'CHAT_ACTIVE' })
-        const resolvedCount = await SupportIssue.countDocuments({ status: 'RESOLVED' })
+        const waitingCount = await SupportIssue.countDocuments({
+          status: 'WAITING_FOR_ADMIN'
+        })
+        const activeCount = await SupportIssue.countDocuments({
+          status: 'CHAT_ACTIVE'
+        })
+        const resolvedCount = await SupportIssue.countDocuments({
+          status: 'RESOLVED'
+        })
         io.to('admin_support_online').emit('support:stats_updated', {
           stats: {
             waiting: waitingCount,
@@ -1089,6 +1130,22 @@ function initializeSocket (server) {
           }, service: ${data?.service}`
         )
 
+        //// ⭐ NEW CODE — rideFor default
+        data.rideFor = data.rideFor || 'SELF'
+
+        //// ⭐ NEW CODE — passenger validation
+        if (data.rideFor === 'OTHER') {
+          if (!data.passenger?.name || !data.passenger?.phone) {
+            socket.emit('rideError', {
+              message: 'Passenger name and phone required',
+              code: 'PASSENGER_REQUIRED'
+            })
+            return
+          }
+        }
+
+        // ===== YOUR EXISTING CODE CONTINUES =====
+
         // Verify Razorpay payment if payment method is RAZORPAY
         if (data.paymentMethod === 'RAZORPAY' && data.razorpayPaymentId) {
           try {
@@ -1360,9 +1417,19 @@ function initializeSocket (server) {
 
         logger.info(`✅ Ride ${ride._id} queued for driver discovery`)
 
+        //// ⭐ NEW CODE — display name support
+        const ridePayload = {
+          ...populatedRide.toObject(),
+          displayName:
+            populatedRide.rideFor === 'OTHER'
+              ? populatedRide.passenger?.name
+              : populatedRide.rider?.fullName
+        }
+
         // Ack to the rider (backward compatible - existing apps expect this)
         if (populatedRide.userSocketId) {
-          io.to(populatedRide.userSocketId).emit('rideRequested', populatedRide)
+          io.to(populatedRide.userSocketId).emit('rideRequested', ridePayload)
+
           logger.info(
             `Ride request confirmation sent to rider: ${
               data.rider || data.riderId
@@ -1375,7 +1442,13 @@ function initializeSocket (server) {
           recipientId: data.rider || data.riderId,
           recipientModel: 'User',
           title: 'Ride Requested',
-          message: 'Your ride request has been sent to nearby drivers',
+
+          //// ⭐ NEW CODE — rideFor support
+          message:
+            populatedRide?.rideFor === 'OTHER'
+              ? `Ride booked for ${populatedRide.passenger?.name}`
+              : 'Your ride request has been sent to nearby drivers',
+
           type: 'ride_request',
           relatedRide: ride._id
         })
@@ -1478,7 +1551,9 @@ function initializeSocket (server) {
             `assignDriverToRide returned null for rideId: ${rideId}, driverId: ${driverId}`
           )
           // best-effort: release the lock so other drivers can try
-          try { await redis.del(lockKey) } catch (e) {}
+          try {
+            await redis.del(lockKey)
+          } catch (e) {}
           socket.emit('rideError', {
             message: 'Failed to assign ride',
             code: 'ASSIGNMENT_FAILED',
@@ -1503,19 +1578,21 @@ function initializeSocket (server) {
         // Safely compute rider/driver identifiers (handle nulls)
         const riderIdentifier =
           assignedRide && assignedRide.rider
-            ? (assignedRide.rider._id || assignedRide.rider)
+            ? assignedRide.rider._id || assignedRide.rider
             : null
         const driverIdentifier =
           assignedRide && assignedRide.driver
-            ? (assignedRide.driver._id || assignedRide.driver)
+            ? assignedRide.driver._id || assignedRide.driver
             : null
 
         // ============================
         // 🔥 FORCE JOIN RIDE ROOM (SERVER-SIDE) — only if identifiers exist
         // ============================
         try {
-          if (riderIdentifier) io.in(`user_${riderIdentifier}`).socketsJoin(roomName)
-          if (driverIdentifier) io.in(`driver_${driverIdentifier}`).socketsJoin(roomName)
+          if (riderIdentifier)
+            io.in(`user_${riderIdentifier}`).socketsJoin(roomName)
+          if (driverIdentifier)
+            io.in(`driver_${driverIdentifier}`).socketsJoin(roomName)
         } catch (e) {
           logger.warn('Auto-join to ride room failed', { err: e.message })
         }
@@ -1530,7 +1607,10 @@ function initializeSocket (server) {
         // ============================
         if (riderIdentifier) {
           try {
-            io.to(`user_${riderIdentifier}`).emit('rideAccepted', rideWithMetadata)
+            io.to(`user_${riderIdentifier}`).emit(
+              'rideAccepted',
+              rideWithMetadata
+            )
           } catch (e) {
             logger.warn('Emit rideAccepted to rider failed', { err: e.message })
           }
@@ -1545,15 +1625,23 @@ function initializeSocket (server) {
         // ============================
         if (assignedRide.driverSocketId) {
           try {
-            io.to(assignedRide.driverSocketId).emit('rideAssigned', rideWithMetadata)
+            io.to(assignedRide.driverSocketId).emit(
+              'rideAssigned',
+              rideWithMetadata
+            )
           } catch (e) {
-            logger.warn('Emit rideAssigned to driver socket failed', { err: e.message })
+            logger.warn('Emit rideAssigned to driver socket failed', {
+              err: e.message
+            })
           }
         } else {
-          logger.warn('rideAccepted: driverSocketId missing, skipping driver emit', {
-            rideId,
-            driverId
-          })
+          logger.warn(
+            'rideAccepted: driverSocketId missing, skipping driver emit',
+            {
+              rideId,
+              driverId
+            }
+          )
         }
 
         // ============================
@@ -1567,22 +1655,29 @@ function initializeSocket (server) {
           ride: {
             _id: assignedRide._id,
             status: assignedRide.status,
-            driver: assignedRide.driver ? {
-              name: assignedRide.driver.name,
-              rating: assignedRide.driver.rating,
-              vehicleInfo: assignedRide.driver.vehicleInfo
-            } : null
+            driver: assignedRide.driver
+              ? {
+                  name: assignedRide.driver.name,
+                  rating: assignedRide.driver.rating,
+                  vehicleInfo: assignedRide.driver.vehicleInfo
+                }
+              : null
           }
         })
 
         // ============================
         // CREATE NOTIFICATIONS
         // ============================
+        const passengerName =
+          assignedRide.rideFor === 'OTHER'
+            ? assignedRide.passenger?.name
+            : assignedRide.rider?.fullName || assignedRide.rider?.name
+
         await createNotification({
           recipientId: assignedRide.rider._id,
           recipientModel: 'User',
           title: 'Driver Accepted',
-          message: `${assignedRide.driver.name} is coming to pick you up`,
+          message: `${assignedRide.driver.name} is coming to pick up ${passengerName}`,
           type: 'ride_accepted',
           relatedRide: rideId
         })
@@ -2125,15 +2220,21 @@ function initializeSocket (server) {
           Ride.findById(data.rideId)
             .then(ride => {
               if (ride && ride.shareToken && ride.isShared) {
-                io.to(`shared_ride_${ride.shareToken}`).emit('sharedRideLocationUpdate', {
-                  rideId: data.rideId,
-                  location: data.location,
-                  timestamp: new Date()
-                })
+                io.to(`shared_ride_${ride.shareToken}`).emit(
+                  'sharedRideLocationUpdate',
+                  {
+                    rideId: data.rideId,
+                    location: data.location,
+                    timestamp: new Date()
+                  }
+                )
               }
             })
             .catch(err => {
-              logger.error('Error checking shared ride for location update:', err)
+              logger.error(
+                'Error checking shared ride for location update:',
+                err
+              )
             })
         }
       } catch (err) {
@@ -2164,7 +2265,10 @@ function initializeSocket (server) {
         }
 
         // Validate token
-        const validation = validateShareToken(shareToken, ride.shareTokenExpiresAt)
+        const validation = validateShareToken(
+          shareToken,
+          ride.shareTokenExpiresAt
+        )
         if (!validation.isValid) {
           socket.emit('sharedRideError', {
             message: validation.message,
@@ -2184,7 +2288,14 @@ function initializeSocket (server) {
 
         // Join shared ride room
         socket.join(`shared_ride_${shareToken}`)
-        logger.info(`Socket ${socket.id} joined shared ride room: shared_ride_${shareToken.substring(0, 8)}...`)
+        logger.info(
+          `Socket ${
+            socket.id
+          } joined shared ride room: shared_ride_${shareToken.substring(
+            0,
+            8
+          )}...`
+        )
 
         // Send confirmation
         socket.emit('sharedRideJoined', {
@@ -2205,7 +2316,14 @@ function initializeSocket (server) {
         const { shareToken } = data || {}
         if (shareToken) {
           socket.leave(`shared_ride_${shareToken}`)
-          logger.info(`Socket ${socket.id} left shared ride room: shared_ride_${shareToken.substring(0, 8)}...`)
+          logger.info(
+            `Socket ${
+              socket.id
+            } left shared ride room: shared_ride_${shareToken.substring(
+              0,
+              8
+            )}...`
+          )
         }
       } catch (err) {
         logger.error('leaveSharedRide error:', err)
@@ -2486,7 +2604,7 @@ function initializeSocket (server) {
           completedRide.isShared = false
           completedRide.shareTokenExpiresAt = new Date()
           await completedRide.save()
-          
+
           await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
             status: 'completed',
             ride: {
