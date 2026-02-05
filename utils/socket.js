@@ -1473,6 +1473,20 @@ function initializeSocket (server) {
           socket.id
         )
 
+        if (!assignedRide) {
+          logger.error(
+            `assignDriverToRide returned null for rideId: ${rideId}, driverId: ${driverId}`
+          )
+          // best-effort: release the lock so other drivers can try
+          try { await redis.del(lockKey) } catch (e) {}
+          socket.emit('rideError', {
+            message: 'Failed to assign ride',
+            code: 'ASSIGNMENT_FAILED',
+            rideId
+          })
+          return
+        }
+
         logger.info(
           `Ride assigned successfully - rideId: ${rideId}, driverId: ${driverId}`
         )
@@ -1486,35 +1500,60 @@ function initializeSocket (server) {
 
         const roomName = `ride_${rideId}`
 
-        // ============================
-        // 🔥 FORCE JOIN RIDE ROOM (SERVER-SIDE)
-        // ============================
-        io.in(
-          `user_${assignedRide.rider._id || assignedRide.rider}`
-        ).socketsJoin(roomName)
-
-        io.in(
-          `driver_${assignedRide.driver._id || assignedRide.driver}`
-        ).socketsJoin(roomName)
-
-        logger.info(`✅ Auto-joined rider & driver to ${roomName}`)
+        // Safely compute rider/driver identifiers (handle nulls)
+        const riderIdentifier =
+          assignedRide && assignedRide.rider
+            ? (assignedRide.rider._id || assignedRide.rider)
+            : null
+        const driverIdentifier =
+          assignedRide && assignedRide.driver
+            ? (assignedRide.driver._id || assignedRide.driver)
+            : null
 
         // ============================
-        // NOTIFY RIDER
+        // 🔥 FORCE JOIN RIDE ROOM (SERVER-SIDE) — only if identifiers exist
         // ============================
-        io.to(`user_${assignedRide.rider._id || assignedRide.rider}`).emit(
-          'rideAccepted',
-          rideWithMetadata
+        try {
+          if (riderIdentifier) io.in(`user_${riderIdentifier}`).socketsJoin(roomName)
+          if (driverIdentifier) io.in(`driver_${driverIdentifier}`).socketsJoin(roomName)
+        } catch (e) {
+          logger.warn('Auto-join to ride room failed', { err: e.message })
+        }
+
+        logger.info(
+          `✅ Auto-joined rider & driver to ${roomName}` +
+            ` (rider:${riderIdentifier}, driver:${driverIdentifier})`
         )
+
+        // ============================
+        // NOTIFY RIDER (if available)
+        // ============================
+        if (riderIdentifier) {
+          try {
+            io.to(`user_${riderIdentifier}`).emit('rideAccepted', rideWithMetadata)
+          } catch (e) {
+            logger.warn('Emit rideAccepted to rider failed', { err: e.message })
+          }
+        } else {
+          logger.warn('rideAccepted: rider identifier missing, skipping emit', {
+            rideId
+          })
+        }
 
         // ============================
         // NOTIFY DRIVER
         // ============================
         if (assignedRide.driverSocketId) {
-          io.to(assignedRide.driverSocketId).emit(
-            'rideAssigned',
-            rideWithMetadata
-          )
+          try {
+            io.to(assignedRide.driverSocketId).emit('rideAssigned', rideWithMetadata)
+          } catch (e) {
+            logger.warn('Emit rideAssigned to driver socket failed', { err: e.message })
+          }
+        } else {
+          logger.warn('rideAccepted: driverSocketId missing, skipping driver emit', {
+            rideId,
+            driverId
+          })
         }
 
         // ============================
