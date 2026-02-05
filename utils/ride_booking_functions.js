@@ -384,8 +384,6 @@ const calculateFareWithTime = (basePrice, distance, duration, perKmRate, perMinu
 
 const createRide = async rideData => {
   const riderId = rideData.riderId || rideData.rider
-  rideData.rider = riderId
-
   if (!riderId) throw new Error('riderId (or rider) is required')
 
   // ============================

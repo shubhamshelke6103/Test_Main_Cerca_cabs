@@ -10,42 +10,18 @@ const rideSchema = new mongoose.Schema({
         ref: 'User',
         required: true,
     },
-
     driver: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Driver',
         required: false,
     },
 
-    // ============================================
-    // PARTICIPANTS
-    // ============================================
-    participants: [
-        {
-            role: {
-                type: String,
-                enum: ['BOOKER', 'PASSENGER'],
-                required: true
-            },
-
-            user: {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'User'
-            },
-
-            name: String,
-            phoneNumber: String,
-            socketId: String,
-
-            notified: {
-                type: Boolean,
-                default: false
-            }
-        }
-    ],
-
-    pickupAddress: String,
-    dropoffAddress: String,
+    pickupAddress: {
+        type: String
+    },
+    dropoffAddress: {
+        type: String
+    },
 
     pickupLocation: {
         type: {
@@ -54,13 +30,13 @@ const rideSchema = new mongoose.Schema({
             default: 'Point',
         },
         coordinates: {
-            type: [Number], // [lng, lat]
+            type: [Number], // [longitude, latitude]
             required: true,
         },
     },
 
-    driverSocketId: String,
-    userSocketId: String,
+    driverSocketId: { type: String },
+    userSocketId: { type: String },
 
     dropoffLocation: {
         type: {
@@ -74,8 +50,15 @@ const rideSchema = new mongoose.Schema({
         },
     },
 
-    fare: Number,
-    distanceInKm: Number,
+    fare: {
+        type: Number,
+        required: false,
+    },
+
+    distanceInKm: {
+        type: Number,
+        required: false,
+    },
 
     status: {
         type: String,
@@ -83,23 +66,26 @@ const rideSchema = new mongoose.Schema({
         default: 'requested',
     },
 
+    // 🔹 Existing (kept as-is)
     rideType: {
         type: String,
         enum: ['normal', 'whole_day', 'custom'],
         default: 'normal',
     },
 
+    // ✅ NEW — booking behavior (NO breaking change)
     bookingType: {
         type: String,
         enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'],
         default: 'INSTANT',
     },
 
+    // ✅ NEW — flexible booking data
     bookingMeta: {
-        startTime: Date,
-        endTime: Date,
-        days: Number,
-        dates: [Date],
+        startTime: Date,      // full-day / rental
+        endTime: Date,        // full-day / rental
+        days: Number,         // rental (7, 15, etc.)
+        dates: [Date],        // date-wise booking
     },
 
     cancelledBy: {
@@ -108,6 +94,7 @@ const rideSchema = new mongoose.Schema({
         default: null,
     },
 
+    // 🔹 Existing custom schedule (kept for backward compatibility)
     customSchedule: {
         startDate: Date,
         endDate: Date,
@@ -138,18 +125,24 @@ const rideSchema = new mongoose.Schema({
     estimatedArrivalTime: Date,
     driverArrivedAt: Date,
 
+    // Vehicle type and service information
     vehicleType: {
         type: String,
         enum: ['sedan', 'suv', 'hatchback', 'auto'],
+        required: false,
     },
-
     vehicleService: {
         type: String,
         enum: ['cercaSmall', 'cercaMedium', 'cercaLarge'],
+        required: false,
+    },
+    // Legacy service field (kept for backward compatibility)
+    service: {
+        type: String,
+        required: false,
     },
 
-    service: String,
-
+    // Fare breakdown for transparency
     fareBreakdown: {
         baseFare: Number,
         distanceFare: Number,
@@ -160,16 +153,46 @@ const rideSchema = new mongoose.Schema({
         finalFare: Number
     },
 
-    riderRating: { type: Number, min: 1, max: 5 },
-    driverRating: { type: Number, min: 1, max: 5 },
+    riderRating: {
+        type: Number,
+        min: 1,
+        max: 5,
+    },
 
-    tips: { type: Number, default: 0 },
-    discount: { type: Number, default: 0 },
+    driverRating: {
+        type: Number,
+        min: 1,
+        max: 5,
+    },
 
-    promoCode: String,
-    cancellationReason: { type: String, maxlength: 500 },
-    cancellationFee: { type: Number, default: 0 },
-    refundAmount: { type: Number, default: 0 },
+    tips: {
+        type: Number,
+        default: 0,
+    },
+
+    discount: {
+        type: Number,
+        default: 0,
+    },
+
+    promoCode: {
+        type: String,
+    },
+
+    cancellationReason: {
+        type: String,
+        maxlength: 500,
+    },
+
+    cancellationFee: {
+        type: Number,
+        default: 0,
+    },
+
+    refundAmount: {
+        type: Number,
+        default: 0,
+    },
 
     paymentStatus: {
         type: String,
@@ -178,10 +201,23 @@ const rideSchema = new mongoose.Schema({
     },
 
     transactionId: String,
-    razorpayPaymentId: { type: String, default: null },
 
-    walletAmountUsed: { type: Number, default: 0, min: 0 },
-    razorpayAmountPaid: { type: Number, default: 0, min: 0 },
+    razorpayPaymentId: {
+        type: String,
+        default: null,
+    },
+
+    walletAmountUsed: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+
+    razorpayAmountPaid: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
 
     rejectedDrivers: [{
         type: mongoose.Schema.Types.ObjectId,
@@ -193,38 +229,23 @@ const rideSchema = new mongoose.Schema({
         ref: 'Driver'
     }],
 
-    // ============================================
-    // ✅ EXISTING SHARE TRACKING TOKEN
-    // ============================================
+    // Ride sharing fields
     shareToken: {
         type: String,
         unique: true,
         sparse: true,
         index: true
     },
-
-    shareTokenExpiresAt: Date,
-
+    shareTokenExpiresAt: {
+        type: Date
+    },
     isShared: {
         type: Boolean,
         default: false
     },
-
-    shareCreatedAt: Date,
-
-    // ============================================
-    // 🆕 GUEST RIDE INFO TOKEN (NEW FEATURE)
-    // ============================================
-    guestRideToken: {
-        type: String,
-        unique: true,
-        sparse: true,
-        index: true
+    shareCreatedAt: {
+        type: Date
     },
-
-    guestRideTokenExpiresAt: Date,
-
-    guestRideCreatedAt: Date
 
 }, {
     timestamps: true
@@ -235,7 +256,6 @@ rideSchema.index({ status: 1, createdAt: -1 });
 rideSchema.index({ pickupLocation: '2dsphere' });
 rideSchema.index({ dropoffLocation: '2dsphere' });
 rideSchema.index({ shareToken: 1 });
-rideSchema.index({ guestRideToken: 1 });
 
 // Keep updatedAt synced
 rideSchema.pre('save', function (next) {

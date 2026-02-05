@@ -14,8 +14,7 @@ const {
   generateShareLink,
   getSharedRide,
   revokeShareLink,
-  serveSharedRidePage,
-  getGuestRideInfo   
+  serveSharedRidePage
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 
@@ -57,8 +56,6 @@ router.get('/user/:userId', getRidesByUserId);
 // Get rides for a specific driver
 // GET /rides/driver/:driverId
 router.get('/driver/:driverId', getRidesByDriverId);
-// Guest Ride Tracking
-router.get('/guest-ride/:token', getGuestRideInfo);
 
 // Search for nearby drivers for a user (your controller uses req.params.id and req.body.pickupLocation)
 // POST /rides/search/:id
@@ -75,7 +72,5 @@ router.put('/:id', updateRide);
 // Delete a ride by ID
 // DELETE /rides/:id
 router.delete('/:id', deleteRide);
-
-
 
 module.exports = router;
