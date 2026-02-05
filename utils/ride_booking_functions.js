@@ -778,8 +778,10 @@ const createRide = async rideData => {
       const crypto = require('crypto')
       const shareToken = crypto.randomBytes(32).toString('base64url')
       rideDoc.shareToken = shareToken
+      // Set expiration to 24 hours from now
+      rideDoc.shareTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
       logger.info(
-        `✅ [ShareToken Generated] rideFor='OTHER' detected, shareToken: ${shareToken}`
+        `✅ [ShareToken Generated] rideFor='OTHER' detected, shareToken: ${shareToken}, expires: ${rideDoc.shareTokenExpiresAt}`
       )
     } else {
       logger.info(
