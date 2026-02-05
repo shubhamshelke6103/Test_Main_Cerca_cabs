@@ -21,6 +21,20 @@ const {
 } = require('../../utils/shareToken.service')
 const { sanitizeRideData } = require('../../middleware/shareToken.middleware')
 
+function generateGuestRideToken() {
+  return crypto.randomBytes(20).toString('hex')
+}
+
+function buildGuestRideLink(token, req) {
+  const baseUrl =
+    process.env.API_URL ||
+    `${req.protocol}://${req.get('host')}`
+
+  return `${baseUrl}/guest-ride/${token}`
+}
+
+
+
 /**
  * @desc    Create a new ride
  * @route   POST /rides
@@ -188,6 +202,31 @@ if (passenger && passenger.phoneNumber && !passenger.user) {
 
 // ✅ SINGLE SAVE (Better Performance + No Race Condition)
 await ride.save()
+
+// ======================================
+// 🆕 GUEST RIDE INFO LINK (NEW FEATURE)
+// ======================================
+
+const guestPassenger = ride.participants.find(
+  p => p.role === 'PASSENGER'
+)
+
+if (guestPassenger && guestPassenger.phoneNumber && !guestPassenger.user) {
+
+  ride.guestRideToken = generateGuestRideToken()
+
+  ride.guestRideTokenExpiresAt =
+    new Date(Date.now() + 12 * 60 * 60 * 1000) // 12 hours validity
+
+  await ride.save()
+
+  const guestLink = buildGuestRideLink(ride.guestRideToken, req)
+
+  logger.info('🆕 Guest Ride Info Link Generated')
+  logger.info(`RideId: ${ride._id}`)
+  logger.info(`Passenger Phone: ${guestPassenger.phoneNumber}`)
+  logger.info(`Guest Ride Link: ${guestLink}`)
+}
 
 
 logger.info(`Ride created successfully with ID: ${ride._id}`)
@@ -1147,6 +1186,48 @@ const revokeShareLink = async (req, res) => {
   }
 }
 
+const getGuestRideInfo = async (req, res) => {
+
+  try {
+
+    const { token } = req.params
+
+    const ride = await Ride.findOne({ guestRideToken: token })
+      .populate('driver', 'name rating vehicleInfo')
+      .populate('rider', 'fullName')
+
+    if (!ride) {
+      return res.status(404).json({
+        message: 'Invalid guest ride link'
+      })
+    }
+
+    if (
+      ride.guestRideTokenExpiresAt &&
+      new Date() > ride.guestRideTokenExpiresAt
+    ) {
+      return res.status(400).json({
+        message: 'Guest ride link expired'
+      })
+    }
+
+    res.json({
+      rideId: ride._id,
+      pickupAddress: ride.pickupAddress,
+      dropoffAddress: ride.dropoffAddress,
+      driver: ride.driver,
+      startOtp: ride.startOtp,
+      stopOtp: ride.stopOtp,
+      status: ride.status
+    })
+
+  } catch (error) {
+    logger.error('Error fetching guest ride:', error)
+    res.status(500).json({ message: 'Error fetching guest ride' })
+  }
+}
+
+
 module.exports = {
   createRide,
   getAllRides,
@@ -1161,5 +1242,6 @@ module.exports = {
   generateShareLink,
   getSharedRide,
   revokeShareLink,
-  serveSharedRidePage
+  serveSharedRidePage,
+  getGuestRideInfo   
 }

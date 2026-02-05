@@ -1262,6 +1262,35 @@ function initializeSocket (server) {
         )
 
         const ride = await createRide(data)
+        // =========================================
+// 🆕 GUEST PASSENGER RIDE LINK GENERATION
+// =========================================
+
+try {
+  const passenger = ride.participants?.find(
+    p => p.role === 'PASSENGER' && p.phoneNumber && !p.user
+  )
+
+  if (passenger && ride.guestRideToken) {
+    // const guestRideLink = `${process.env.FRONTEND_URL}/guest-ride/${ride.guestRideToken}`
+    const guestRideLink = `https://api.myserverdevops.com/guest-ride/${ride.guestRideToken}`
+
+    logger.info(`🔗 Guest Ride Link Generated:`)
+    logger.info(`RideId: ${ride._id}`)
+    logger.info(`Passenger Phone: ${passenger.phoneNumber}`)
+    logger.info(`Guest Ride Link: ${guestRideLink}`)
+
+    // OPTIONAL → Emit back to rider (Booker)
+    socket.emit('guestRideLinkGenerated', {
+      rideId: ride._id,
+      passengerPhone: passenger.phoneNumber,
+      guestRideLink
+    })
+  }
+} catch (guestErr) {
+  logger.error('Guest ride link generation error:', guestErr)
+}
+
         logger.info(
           `Ride created - rideId: ${ride._id}, fare stored: ₹${ride.fare}, distance: ${ride.distanceInKm}km`
         )
@@ -2249,6 +2278,59 @@ function initializeSocket (server) {
         })
       }
     })
+
+    // ============================
+// 🆕 GUEST PASSENGER SOCKET JOIN
+// ============================
+
+socket.on('joinGuestRide', async data => {
+  try {
+    const { guestRideToken } = data || {}
+
+    if (!guestRideToken) {
+      socket.emit('guestRideError', {
+        message: 'Guest ride token required'
+      })
+      return
+    }
+
+    const ride = await Ride.findOne({ guestRideToken })
+
+    if (!ride) {
+      socket.emit('guestRideError', {
+        message: 'Invalid guest ride link'
+      })
+      return
+    }
+
+    if (
+      ride.guestRideTokenExpiresAt &&
+      ride.guestRideTokenExpiresAt < new Date()
+    ) {
+      socket.emit('guestRideError', {
+        message: 'Guest ride link expired'
+      })
+      return
+    }
+
+    const roomName = `ride_${ride._id}`
+
+    socket.join(roomName)
+
+    logger.info(
+      `🧑‍🦱 Guest passenger joined ride room ${roomName}`
+    )
+
+    socket.emit('guestRideJoined', {
+      rideId: ride._id,
+      status: ride.status
+    })
+
+  } catch (err) {
+    logger.error('joinGuestRide error:', err)
+  }
+})
+
 
     socket.on('leaveSharedRide', async data => {
       try {

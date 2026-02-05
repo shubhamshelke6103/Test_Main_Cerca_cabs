@@ -18,7 +18,7 @@ const rideSchema = new mongoose.Schema({
     },
 
     // ============================================
-    // ✅ UBER / OLA STYLE PARTICIPANTS (NEW)
+    // PARTICIPANTS
     // ============================================
     participants: [
         {
@@ -30,21 +30,12 @@ const rideSchema = new mongoose.Schema({
 
             user: {
                 type: mongoose.Schema.Types.ObjectId,
-                ref: 'User',
-                required: false
+                ref: 'User'
             },
 
-            name: {
-                type: String
-            },
-
-            phoneNumber: {
-                type: String
-            },
-
-            socketId: {
-                type: String
-            },
+            name: String,
+            phoneNumber: String,
+            socketId: String,
 
             notified: {
                 type: Boolean,
@@ -53,13 +44,8 @@ const rideSchema = new mongoose.Schema({
         }
     ],
 
-    pickupAddress: {
-        type: String
-    },
-
-    dropoffAddress: {
-        type: String
-    },
+    pickupAddress: String,
+    dropoffAddress: String,
 
     pickupLocation: {
         type: {
@@ -68,13 +54,13 @@ const rideSchema = new mongoose.Schema({
             default: 'Point',
         },
         coordinates: {
-            type: [Number], // [longitude, latitude]
+            type: [Number], // [lng, lat]
             required: true,
         },
     },
 
-    driverSocketId: { type: String },
-    userSocketId: { type: String },
+    driverSocketId: String,
+    userSocketId: String,
 
     dropoffLocation: {
         type: {
@@ -88,15 +74,8 @@ const rideSchema = new mongoose.Schema({
         },
     },
 
-    fare: {
-        type: Number,
-        required: false,
-    },
-
-    distanceInKm: {
-        type: Number,
-        required: false,
-    },
+    fare: Number,
+    distanceInKm: Number,
 
     status: {
         type: String,
@@ -162,19 +141,14 @@ const rideSchema = new mongoose.Schema({
     vehicleType: {
         type: String,
         enum: ['sedan', 'suv', 'hatchback', 'auto'],
-        required: false,
     },
 
     vehicleService: {
         type: String,
         enum: ['cercaSmall', 'cercaMedium', 'cercaLarge'],
-        required: false,
     },
 
-    service: {
-        type: String,
-        required: false,
-    },
+    service: String,
 
     fareBreakdown: {
         baseFare: Number,
@@ -186,46 +160,16 @@ const rideSchema = new mongoose.Schema({
         finalFare: Number
     },
 
-    riderRating: {
-        type: Number,
-        min: 1,
-        max: 5,
-    },
+    riderRating: { type: Number, min: 1, max: 5 },
+    driverRating: { type: Number, min: 1, max: 5 },
 
-    driverRating: {
-        type: Number,
-        min: 1,
-        max: 5,
-    },
+    tips: { type: Number, default: 0 },
+    discount: { type: Number, default: 0 },
 
-    tips: {
-        type: Number,
-        default: 0,
-    },
-
-    discount: {
-        type: Number,
-        default: 0,
-    },
-
-    promoCode: {
-        type: String,
-    },
-
-    cancellationReason: {
-        type: String,
-        maxlength: 500,
-    },
-
-    cancellationFee: {
-        type: Number,
-        default: 0,
-    },
-
-    refundAmount: {
-        type: Number,
-        default: 0,
-    },
+    promoCode: String,
+    cancellationReason: { type: String, maxlength: 500 },
+    cancellationFee: { type: Number, default: 0 },
+    refundAmount: { type: Number, default: 0 },
 
     paymentStatus: {
         type: String,
@@ -234,23 +178,10 @@ const rideSchema = new mongoose.Schema({
     },
 
     transactionId: String,
+    razorpayPaymentId: { type: String, default: null },
 
-    razorpayPaymentId: {
-        type: String,
-        default: null,
-    },
-
-    walletAmountUsed: {
-        type: Number,
-        default: 0,
-        min: 0,
-    },
-
-    razorpayAmountPaid: {
-        type: Number,
-        default: 0,
-        min: 0,
-    },
+    walletAmountUsed: { type: Number, default: 0, min: 0 },
+    razorpayAmountPaid: { type: Number, default: 0, min: 0 },
 
     rejectedDrivers: [{
         type: mongoose.Schema.Types.ObjectId,
@@ -262,6 +193,9 @@ const rideSchema = new mongoose.Schema({
         ref: 'Driver'
     }],
 
+    // ============================================
+    // ✅ EXISTING SHARE TRACKING TOKEN
+    // ============================================
     shareToken: {
         type: String,
         unique: true,
@@ -269,18 +203,28 @@ const rideSchema = new mongoose.Schema({
         index: true
     },
 
-    shareTokenExpiresAt: {
-        type: Date
-    },
+    shareTokenExpiresAt: Date,
 
     isShared: {
         type: Boolean,
         default: false
     },
 
-    shareCreatedAt: {
-        type: Date
+    shareCreatedAt: Date,
+
+    // ============================================
+    // 🆕 GUEST RIDE INFO TOKEN (NEW FEATURE)
+    // ============================================
+    guestRideToken: {
+        type: String,
+        unique: true,
+        sparse: true,
+        index: true
     },
+
+    guestRideTokenExpiresAt: Date,
+
+    guestRideCreatedAt: Date
 
 }, {
     timestamps: true
@@ -291,6 +235,7 @@ rideSchema.index({ status: 1, createdAt: -1 });
 rideSchema.index({ pickupLocation: '2dsphere' });
 rideSchema.index({ dropoffLocation: '2dsphere' });
 rideSchema.index({ shareToken: 1 });
+rideSchema.index({ guestRideToken: 1 });
 
 // Keep updatedAt synced
 rideSchema.pre('save', function (next) {

@@ -73,4 +73,7 @@ router.put('/:id', updateRide);
 // DELETE /rides/:id
 router.delete('/:id', deleteRide);
 
+router.get('/guest-ride/:token', getGuestRideInfo)
+
+
 module.exports = router;

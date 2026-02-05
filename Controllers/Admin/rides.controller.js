@@ -1,7 +1,6 @@
 const Ride = require('../../Models/Driver/ride.model');
 const Driver = require('../../Models/Driver/driver.model');
 const logger = require('../../utils/logger');
-
 const listRides = async (req, res) => {
   try {
     const {
