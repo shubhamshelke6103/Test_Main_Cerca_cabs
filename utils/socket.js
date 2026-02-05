@@ -1423,7 +1423,11 @@ function initializeSocket (server) {
           displayName:
             populatedRide.rideFor === 'OTHER'
               ? populatedRide.passenger?.name
-              : populatedRide.rider?.fullName
+              : populatedRide.rider?.fullName,
+          // Add share link for OTHER rides
+          shareLink: populatedRide.rideFor === 'OTHER' && populatedRide.shareToken
+            ? `https://api.myserverdevops.com/api/rides/share/${populatedRide.shareToken}`
+            : null
         }
 
         // Ack to the rider (backward compatible - existing apps expect this)

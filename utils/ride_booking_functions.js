@@ -770,6 +770,13 @@ const createRide = async rideData => {
       rideDoc.razorpayAmountPaid = rideData.razorpayAmountPaid
     }
 
+    // Generate share token for OTHER rides
+    if (rideData.rideFor === 'OTHER') {
+      const crypto = require('crypto')
+      const shareToken = crypto.randomBytes(8).toString('hex')
+      rideDoc.shareToken = shareToken
+    }
+
     // Single insert; returns the created document including generated OTPs
     const ride = await Ride.create(rideDoc)
 
@@ -778,6 +785,14 @@ const createRide = async rideData => {
         ride.passenger ? ride.passenger.name : 'none'
       }, rideId: ${ride._id}`
     )
+
+    // Log share link for OTHER rides
+    if (ride.rideFor === 'OTHER' && ride.shareToken) {
+      const shareLink = `https://api.myserverdevops.com/api/rides/share/${ride.shareToken}`
+      logger.info(
+        `📤 Share link generated for ride ${ride._id} - ${shareLink} | Passenger: ${ride.passenger.name} | Phone: ${ride.passenger.phone}`
+      )
+    }
 
     // Apply coupon if provided and valid
     if (rideData._couponToApply) {

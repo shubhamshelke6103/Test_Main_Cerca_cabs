@@ -61,6 +61,14 @@ const rideSchema = new mongoose.Schema(
       default: 'RIDER'
     },
 
+    // ⭐ Share Link Token (for rideFor = OTHER)
+    shareToken: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true
+    },
+
     pickupAddress: String,
     dropoffAddress: String,
 
