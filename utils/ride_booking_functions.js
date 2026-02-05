@@ -743,6 +743,9 @@ const createRide = async rideData => {
       service: selectedService, // Legacy field for backward compatibility
       promoCode: rideData.promoCode || null,
       discount: discount,
+      // Store rideFor and passenger information
+      rideFor: rideData.rideFor || 'SELF',
+      passenger: rideData.passenger || null,
       // Store fare breakdown for transparency
       fareBreakdown: fareBreakdown ? {
         baseFare: fareBreakdown.baseFare,
@@ -769,6 +772,12 @@ const createRide = async rideData => {
 
     // Single insert; returns the created document including generated OTPs
     const ride = await Ride.create(rideDoc)
+
+    logger.info(
+      `Ride created with rideFor: ${ride.rideFor}, passenger: ${
+        ride.passenger ? ride.passenger.name : 'none'
+      }, rideId: ${ride._id}`
+    )
 
     // Apply coupon if provided and valid
     if (rideData._couponToApply) {
