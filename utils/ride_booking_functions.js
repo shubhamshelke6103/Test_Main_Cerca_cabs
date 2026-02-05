@@ -798,7 +798,7 @@ const createRide = async rideData => {
 
     // Log share link for OTHER rides
     if (ride.rideFor === 'OTHER' && ride.shareToken) {
-      const shareLink = `https://api.myserverdevops.com/api/rides/share/${ride.shareToken}`
+      const shareLink = `https://api.myserverdevops.com/api/rides/shared/${ride.shareToken}`
       logger.info(
         `📤 Share link generated for ride ${ride._id} - ${shareLink} | Passenger: ${ride.passenger.name} | Phone: ${ride.passenger.phone}`
       )

@@ -1430,7 +1430,7 @@ function initializeSocket (server) {
               : populatedRide.rider?.fullName,
           // Add share link for OTHER rides
           shareLink: populatedRide.rideFor === 'OTHER' && populatedRide.shareToken
-            ? `https://api.myserverdevops.com/api/rides/share/${populatedRide.shareToken}`
+            ? `https://api.myserverdevops.com/api/rides/shared/${populatedRide.shareToken}`
             : null
         }
 
