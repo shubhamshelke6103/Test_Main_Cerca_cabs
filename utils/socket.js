@@ -49,6 +49,11 @@ const {
 const SupportIssue = require('../Models/support/supportIssue.model')
 const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
+const getId = value => {
+  if (!value) return null
+  return value._id ? value._id.toString() : value.toString()
+}
+
 
 let io
 
@@ -1567,17 +1572,24 @@ try {
 
         const roomName = `ride_${rideId}`
 
-        // ============================
-        // 🔥 FORCE JOIN RIDE ROOM (SERVER-SIDE)
-        // ============================
+       // ============================
+// 🔥 FORCE JOIN RIDE ROOM (SAFE VERSION)
+// ============================
 
-        io.in(
-          `user_${assignedRide.rider._id || assignedRide.rider}`
-        ).socketsJoin(roomName)
+const riderId = getId(assignedRide.rider)
+const driverId = getId(assignedRide.driver)
 
-        io.in(
-          `driver_${assignedRide.driver._id || assignedRide.driver}`
-        ).socketsJoin(roomName)
+if (!riderId || !driverId) {
+  logger.error("❌ rideAccepted: Missing rider or driver", {
+    rideId,
+    rider: assignedRide.rider,
+    driver: assignedRide.driver
+  })
+  return
+}
+
+io.in(`user_${riderId}`).socketsJoin(roomName)
+io.in(`driver_${driverId}`).socketsJoin(roomName)
 
         // ⭐⭐⭐ NEW BLOCK — PASSENGER PARTICIPANT AUTO JOIN ⭐⭐⭐
         if (assignedRide.participants?.length) {
@@ -1602,7 +1614,7 @@ try {
         // ============================
         // NOTIFY RIDER
         // ============================
-        io.to(`user_${assignedRide.rider._id || assignedRide.rider}`).emit(
+        io.to(`user_${riderId}`).emit(
           'rideAccepted',
           rideWithMetadata
         )
@@ -1642,7 +1654,8 @@ try {
         // CREATE NOTIFICATIONS
         // ============================
         await createNotification({
-          recipientId: assignedRide.rider._id,
+          // recipientId: assignedRide.rider._id,
+          recipientId: riderId,
           recipientModel: 'User',
           title: 'Driver Accepted',
           message: `${assignedRide.driver.name} is coming to pick you up`,
