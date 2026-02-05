@@ -776,7 +776,7 @@ const createRide = async rideData => {
     )
     if (rideData.rideFor === 'OTHER') {
       const crypto = require('crypto')
-      const shareToken = crypto.randomBytes(8).toString('hex')
+      const shareToken = crypto.randomBytes(32).toString('base64url')
       rideDoc.shareToken = shareToken
       logger.info(
         `✅ [ShareToken Generated] rideFor='OTHER' detected, shareToken: ${shareToken}`
