@@ -10,15 +10,53 @@ const rideSchema = new mongoose.Schema({
         ref: 'User',
         required: true,
     },
+
     driver: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Driver',
         required: false,
     },
 
+    // ============================================
+    // ✅ UBER / OLA STYLE PARTICIPANTS (NEW)
+    // ============================================
+    participants: [
+        {
+            role: {
+                type: String,
+                enum: ['BOOKER', 'PASSENGER'],
+                required: true
+            },
+
+            user: {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+                required: false
+            },
+
+            name: {
+                type: String
+            },
+
+            phoneNumber: {
+                type: String
+            },
+
+            socketId: {
+                type: String
+            },
+
+            notified: {
+                type: Boolean,
+                default: false
+            }
+        }
+    ],
+
     pickupAddress: {
         type: String
     },
+
     dropoffAddress: {
         type: String
     },
@@ -66,26 +104,23 @@ const rideSchema = new mongoose.Schema({
         default: 'requested',
     },
 
-    // 🔹 Existing (kept as-is)
     rideType: {
         type: String,
         enum: ['normal', 'whole_day', 'custom'],
         default: 'normal',
     },
 
-    // ✅ NEW — booking behavior (NO breaking change)
     bookingType: {
         type: String,
         enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'],
         default: 'INSTANT',
     },
 
-    // ✅ NEW — flexible booking data
     bookingMeta: {
-        startTime: Date,      // full-day / rental
-        endTime: Date,        // full-day / rental
-        days: Number,         // rental (7, 15, etc.)
-        dates: [Date],        // date-wise booking
+        startTime: Date,
+        endTime: Date,
+        days: Number,
+        dates: [Date],
     },
 
     cancelledBy: {
@@ -94,7 +129,6 @@ const rideSchema = new mongoose.Schema({
         default: null,
     },
 
-    // 🔹 Existing custom schedule (kept for backward compatibility)
     customSchedule: {
         startDate: Date,
         endDate: Date,
@@ -125,24 +159,23 @@ const rideSchema = new mongoose.Schema({
     estimatedArrivalTime: Date,
     driverArrivedAt: Date,
 
-    // Vehicle type and service information
     vehicleType: {
         type: String,
         enum: ['sedan', 'suv', 'hatchback', 'auto'],
         required: false,
     },
+
     vehicleService: {
         type: String,
         enum: ['cercaSmall', 'cercaMedium', 'cercaLarge'],
         required: false,
     },
-    // Legacy service field (kept for backward compatibility)
+
     service: {
         type: String,
         required: false,
     },
 
-    // Fare breakdown for transparency
     fareBreakdown: {
         baseFare: Number,
         distanceFare: Number,
@@ -229,20 +262,22 @@ const rideSchema = new mongoose.Schema({
         ref: 'Driver'
     }],
 
-    // Ride sharing fields
     shareToken: {
         type: String,
         unique: true,
         sparse: true,
         index: true
     },
+
     shareTokenExpiresAt: {
         type: Date
     },
+
     isShared: {
         type: Boolean,
         default: false
     },
+
     shareCreatedAt: {
         type: Date
     },

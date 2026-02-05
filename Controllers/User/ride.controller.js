@@ -15,7 +15,10 @@ const {
   calculateHaversineDistance
 } = rideBookingFunctions
 const Driver = require('../../Models/Driver/driver.model')
-const { generateTokenForRide, validateShareToken } = require('../../utils/shareToken.service')
+const {
+  generateTokenForRide,
+  validateShareToken
+} = require('../../utils/shareToken.service')
 const { sanitizeRideData } = require('../../middleware/shareToken.middleware')
 
 /**
@@ -25,7 +28,10 @@ const { sanitizeRideData } = require('../../middleware/shareToken.middleware')
 const createRide = async (req, res) => {
   try {
     const rideData = req.body
-    const riderId = rideData.rider || rideData.riderId
+    // const riderId = rideData.rider || rideData.riderId
+    const riderId =
+      getUserIdFromToken(req) || rideData.rider || rideData.riderId
+      rideData.rider = riderId
 
     // Check for existing active ride to prevent duplicates
     if (riderId) {
@@ -34,11 +40,15 @@ const createRide = async (req, res) => {
       // ============================
       // Check and clean up any stale Redis locks before checking MongoDB
       try {
-        const { checkAndCleanStaleRideLocks } = require('../../utils/ride_booking_functions')
+        const {
+          checkAndCleanStaleRideLocks
+        } = require('../../utils/ride_booking_functions')
         await checkAndCleanStaleRideLocks(riderId)
       } catch (cleanupError) {
         // Don't fail ride creation if cleanup check fails - log for monitoring
-        logger.warn(`⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`)
+        logger.warn(
+          `⚠️ Stale lock check failed for rider ${riderId}: ${cleanupError.message}`
+        )
       }
 
       const existingActiveRide = await Ride.findOne({
@@ -105,11 +115,82 @@ const createRide = async (req, res) => {
     rideData.startOtp = startOtp
     rideData.stopOtp = stopOtp
 
-    // Create a new ride
-    const ride = new Ride(rideData)
-    await ride.save()
+    // ======================================
+// ❗ Passenger Validation (Uber Mandatory)
+// ======================================
 
-    logger.info(`Ride created successfully with ID: ${ride._id}`)
+if (rideData.passenger) {
+  if (!rideData.passenger.name || !rideData.passenger.phoneNumber) {
+    return res.status(400).json({
+      message: 'Passenger name and phoneNumber required'
+    })
+  }
+}
+
+// ======================================
+// 🚕 UBER / OLA PARTICIPANTS CREATION
+// ======================================
+
+let participants = []
+
+// BOOKER
+participants.push({
+  role: 'BOOKER',
+  user: riderId
+})
+
+// PASSENGER
+if (rideData.passenger && rideData.passenger.phoneNumber) {
+
+  participants.push({
+    role: 'PASSENGER',
+    name: rideData.passenger.name,
+    phoneNumber: rideData.passenger.phoneNumber
+  })
+
+} else {
+
+  // Self ride
+  participants.push({
+    role: 'PASSENGER',
+    user: riderId
+  })
+
+}
+
+rideData.participants = participants
+delete rideData.passenger
+
+
+// ======================================
+// 🚕 CREATE RIDE DOCUMENT
+// ======================================
+
+const ride = new Ride(rideData)
+
+
+// ======================================
+// 🚕 AUTO SHARE TRACKING FOR GUEST PASSENGER
+// ======================================
+
+const passenger = ride.participants.find(p => p.role === 'PASSENGER')
+
+if (passenger && passenger.phoneNumber && !passenger.user) {
+
+  const tokenData = generateTokenForRide(ride)
+
+  ride.shareToken = tokenData.token
+  ride.shareTokenExpiresAt = tokenData.expiresAt
+  ride.isShared = true
+  ride.shareCreatedAt = new Date()
+}
+
+
+// ✅ SINGLE SAVE (Better Performance + No Race Condition)
+await ride.save()
+
+
+logger.info(`Ride created successfully with ID: ${ride._id}`)
 
     // ============================
     // 🔥 PUSH RIDE TO REDIS QUEUE
@@ -180,12 +261,12 @@ const getAllRides = async (req, res) => {
 const getRideById = async (req, res) => {
   try {
     const rideId = req.params.id
-    
+
     // Reject non-ObjectId values (like favicon.ico, robots.txt, etc.)
     if (!mongoose.Types.ObjectId.isValid(rideId)) {
       return res.status(404).json({ message: 'Ride not found' })
     }
-    
+
     const ride = await Ride.findById(rideId).populate('driver rider')
     if (!ride) {
       return res.status(404).json({ message: 'Ride not found' })
@@ -386,7 +467,8 @@ const calculateFare = async (req, res) => {
       })
     }
 
-    const { perKmRate, minimumFare, platformFees, driverCommissions } = settings.pricingConfigurations
+    const { perKmRate, minimumFare, platformFees, driverCommissions } =
+      settings.pricingConfigurations
 
     // Map vehicle type directly to vehicleService keys
     const vehicleServiceKeyMap = {
@@ -462,10 +544,10 @@ const calculateFare = async (req, res) => {
 
     // Calculate driver and admin earnings
     const driverEarnings = driverCommissions
-      ? Math.round((finalFare * (driverCommissions / 100)) * 100) / 100
-      : Math.round((finalFare - (finalFare * (platformFees / 100))) * 100) / 100
+      ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
+      : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
     const platformFee = platformFees
-      ? Math.round((finalFare * (platformFees / 100)) * 100) / 100
+      ? Math.round(finalFare * (platformFees / 100) * 100) / 100
       : 0
     const adminEarnings = platformFee
 
@@ -582,7 +664,8 @@ const calculateAllFares = async (req, res) => {
       })
     }
 
-    const { perKmRate, minimumFare, platformFees, driverCommissions } = settings.pricingConfigurations
+    const { perKmRate, minimumFare, platformFees, driverCommissions } =
+      settings.pricingConfigurations
     const vehicleServices = settings.vehicleServices || {}
 
     // Calculate fare for each enabled vehicle service
@@ -653,10 +736,10 @@ const calculateAllFares = async (req, res) => {
 
       // Calculate driver and admin earnings
       const driverEarnings = driverCommissions
-        ? Math.round((finalFare * (driverCommissions / 100)) * 100) / 100
-        : Math.round((finalFare - (finalFare * (platformFees / 100))) * 100) / 100
+        ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
+        : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
       const platformFee = platformFees
-        ? Math.round((finalFare * (platformFees / 100)) * 100) / 100
+        ? Math.round(finalFare * (platformFees / 100) * 100) / 100
         : 0
       const adminEarnings = platformFee
 
@@ -699,14 +782,18 @@ const calculateAllFares = async (req, res) => {
  * @param {Object} req - Express request object
  * @returns {string|null} User ID or null if not found
  */
-function getUserIdFromToken(req) {
+function getUserIdFromToken (req) {
   try {
-    const authHeader = req.headers.authorization || req.headers.Authorization || ''
+    const authHeader =
+      req.headers.authorization || req.headers.Authorization || ''
     if (!authHeader.startsWith('Bearer ')) {
       return null
     }
     const token = authHeader.split(' ')[1]
-    const decoded = jwt.verify(token, "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%")
+    const decoded = jwt.verify(
+      token,
+      '@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%'
+    )
     return decoded.id || decoded.userId || null
   } catch (error) {
     return null
@@ -719,7 +806,9 @@ function getUserIdFromToken(req) {
  */
 const generateShareLink = async (req, res) => {
   try {
-    logger.info(`[generateShareLink] Request received: ${req.method} ${req.path}`)
+    logger.info(
+      `[generateShareLink] Request received: ${req.method} ${req.path}`
+    )
     logger.info(`[generateShareLink] Params:`, req.params)
     logger.info(`[generateShareLink] Headers:`, {
       authorization: req.headers.authorization ? 'Bearer ***' : 'missing',
@@ -770,7 +859,10 @@ const generateShareLink = async (req, res) => {
     let shareToken = ride.shareToken
     let shareTokenExpiresAt = ride.shareTokenExpiresAt
 
-    if (!shareToken || (shareTokenExpiresAt && new Date() > new Date(shareTokenExpiresAt))) {
+    if (
+      !shareToken ||
+      (shareTokenExpiresAt && new Date() > new Date(shareTokenExpiresAt))
+    ) {
       const tokenData = generateTokenForRide(ride)
       shareToken = tokenData.token
       shareTokenExpiresAt = tokenData.expiresAt
@@ -793,7 +885,7 @@ const generateShareLink = async (req, res) => {
     // Generate share URL
     // Priority: SHARE_BASE_URL env var > FRONTEND_URL env var > derive from API domain > default fallback
     let baseUrl = process.env.SHARE_BASE_URL || process.env.FRONTEND_URL
-    
+
     // If no env var set, try to derive from API domain
     // If API is api.myserverdevops.com, frontend is likely myserverdevops.com
     if (!baseUrl) {
@@ -816,15 +908,18 @@ const generateShareLink = async (req, res) => {
         logger.warn('Could not parse API URL for share link generation:', e)
       }
     }
-    
+
     // Use API domain for share links (since HTML page is served by Express backend)
     // The share link should point to the backend server where the HTML page is hosted
-    const apiUrl = process.env.API_URL || req.protocol + '://' + req.get('host') || 'https://api.myserverdevops.com'
-    
+    const apiUrl =
+      process.env.API_URL ||
+      req.protocol + '://' + req.get('host') ||
+      'https://api.myserverdevops.com'
+
     // Generate share URL pointing to Express HTML page
     // Format: https://api.myserverdevops.com/shared-ride/{token}
     const shareUrl = `${apiUrl}/shared-ride/${shareToken}`
-    
+
     logger.info(`Share URL generated: ${shareUrl} (API URL: ${apiUrl})`)
 
     logger.info(`Share link generated for ride ${rideId} by user ${userId}`)
@@ -907,7 +1002,12 @@ const getSharedRide = async (req, res) => {
     // Sanitize ride data (remove sensitive information)
     const sanitizedRide = sanitizeRideData(ride)
 
-    logger.info(`Shared ride accessed: ${ride._id} with token ${shareToken.substring(0, 8)}...`)
+    logger.info(
+      `Shared ride accessed: ${ride._id} with token ${shareToken.substring(
+        0,
+        8
+      )}...`
+    )
 
     res.status(200).json({
       success: true,
@@ -951,7 +1051,13 @@ const serveSharedRidePage = async (req, res) => {
         ride.isShared = false
         await ride.save()
       }
-      return res.status(400).send(`Share link ${validation.reason === 'EXPIRED' ? 'has expired' : 'is invalid'}`)
+      return res
+        .status(400)
+        .send(
+          `Share link ${
+            validation.reason === 'EXPIRED' ? 'has expired' : 'is invalid'
+          }`
+        )
     }
 
     // Check if ride is completed or cancelled
@@ -965,13 +1071,13 @@ const serveSharedRidePage = async (req, res) => {
     // Read and serve HTML file
     // Path from Controllers/User/ride.controller.js to public/views/shared-ride.html
     const htmlPath = path.join(__dirname, '../../public/views/shared-ride.html')
-    
+
     try {
       if (!fs.existsSync(htmlPath)) {
         logger.error(`HTML file not found at: ${htmlPath}`)
         return res.status(500).send('Page not found')
       }
-      
+
       const htmlContent = fs.readFileSync(htmlPath, 'utf8')
       res.setHeader('Content-Type', 'text/html')
       res.status(200).send(htmlContent)
