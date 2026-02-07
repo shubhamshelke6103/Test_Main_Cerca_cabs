@@ -2466,16 +2466,31 @@ function initializeSocket (server) {
         )
 
         // Handle payment adjustment if fare changed
+        // TODO: Implement handleFareDifference function for pre-paid payment refunds
+        // For post-ride payments (RAZORPAY with pending status), fare difference is handled
+        // by charging the final recalculated fare. For pre-paid payments (WALLET or pre-paid RAZORPAY),
+        // we should refund the difference if fare decreased or charge additional if fare increased.
         if (
           Math.abs(fareDifference) > 0.01 &&
           completedRide.paymentMethod !== 'CASH'
         ) {
-          await handleFareDifference(
-            completedRide,
-            oldFare,
-            completedRide.fare,
-            completedRide.paymentMethod
+          logger.info(
+            `[Fare Difference] Fare changed by ₹${fareDifference} for ride ${rideId}, paymentMethod: ${completedRide.paymentMethod}, paymentStatus: ${completedRide.paymentStatus || 'not set'}`
           )
+          
+          // For post-ride RAZORPAY payments, fare difference is acceptable - user will pay final fare
+          if (completedRide.paymentMethod === 'RAZORPAY' && completedRide.paymentStatus === 'pending') {
+            logger.info(
+              `[Fare Difference] Post-ride payment - fare difference will be reflected in final payment amount`
+            )
+          } else {
+            // For pre-paid payments, fare difference should be handled (refund or additional charge)
+            logger.warn(
+              `[Fare Difference] Pre-paid payment with fare difference - refund/adjustment needed but not implemented yet. Old fare: ₹${oldFare}, New fare: ₹${completedRide.fare}, Difference: ₹${fareDifference}`
+            )
+            // TODO: Implement refund logic for pre-paid payments when fare decreases
+            // TODO: Implement additional charge logic for pre-paid payments when fare increases
+          }
         }
 
         // Log ride data for debugging
