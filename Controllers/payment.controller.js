@@ -185,4 +185,233 @@ const handleRazorpayWebhook = async (req, res) => {
   }
 };
 
-module.exports = { initiatePayment, handleRazorpayWebhook };
+/**
+ * Create Razorpay order for ride payment (post-ride)
+ * POST /api/v1/rides/:rideId/pay-online
+ */
+const createRidePaymentOrder = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const { userId } = req.body; // Get userId from request body (frontend will send it)
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const Ride = require('../Models/Driver/ride.model');
+    const ride = await Ride.findById(rideId);
+
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      });
+    }
+
+    // Verify ride belongs to user
+    const riderId = ride.rider._id || ride.rider;
+    if (riderId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized: This ride does not belong to you'
+      });
+    }
+
+    // Verify ride status and payment method
+    if (ride.status !== 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Ride must be completed before payment'
+      });
+    }
+
+    if (ride.paymentMethod !== 'RAZORPAY') {
+      return res.status(400).json({
+        success: false,
+        message: 'Ride payment method is not RAZORPAY'
+      });
+    }
+
+    if (ride.paymentStatus === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment already completed for this ride'
+      });
+    }
+
+    // Validate amount
+    const amount = ride.fare || 0;
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ride fare amount'
+      });
+    }
+
+    if (amount < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum payment amount is ₹10'
+      });
+    }
+
+    // Create Razorpay order with rideId and userId in notes
+    const options = {
+      amount: amount * 100, // Convert to paise
+      currency: 'INR',
+      notes: {
+        rideId: rideId,
+        userId: userId.toString(),
+        type: 'ride_payment'
+      }
+    };
+
+    const order = await instance.orders.create(options);
+
+    if (order) {
+      logger.info(`Ride payment order created - Ride: ${rideId}, Order: ${order.id}, Amount: ₹${amount}`);
+      res.status(200).json({
+        success: true,
+        message: 'Order created successfully',
+        data: {
+          orderId: order.id,
+          amount: amount,
+          key: key // Razorpay key for frontend
+        }
+      });
+    } else {
+      logger.error('Failed to create Razorpay order for ride payment');
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create payment order',
+        error: 'ORDER_CREATION_FAILED'
+      });
+    }
+  } catch (error) {
+    logger.error('Error creating ride payment order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create payment order',
+      error: error.message || 'INTERNAL_SERVER_ERROR'
+    });
+  }
+};
+
+/**
+ * Verify Razorpay payment for ride
+ * POST /api/v1/rides/:rideId/verify-payment
+ */
+const verifyRidePayment = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const { razorpay_payment_id, razorpay_order_id, userId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    if (!razorpay_payment_id || !razorpay_order_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment ID and Order ID are required'
+      });
+    }
+
+    const Ride = require('../Models/Driver/ride.model');
+    const ride = await Ride.findById(rideId);
+
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      });
+    }
+
+    // Verify ride belongs to user
+    const riderId = ride.rider._id || ride.rider;
+    if (riderId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized: This ride does not belong to you'
+      });
+    }
+
+    // Fetch payment from Razorpay
+    const payment = await instance.payments.fetch(razorpay_payment_id);
+
+    // Verify payment status
+    if (payment.status !== 'captured' && payment.status !== 'authorized') {
+      return res.status(400).json({
+        success: false,
+        message: `Payment not completed. Status: ${payment.status}`
+      });
+    }
+
+    // Verify payment amount matches ride fare
+    const paymentAmount = payment.amount / 100; // Convert from paise
+    const rideFare = ride.fare || 0;
+
+    if (Math.abs(paymentAmount - rideFare) > 0.01) {
+      logger.warn(`Payment amount mismatch - Payment: ₹${paymentAmount}, Ride Fare: ₹${rideFare}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment amount mismatch'
+      });
+    }
+
+    // Update ride payment status
+    ride.paymentStatus = 'completed';
+    ride.razorpayPaymentId = razorpay_payment_id;
+    ride.transactionId = razorpay_payment_id;
+    await ride.save();
+
+    logger.info(`Ride payment verified - Ride: ${rideId}, Payment ID: ${razorpay_payment_id}`);
+
+    // Emit socket event for real-time update (optional)
+    try {
+      const { getSocketIO } = require('../utils/socket');
+      const io = getSocketIO();
+      if (io && ride.driverSocketId) {
+        io.to(ride.driverSocketId).emit('paymentCompleted', {
+          rideId: rideId,
+          paymentId: razorpay_payment_id,
+          amount: paymentAmount
+        });
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit paymentCompleted socket event:', socketError);
+      // Don't fail the request if socket emit fails
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment verified successfully',
+      data: {
+        rideId: rideId,
+        paymentId: razorpay_payment_id,
+        amount: paymentAmount,
+        status: 'completed'
+      }
+    });
+  } catch (error) {
+    logger.error('Error verifying ride payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify payment',
+      error: error.message || 'INTERNAL_SERVER_ERROR'
+    });
+  }
+};
+
+module.exports = { 
+  initiatePayment, 
+  handleRazorpayWebhook,
+  createRidePaymentOrder,
+  verifyRidePayment
+};

@@ -1150,7 +1150,8 @@ function initializeSocket (server) {
 
         // ===== YOUR EXISTING CODE CONTINUES =====
 
-        // Verify Razorpay payment if payment method is RAZORPAY
+        // Verify Razorpay payment if payment method is RAZORPAY AND payment ID is provided
+        // If paymentMethod is RAZORPAY but no paymentId, it means "pay after ride" - skip verification
         if (data.paymentMethod === 'RAZORPAY' && data.razorpayPaymentId) {
           try {
             const Razorpay = require('razorpay')
@@ -1409,6 +1410,20 @@ function initializeSocket (server) {
         const populatedRide = await Ride.findById(ride._id)
           .populate('rider', 'fullName name phone email')
           .exec()
+
+        // ============================
+        // JOIN RIDE ROOM (for event reception)
+        // ============================
+        // Ensure rider joins ride room immediately for event reception
+        if (populatedRide.userSocketId) {
+          const riderSocket = io.sockets.sockets.get(populatedRide.userSocketId)
+          if (riderSocket) {
+            riderSocket.join(`ride_${populatedRide._id}`)
+            logger.info(`✅ Rider ${populatedRide.userSocketId} joined ride room: ride_${populatedRide._id}`)
+          } else {
+            logger.warn(`⚠️ Rider socket not found: ${populatedRide.userSocketId}`)
+          }
+        }
 
         // ============================
         // PUSH RIDE TO QUEUE (Redis or in-process fallback)
@@ -2378,8 +2393,44 @@ function initializeSocket (server) {
           return
         }
 
-        // Verify OTP if provided
+        // Check ride status BEFORE OTP verification to prevent race condition
+        const Ride = require('../Models/Driver/ride.model')
+        const currentRide = await Ride.findById(rideId).select('status')
+        if (!currentRide) {
+          logger.warn(`Ride not found - rideId: ${rideId}`)
+          socket.emit('rideError', { message: 'Ride not found' })
+          return
+        }
+
+        // If ride is already completed, skip OTP verification but still process
+        if (currentRide.status === 'completed') {
+          logger.warn(`Ride ${rideId} is already completed, skipping OTP verification`)
+          // Still emit rideCompleted event to ensure apps receive it
+          const completedRide = await Ride.findById(rideId).populate('rider driver')
+          if (completedRide) {
+            io.to(`ride_${rideId}`).emit('rideCompleted', completedRide)
+            if (completedRide.userSocketId) {
+              io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+            }
+            if (completedRide.driverSocketId) {
+              io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+            }
+          }
+          return
+        }
+
+        // Verify OTP if provided (only if ride is still in progress)
         if (otp) {
+          // Double-check ride status is still in_progress before verifying OTP
+          const statusCheck = await Ride.findById(rideId).select('status')
+          if (statusCheck.status !== 'in_progress') {
+            logger.warn(`Ride ${rideId} status changed to ${statusCheck.status} before OTP verification`)
+            socket.emit('rideError', { 
+              message: `Ride is not in progress (status: ${statusCheck.status})` 
+            })
+            return
+          }
+
           const { success } = await verifyStopOtp(rideId, otp)
           if (!success) {
             logger.warn(`Invalid stop OTP - rideId: ${rideId}`)
@@ -2591,21 +2642,30 @@ function initializeSocket (server) {
           // Don't fail ride completion if referral processing fails
         })
 
+        // Emit rideCompleted event using multiple strategies for reliability
+        // Strategy 1: Emit to ride room (both rider and driver)
         io.to(`ride_${completedRide._id}`).emit('rideCompleted', completedRide)
+        logger.info(`✅ Emitted rideCompleted to room: ride_${completedRide._id}`)
+
+        // Strategy 2: Emit directly to rider socket (if available)
+        if (completedRide.userSocketId) {
+          io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+          logger.info(`✅ Emitted rideCompleted to rider socket: ${completedRide.userSocketId}`)
+        } else {
+          logger.warn(`⚠️ Rider socketId not available for ride ${rideId}`)
+        }
+
+        // Strategy 3: Emit directly to driver socket (if available)
+        if (completedRide.driverSocketId) {
+          io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+          logger.info(`✅ Emitted rideCompleted to driver socket: ${completedRide.driverSocketId}`)
+        } else {
+          logger.warn(`⚠️ Driver socketId not available for ride ${rideId}`)
+        }
 
         logger.info(
-          `Ride completion notification sent to rider - rideId: ${rideId}`
+          `Ride completion notifications sent - rideId: ${rideId}, room: ride_${completedRide._id}, riderSocket: ${completedRide.userSocketId || 'N/A'}, driverSocket: ${completedRide.driverSocketId || 'N/A'}`
         )
-
-        if (completedRide.driverSocketId) {
-          io.to(completedRide.driverSocketId).emit(
-            'rideCompleted',
-            completedRide
-          )
-          logger.info(
-            `Ride completion confirmation sent to driver - rideId: ${rideId}`
-          )
-        }
 
         // Expire share token and broadcast to shared ride room
         if (completedRide.shareToken && completedRide.isShared) {

@@ -17,6 +17,7 @@ const {
   serveSharedRidePage
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
+const { createRidePaymentOrder, verifyRidePayment } = require('../Controllers/payment.controller');
 
 const router = express.Router();
 
@@ -46,8 +47,14 @@ router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
 // POST /rides/:rideId/share - Generate share link (requires auth)
 router.post('/:rideId/share', generateShareLink);
 
-// DELETE /rides/:rideId/share - Revoke share link (requires auth)
+// DELETE /rides/:rideId/share - Revoke share linRk (requires auth)
 router.delete('/:rideId/share', revokeShareLink);
+
+// POST /rides/:rideId/pay-online - Create Razorpay order for ride payment
+router.post('/:rideId/pay-online', createRidePaymentOrder);
+
+// POST /rides/:rideId/verify-payment - Verify Razorpay payment for ride
+router.post('/:rideId/verify-payment', verifyRidePayment);
 
 // Get rides for a specific user
 // GET /rides/user/:userId

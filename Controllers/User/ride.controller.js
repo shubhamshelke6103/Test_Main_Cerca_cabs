@@ -379,13 +379,33 @@ const deleteRide = async (req, res) => {
 /**
  * @desc    Get rides for a specific user by user ID
  * @route   GET /rides/user/:userId
+ * @query   limit - Optional limit for number of rides to return
+ * @query   status - Optional status filter (completed, cancelled, etc.)
  */
 const getRidesByUserId = async (req, res) => {
   try {
-    const rides = await Ride.find({ rider: req.params.userId })
+    const { limit, status } = req.query
+    const userId = req.params.userId
+    
+    let query = { rider: userId }
+    
+    // Optional status filter
+    if (status) {
+      query.status = status
+    }
+    
+    let ridesQuery = Ride.find(query)
       .populate('driver', 'name phone rating totalTrips profilePic vehicleInfo')
       .populate('rider', 'name email phoneNumber')
       .sort({ updatedAt: -1 }) // Sort by most recent activity first
+    
+    // Apply limit if provided
+    if (limit && !isNaN(parseInt(limit))) {
+      ridesQuery = ridesQuery.limit(parseInt(limit))
+    }
+    
+    const rides = await ridesQuery
+    
     // Return empty array instead of 404 when no rides found
     res.status(200).json(rides || [])
   } catch (error) {
