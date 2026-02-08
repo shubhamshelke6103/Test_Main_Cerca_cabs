@@ -1155,10 +1155,16 @@ function initializeSocket (server) {
         if (data.paymentMethod === 'RAZORPAY' && data.razorpayPaymentId) {
           try {
             const Razorpay = require('razorpay')
+            // Test keys (default fallback)
             const razorpayKey =
-              process.env.RAZORPAY_ID || 'rzp_live_S6q5OGF0WYChTn'
+              process.env.RAZORPAY_ID || 'rzp_test_Rp3ejYlVfY449V'
             const razorpaySecret =
-              process.env.RAZORPAY_SECRET || 'EZv5VecWiWi0FLyffYLDTM3H'
+              process.env.RAZORPAY_SECRET || 'FORM4hrZrQO8JFIiYsQSC83N'
+            // Live keys (commented out for testing)
+            // const razorpayKey =
+            //   process.env.RAZORPAY_ID || 'rzp_live_S6q5OGF0WYChTn'
+            // const razorpaySecret =
+            //   process.env.RAZORPAY_SECRET || 'EZv5VecWiWi0FLyffYLDTM3H'
             const razorpayInstance = new Razorpay({
               key_id: razorpayKey,
               key_secret: razorpaySecret
