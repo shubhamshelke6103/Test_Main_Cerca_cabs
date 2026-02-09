@@ -1414,6 +1414,105 @@ function initializeSocket (server) {
           }
         }
 
+        // Process pure WALLET payment deduction upfront (at ride creation)
+        // This ensures cancellation refunds work correctly
+        if (data.paymentMethod === 'WALLET' && !data.walletAmountUsed) {
+          // Only process pure WALLET (not hybrid which is handled above)
+          try {
+            const User = require('../Models/User/user.model')
+            const WalletTransaction = require('../Models/User/walletTransaction.model')
+            const riderId = data.rider || data.riderId
+            const fareAmount = ride.fare || 0
+
+            if (fareAmount > 0) {
+              // Get user
+              const user = await User.findById(riderId)
+              if (!user) {
+                logger.warn(
+                  `[Wallet Payment] User not found for upfront deduction - Ride: ${ride._id}, RiderId: ${riderId}`
+                )
+                ride.paymentStatus = 'failed'
+                await ride.save()
+                socket.emit('rideError', { message: 'User not found for wallet payment' })
+                return
+              }
+
+              const balanceBefore = user.walletBalance || 0
+
+              // Idempotency: prevent double deduction for the same ride
+              const existingTransaction = await WalletTransaction.findOne({
+                relatedRide: ride._id,
+                transactionType: 'RIDE_PAYMENT',
+                status: 'COMPLETED'
+              })
+
+              if (existingTransaction) {
+                logger.warn(
+                  `[Wallet Payment] Payment already processed upfront - Ride: ${ride._id}, Transaction: ${existingTransaction._id}`
+                )
+                // Payment already processed, continue with ride creation
+              } else {
+                // Check sufficient balance
+                if (balanceBefore >= fareAmount) {
+                  const balanceAfter = balanceBefore - fareAmount
+
+                  // Create wallet transaction
+                  await WalletTransaction.create({
+                    user: riderId,
+                    transactionType: 'RIDE_PAYMENT',
+                    amount: fareAmount,
+                    balanceBefore,
+                    balanceAfter,
+                    relatedRide: ride._id,
+                    paymentMethod: 'WALLET',
+                    status: 'COMPLETED',
+                    description: `Ride payment of ₹${fareAmount}`,
+                    metadata: {
+                      upfrontDeduction: true,
+                      deductedAt: 'ride_creation'
+                    }
+                  })
+
+                  // Update user wallet balance
+                  user.walletBalance = balanceAfter
+                  await user.save()
+
+                  // Update ride with payment status
+                  ride.paymentStatus = 'completed'
+                  await ride.save()
+
+                  logger.info(
+                    `[Wallet Payment] Upfront deduction successful - Ride: ${ride._id}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
+                  )
+                } else {
+                  // Insufficient balance - fail ride creation
+                  logger.warn(
+                    `[Wallet Payment] Insufficient balance for upfront deduction - Ride: ${ride._id}, Required: ₹${fareAmount}, Available: ₹${balanceBefore}`
+                  )
+                  ride.paymentStatus = 'failed'
+                  await ride.save()
+                  socket.emit('rideError', { 
+                    message: `Insufficient wallet balance. Required: ₹${fareAmount}, Available: ₹${balanceBefore}` 
+                  })
+                  return
+                }
+              }
+            }
+          } catch (walletError) {
+            logger.error(
+              `[Wallet Payment] Error processing upfront wallet payment for ride ${ride._id}:`,
+              walletError
+            )
+            // Fail ride creation if wallet deduction fails
+            ride.paymentStatus = 'failed'
+            await ride.save()
+            socket.emit('rideError', { 
+              message: 'Failed to process wallet payment. Please try again.' 
+            })
+            return
+          }
+        }
+
         const populatedRide = await Ride.findById(ride._id)
           .populate('rider', 'fullName name phone email')
           .exec()
@@ -2560,7 +2659,7 @@ function initializeSocket (server) {
         }
 
         // Process WALLET payment deduction - SEPARATE BLOCK (does not affect CASH/RAZORPAY flows)
-        // This block always processes WALLET payments regardless of fareDifference
+        // This block processes WALLET payments only if not already deducted upfront
         // CASH and RAZORPAY flows remain unchanged and unaffected
         if (completedRide.paymentMethod === 'WALLET') {
           try {
@@ -2575,13 +2674,31 @@ function initializeSocket (server) {
             )
 
             if (fareAmount > 0) {
-              // Check if already processed
-              if (completedRide.paymentStatus === 'completed') {
-                logger.warn(
-                  `[Wallet Payment] Payment already completed - Ride: ${rideId}, skipping deduction`
+              // Check if payment was already processed upfront (at ride creation)
+              const existingTransaction = await WalletTransaction.findOne({
+                relatedRide: rideId,
+                transactionType: 'RIDE_PAYMENT',
+                status: 'COMPLETED'
+              })
+
+              if (existingTransaction) {
+                logger.info(
+                  `[Wallet Payment] Payment already deducted upfront - Ride: ${rideId}, Transaction: ${existingTransaction._id}, skipping deduction at completion`
                 )
-                // Skip - already processed
+                // Ensure payment status is set to completed
+                if (completedRide.paymentStatus !== 'completed') {
+                  completedRide.paymentStatus = 'completed'
+                  await completedRide.save()
+                }
+                // Skip - already processed upfront
+              } else if (completedRide.paymentStatus === 'completed') {
+                logger.warn(
+                  `[Wallet Payment] Payment already completed but no transaction found - Ride: ${rideId}, skipping deduction`
+                )
+                // Skip - already processed (legacy case)
               } else {
+                // Legacy flow: Deduct at ride completion (for backward compatibility)
+                // This handles rides created before upfront deduction was implemented
                 const rider = await User.findById(riderId)
                 if (!rider) {
                   logger.warn(
@@ -2593,7 +2710,7 @@ function initializeSocket (server) {
                   const balanceBefore = rider.walletBalance || 0
 
                   logger.info(
-                    `[Wallet Payment] Balance check - rideId: ${rideId}, balanceBefore: ₹${balanceBefore}, fareAmount: ₹${fareAmount}`
+                    `[Wallet Payment] Balance check (legacy flow) - rideId: ${rideId}, balanceBefore: ₹${balanceBefore}, fareAmount: ₹${fareAmount}`
                   )
 
                   if (balanceBefore >= fareAmount) {
@@ -2611,7 +2728,11 @@ function initializeSocket (server) {
                       relatedRide: rideId,
                       paymentMethod: 'WALLET',
                       status: 'COMPLETED',
-                      description: `Ride payment of ₹${fareAmount}`
+                      description: `Ride payment of ₹${fareAmount}`,
+                      metadata: {
+                        deductedAt: 'ride_completion',
+                        legacyFlow: true
+                      }
                     })
 
                     // Update ride payment status
@@ -2619,7 +2740,7 @@ function initializeSocket (server) {
                     await completedRide.save()
 
                     logger.info(
-                      `[Wallet Payment] Deduction successful - Ride: ${rideId}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
+                      `[Wallet Payment] Deduction successful (legacy flow) - Ride: ${rideId}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
                     )
                   } else {
                     // Handle insufficient balance - mark payment as failed
