@@ -500,7 +500,7 @@ const getDriverEarnings = async (req, res) => {
 const getPaymentHistory = async (req, res) => {
   try {
     const { driverId } = req.params;
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, status } = req.query;
     
     // Verify driver exists
     const driver = await Driver.findById(driverId);
@@ -513,15 +513,24 @@ const getPaymentHistory = async (req, res) => {
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Get earnings (payment history)
-    const earnings = await AdminEarnings.find({ driverId })
+    // Build filter query
+    const filter = { driverId };
+    
+    // Add status filter if provided
+    if (status) {
+      filter.paymentStatus = status;
+    }
+    
+    // Get earnings (payment history) with filter
+    const earnings = await AdminEarnings.find(filter)
       .populate('rideId', 'fare tips pickupAddress dropoffAddress')
       .populate('riderId', 'fullName')
       .sort({ rideDate: -1 })
       .skip(skip)
       .limit(parseInt(limit));
     
-    const totalEarnings = await AdminEarnings.countDocuments({ driverId });
+    // Use filtered count for pagination
+    const totalEarnings = await AdminEarnings.countDocuments(filter);
     
     const paymentHistory = earnings.map(earning => ({
       id: earning._id,

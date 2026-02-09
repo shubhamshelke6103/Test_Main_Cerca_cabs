@@ -139,7 +139,28 @@ const getDriverById = async (req, res) => {
         if (!driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
-        res.status(200).json(driver);
+        
+        // Compute total earnings from AdminEarnings
+        const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
+        const earningsResult = await AdminEarnings.aggregate([
+            { $match: { driverId: driver._id.toString() } },
+            { $group: { _id: null, totalEarnings: { $sum: '$driverEarning' } } }
+        ]);
+        const totalEarnings = earningsResult.length > 0 ? earningsResult[0].totalEarnings : 0;
+        
+        // Compute total completed rides
+        const Ride = require('../../Models/Driver/ride.model');
+        const totalRides = await Ride.countDocuments({ 
+            driver: driver._id, 
+            status: 'completed' 
+        });
+        
+        // Convert driver to plain object and add computed fields
+        const driverObj = driver.toObject();
+        driverObj.totalEarnings = Math.round(totalEarnings * 100) / 100; // Round to 2 decimal places
+        driverObj.completedRidesCount = totalRides;
+        
+        res.status(200).json(driverObj);
     } catch (error) {
         logger.error('Error fetching driver:', error);
         res.status(500).json({ message: 'Error fetching driver', error });
@@ -625,6 +646,87 @@ const updateDriverBusyStatus = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Mark cash as collected for a ride
+ * @route   PATCH /drivers/:driverId/rides/:rideId/mark-cash-collected
+ */
+const markCashCollected = async (req, res) => {
+    try {
+        const { driverId, rideId } = req.params;
+        
+        // Verify driver exists
+        const driver = await Driver.findById(driverId);
+        if (!driver) {
+            return res.status(404).json({
+                success: false,
+                message: 'Driver not found',
+            });
+        }
+        
+        // Verify ride exists and belongs to driver
+        const ride = await Ride.findById(rideId);
+        if (!ride) {
+            return res.status(404).json({
+                success: false,
+                message: 'Ride not found',
+            });
+        }
+        
+        if (ride.driver.toString() !== driverId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Ride does not belong to this driver',
+            });
+        }
+        
+        // Check if ride is completed
+        if (ride.status !== 'completed') {
+            return res.status(400).json({
+                success: false,
+                message: 'Ride must be completed before marking cash as collected',
+            });
+        }
+        
+        // Check if payment method is CASH
+        if (ride.paymentMethod !== 'CASH') {
+            return res.status(400).json({
+                success: false,
+                message: 'This endpoint is only for CASH payments',
+            });
+        }
+        
+        // Update ride payment status
+        ride.paymentStatus = 'completed';
+        await ride.save();
+        
+        // Update AdminEarnings payment status
+        const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
+        const earning = await AdminEarnings.findOne({ rideId: rideId });
+        if (earning) {
+            earning.paymentStatus = 'completed';
+            await earning.save();
+        }
+        
+        logger.info(`Cash marked as collected for ride ${rideId} by driver ${driverId}`);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Cash collection marked as completed',
+            ride: {
+                _id: ride._id,
+                paymentStatus: ride.paymentStatus,
+            },
+        });
+    } catch (error) {
+        logger.error('Error marking cash as collected:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error marking cash as collected',
+            error: error.message,
+        });
+    }
+};
+
 module.exports = {
     addDriver,
     addDriverDocuments,
@@ -644,4 +746,5 @@ module.exports = {
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
+    markCashCollected,
 };

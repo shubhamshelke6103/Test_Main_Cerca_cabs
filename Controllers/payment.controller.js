@@ -377,16 +377,38 @@ const verifyRidePayment = async (req, res) => {
 
     logger.info(`Ride payment verified - Ride: ${rideId}, Payment ID: ${razorpay_payment_id}`);
 
-    // Emit socket event for real-time update (optional)
+    // Emit socket event for real-time update
     try {
       const { getSocketIO } = require('../utils/socket');
       const io = getSocketIO();
-      if (io && ride.driverSocketId) {
-        io.to(ride.driverSocketId).emit('paymentCompleted', {
+      
+      if (io) {
+        // Populate ride with driver and rider info for complete event payload
+        const populatedRide = await Ride.findById(rideId)
+          .populate('driver', 'name phone rating totalTrips profilePic vehicleInfo')
+          .populate('rider', 'name email phoneNumber fullName');
+        
+        // Emit to driver socket
+        if (ride.driverSocketId) {
+          io.to(ride.driverSocketId).emit('paymentCompleted', {
+            rideId: rideId,
+            paymentId: razorpay_payment_id,
+            amount: paymentAmount,
+            status: 'completed',
+            ride: populatedRide
+          });
+          logger.info(`✅ Emitted paymentCompleted to driver socket: ${ride.driverSocketId}`);
+        }
+        
+        // Also emit to ride room for reliability
+        io.to(`ride_${rideId}`).emit('paymentCompleted', {
           rideId: rideId,
           paymentId: razorpay_payment_id,
-          amount: paymentAmount
+          amount: paymentAmount,
+          status: 'completed',
+          ride: populatedRide
         });
+        logger.info(`✅ Emitted paymentCompleted to ride room: ride_${rideId}`);
       }
     } catch (socketError) {
       logger.warn('Failed to emit paymentCompleted socket event:', socketError);
@@ -405,6 +427,37 @@ const verifyRidePayment = async (req, res) => {
     });
   } catch (error) {
     logger.error('Error verifying ride payment:', error);
+    
+    // Emit paymentFailed event
+    try {
+      const { getSocketIO } = require('../utils/socket');
+      const io = getSocketIO();
+      const Ride = require('../Models/Driver/ride.model');
+      const failedRide = await Ride.findById(req.params.rideId);
+      
+      if (io && failedRide) {
+        // Emit to driver socket
+        if (failedRide.driverSocketId) {
+          io.to(failedRide.driverSocketId).emit('paymentFailed', {
+            rideId: req.params.rideId,
+            reason: error.message || 'Payment verification failed',
+            status: 'failed'
+          });
+          logger.info(`✅ Emitted paymentFailed to driver socket: ${failedRide.driverSocketId}`);
+        }
+        
+        // Also emit to ride room
+        io.to(`ride_${req.params.rideId}`).emit('paymentFailed', {
+          rideId: req.params.rideId,
+          reason: error.message || 'Payment verification failed',
+          status: 'failed'
+        });
+        logger.info(`✅ Emitted paymentFailed to ride room: ride_${req.params.rideId}`);
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit paymentFailed socket event:', socketError);
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Failed to verify payment',

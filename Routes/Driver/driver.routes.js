@@ -17,6 +17,7 @@ const {
     getNearbyDrivers,
     updateDriverBusyStatus,
     getUpcomingBookings,
+    markCashCollected,
 } = require('../../Controllers/Driver/driver.controller.js');
 
 const router = express.Router();
@@ -71,5 +72,8 @@ router.get('/:id/stats', getDriverStats);
 // Route to get nearby drivers
 // Query params: longitude, latitude, maxDistance (optional, default 10000 meters)
 router.get('/nearby', getNearbyDrivers);
+
+// Route to mark cash as collected for a ride
+router.patch('/:driverId/rides/:rideId/mark-cash-collected', markCashCollected);
 
 module.exports = router;

@@ -1597,6 +1597,10 @@ const recalculateRideFare = async (rideId) => {
       `[Fare Recalculation] Recalculating fare for rideId: ${rideId}, distance: ${distance}km, actualDuration: ${actualDuration}min, perMinuteRate: ₹${perMinuteRate}/min`
     )
 
+    // Get original fare estimate from ride (before recalculation)
+    const originalFare = ride.fare || 0
+    const originalEstimatedDuration = ride.estimatedDuration || 0
+
     // Calculate fare breakdown with actual duration
     const fareBreakdown = calculateFareWithTime(
       servicePrice,
@@ -1639,6 +1643,20 @@ const recalculateRideFare = async (rideId) => {
             }
           }
         }
+      }
+    }
+
+    // Cap fare at original estimate if actual duration is shorter than estimated
+    // This ensures users don't pay more than they were quoted upfront
+    if (originalEstimatedDuration > 0 && actualDuration < originalEstimatedDuration && finalFare > originalFare) {
+      logger.info(
+        `[Fare Recalculation] Actual duration (${actualDuration}min) shorter than estimated (${originalEstimatedDuration}min). Capping fare at original estimate: ₹${originalFare}`
+      )
+      finalFare = originalFare
+      // Adjust discount proportionally if promo was applied
+      if (discount > 0 && ride.fareBreakdown?.discount) {
+        const originalDiscount = ride.fareBreakdown.discount || 0
+        discount = originalDiscount
       }
     }
 

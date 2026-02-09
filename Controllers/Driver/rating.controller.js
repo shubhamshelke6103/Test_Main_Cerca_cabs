@@ -28,6 +28,13 @@ const submitRating = async (req, res) => {
             return res.status(404).json({ message: 'Ride not found' });
         }
 
+        // Check if ride is completed
+        if (ride.status !== 'completed') {
+            return res.status(400).json({ 
+                message: 'Rating can only be submitted for completed rides' 
+            });
+        }
+
         // Check if rating already exists
         const existingRating = await Rating.findOne({ 
             ride: rideId, 
