@@ -1599,19 +1599,32 @@ const recalculateRideFare = async (rideId) => {
       throw new Error(`Ride missing both vehicleService and service fields: ${rideId}`)
     }
 
-    // Get actual duration (should be calculated by updateRideEndTime)
-    const actualDuration = ride.actualDuration || 0
+    // Get actual duration (should be calculated by updateRideEndTime or persisted before this call)
+    let actualDuration = ride.actualDuration !== undefined ? ride.actualDuration : 0
     const distance = ride.distanceInKm || 0
 
+    // Enhanced logging to verify actualDuration is available
     logger.info(
-      `[Fare Recalculation] Recalculating fare for rideId: ${rideId}, distance: ${distance}km, actualDuration: ${actualDuration}min, perMinuteRate: ₹${perMinuteRate}/min`
+      `[Fare Recalculation] Recalculating fare for rideId: ${rideId}, distance: ${distance}km, actualDuration: ${actualDuration}min (from DB: ${ride.actualDuration !== undefined ? ride.actualDuration : 'undefined'}), actualStartTime: ${ride.actualStartTime ? ride.actualStartTime.toISOString() : 'not set'}, actualEndTime: ${ride.actualEndTime ? ride.actualEndTime.toISOString() : 'not set'}, perMinuteRate: ₹${perMinuteRate}/min`
     )
+    
+    // Fallback: Recalculate duration from timestamps if actualDuration is missing or 0 but timestamps exist
+    // This handles edge cases where the duration wasn't persisted correctly
+    if (actualDuration === 0 && ride.actualStartTime && ride.actualEndTime) {
+      const calculatedDuration = Math.round((ride.actualEndTime - ride.actualStartTime) / 60000)
+      if (calculatedDuration > 0) {
+        logger.warn(
+          `[Fare Recalculation] WARNING: actualDuration is 0 but calculated duration from timestamps is ${calculatedDuration}min. Using calculated value as fallback.`
+        )
+        actualDuration = calculatedDuration
+      }
+    }
 
     // Get original fare estimate from ride (before recalculation)
     const originalFare = ride.fare || 0
     const originalEstimatedDuration = ride.estimatedDuration || 0
 
-    // Calculate fare breakdown with actual duration
+    // Calculate fare breakdown with actual duration (or fallback calculated duration)
     const fareBreakdown = calculateFareWithTime(
       servicePrice,
       distance,
@@ -1620,6 +1633,18 @@ const recalculateRideFare = async (rideId) => {
       perMinuteRate,
       minimumFare
     )
+
+    // Log fare breakdown details for transparency
+    logger.info(
+      `[Fare Recalculation] Fare breakdown - baseFare: ₹${fareBreakdown.baseFare}, distanceFare: ₹${fareBreakdown.distanceFare}, timeFare: ₹${fareBreakdown.timeFare} (${actualDuration}min × ₹${perMinuteRate}/min), subtotal: ₹${fareBreakdown.subtotal}, fareAfterMinimum: ₹${fareBreakdown.fareAfterMinimum}`
+    )
+    
+    // Log if timeFare is 0 for rides with actual duration > 0 (shouldn't happen)
+    if (actualDuration > 0 && fareBreakdown.timeFare === 0) {
+      logger.warn(
+        `[Fare Recalculation] WARNING: actualDuration is ${actualDuration}min but timeFare is ₹0. Check perMinuteRate: ₹${perMinuteRate}/min`
+      )
+    }
 
     // Re-apply promo code discount if promo code exists
     let discount = 0
