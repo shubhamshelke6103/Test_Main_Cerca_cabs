@@ -1017,6 +1017,16 @@ const completeRide = async (rideId, fare) => {
       ? Math.round((endTime - currentRide.actualStartTime) / 60000) // in minutes
       : 0
 
+    // CRITICAL FIX: Persist actualDuration and actualEndTime BEFORE recalculating fare
+    // This ensures recalculateRideFare can access the correct actualDuration from the database
+    await Ride.findByIdAndUpdate(rideId, {
+      actualEndTime: endTime,
+      actualDuration: actualDuration
+    })
+    logger.info(
+      `[Fare Tracking] Persisted actualDuration: ${actualDuration}min, actualEndTime: ${endTime.toISOString()} before fare recalculation`
+    )
+
     // Recalculate fare with actual duration
     let recalculatedFare = fare
     let fareBreakdown = null
