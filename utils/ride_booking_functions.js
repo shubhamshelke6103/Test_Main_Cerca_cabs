@@ -8,6 +8,13 @@ const Emergency = require('../Models/User/emergency.model')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
+const razorpay = require('razorpay')
+
+// Initialize Razorpay instance
+const razorpayInstance = new razorpay({
+  key_id: process.env.RAZORPAY_ID || "rzp_test_Rp3ejYlVfY449V",
+  key_secret: process.env.RAZORPAY_SECRET || "FORM4hrZrQO8JFIiYsQSC83N"
+})
 
 // ============================
 // REDIS CLEANUP UTILITIES (Multi-Instance Safe)
@@ -1320,6 +1327,232 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
   }
 }
 
+/**
+ * Process Razorpay refund for a cancelled ride
+ * @param {Object} ride - The ride document (must be populated with rider)
+ * @param {String} originalStatus - The original ride status before cancellation
+ * @param {String} cancelledBy - Who cancelled the ride ('rider', 'driver', 'system')
+ * @param {String} cancellationReason - Reason for cancellation
+ * @returns {Promise<Object>} Refund information or null if no refund needed
+ */
+const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancellationReason = null) => {
+  try {
+    // 1. Check if razorpayPaymentId exists (handles both pure RAZORPAY and hybrid)
+    if (!ride.razorpayPaymentId) {
+      logger.debug(`processRazorpayRefund: Skipping refund - no razorpayPaymentId found for ride ${ride._id}`)
+      return null
+    }
+
+    // 2. Check if already refunded (prevent double refunds)
+    if (ride.paymentStatus === 'refunded') {
+      logger.warn(`processRazorpayRefund: Ride ${ride._id} already refunded, skipping duplicate refund`)
+      return null
+    }
+
+    // 3. Check if ride is completed (shouldn't refund completed rides)
+    if (originalStatus === 'completed') {
+      logger.warn(`processRazorpayRefund: Ride ${ride._id} is completed, skipping refund`)
+      return null
+    }
+
+    // 4. Check if refund transaction already exists (additional double-refund check)
+    const existingRefund = await WalletTransaction.findOne({
+      relatedRide: ride._id,
+      transactionType: 'TOP_UP',
+      'metadata.razorpayRefundId': { $exists: true },
+      status: 'COMPLETED'
+    })
+
+    if (existingRefund) {
+      logger.warn(`processRazorpayRefund: Refund transaction already exists for ride ${ride._id}, skipping duplicate refund`)
+      return null
+    }
+
+    // 5. Determine cancellation fee based on ride status, cancellation reason, and admin settings
+    const Settings = require('../Models/Admin/settings.modal.js')
+    const settings = await Settings.findOne()
+    
+    let cancellationFee = 0
+    const shouldApplyCancellationFee = 
+      // Fee applies only if:
+      // - Original ride status is 'accepted' or 'arrived' (driver was assigned)
+      // - AND cancelled by rider (not system or driver)
+      // - AND not a system cancellation reason
+      (originalStatus === 'accepted' || originalStatus === 'arrived') &&
+      cancelledBy === 'rider' &&
+      cancellationReason !== 'NO_DRIVER_FOUND' &&
+      cancellationReason !== 'NO_DRIVER_ACCEPTED_TIMEOUT' &&
+      cancellationReason !== 'ALL_DRIVERS_REJECTED'
+
+    if (shouldApplyCancellationFee) {
+      cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
+      logger.info(`processRazorpayRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
+    } else {
+      logger.info(`processRazorpayRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
+    }
+
+    // 6. Calculate refund amount
+    // For pure RAZORPAY (including wallet-selected-but-₹0-balance case): refundAmount = razorpayAmountPaid - cancellationFee
+    // For hybrid: refundAmount = razorpayAmountPaid (full Razorpay portion, cancellation fee deducted from wallet portion)
+    const razorpayAmountPaid = ride.razorpayAmountPaid || ride.fare || 0
+    const walletAmountUsed = ride.walletAmountUsed || 0
+    const isHybrid = walletAmountUsed > 0
+
+    let refundAmount = 0
+    if (isHybrid) {
+      // Hybrid payment: Refund full Razorpay portion (cancellation fee deducted from wallet portion)
+      refundAmount = razorpayAmountPaid
+    } else {
+      // Pure RAZORPAY: Deduct cancellation fee from Razorpay refund
+      refundAmount = Math.max(0, razorpayAmountPaid - cancellationFee)
+    }
+
+    if (refundAmount === 0) {
+      logger.info(`processRazorpayRefund: Refund amount is ₹0 (razorpayAmountPaid: ₹${razorpayAmountPaid}, cancellation fee: ₹${cancellationFee}), skipping refund`)
+      
+      // Still update ride with cancellation fee and refund amount (0)
+      await Ride.findByIdAndUpdate(ride._id, {
+        cancellationFee,
+        refundAmount: 0,
+        paymentStatus: 'refunded'
+      })
+
+      return {
+        refunded: true,
+        refundAmount: 0,
+        cancellationFee,
+        originalFare: ride.fare,
+        razorpayAmountPaid,
+        reason: 'Cancellation fee equals or exceeds Razorpay amount'
+      }
+    }
+
+    // 7. Get rider user document
+    const riderId = ride.rider?._id || ride.rider
+    const user = await User.findById(riderId)
+    
+    if (!user) {
+      logger.error(`processRazorpayRefund: User not found for rider ${riderId}`)
+      throw new Error(`User not found for rider ${riderId}`)
+    }
+
+    // 8. Call Razorpay refund API
+    let razorpayRefundId = null
+    let razorpayRefundStatus = null
+    
+    try {
+      logger.info(`processRazorpayRefund: Initiating Razorpay refund - Payment ID: ${ride.razorpayPaymentId}, Amount: ₹${refundAmount}`)
+      
+      const refund = await razorpayInstance.payments.refund(ride.razorpayPaymentId, {
+        amount: Math.round(refundAmount * 100), // Convert to paise
+        speed: 'normal', // Use 'optimum' for instant refunds (charges apply)
+        notes: {
+          rideId: ride._id.toString(),
+          cancellationReason: cancellationReason || 'Ride cancelled',
+          cancelledBy: cancelledBy,
+          originalFare: ride.fare.toString(),
+          cancellationFee: cancellationFee.toString()
+        }
+      })
+
+      razorpayRefundId = refund.id
+      razorpayRefundStatus = refund.status
+      
+      logger.info(`processRazorpayRefund: Razorpay refund initiated successfully - Refund ID: ${razorpayRefundId}, Status: ${razorpayRefundStatus}`)
+    } catch (razorpayError) {
+      logger.error(`processRazorpayRefund: Razorpay refund API error for ride ${ride._id}:`, razorpayError)
+      // Don't throw - log error but continue to credit wallet (assume refund will process)
+      // In production, you might want to handle this differently based on error type
+      logger.warn(`processRazorpayRefund: Continuing with wallet credit despite Razorpay API error`)
+    }
+
+    // 9. Credit refunded amount to user's wallet
+    const balanceBefore = user.walletBalance || 0
+    const balanceAfter = balanceBefore + refundAmount
+
+    // 10. Create TOP_UP transaction for refund
+    const refundTransaction = await WalletTransaction.create({
+      user: riderId,
+      transactionType: 'TOP_UP',
+      amount: refundAmount,
+      balanceBefore,
+      balanceAfter,
+      relatedRide: ride._id,
+      paymentMethod: 'RAZORPAY',
+      status: 'COMPLETED',
+      description: `Refund for cancelled ride${cancellationFee > 0 ? ` (cancellation fee: ₹${cancellationFee} deducted)` : ''}${cancellationReason ? ` - ${cancellationReason}` : ''}`,
+      metadata: {
+        razorpayRefundId: razorpayRefundId,
+        razorpayRefundStatus: razorpayRefundStatus,
+        razorpayPaymentId: ride.razorpayPaymentId,
+        originalFare: ride.fare,
+        razorpayAmountPaid: razorpayAmountPaid,
+        cancellationFee,
+        cancelledBy,
+        cancellationReason: cancellationReason || null,
+        isHybrid: isHybrid,
+        walletAmountUsed: walletAmountUsed
+      }
+    })
+
+    // 11. Update user wallet balance
+    user.walletBalance = balanceAfter
+    await user.save()
+
+    // 12. Update ride with refund details
+    await Ride.findByIdAndUpdate(ride._id, {
+      refundAmount,
+      cancellationFee,
+      paymentStatus: 'refunded',
+      razorpayRefundId: razorpayRefundId,
+      razorpayRefundStatus: razorpayRefundStatus
+    })
+
+    // 13. Log refund details
+    logger.info(`💰 Razorpay refund processed successfully:`)
+    logger.info(`   Ride ID: ${ride._id}`)
+    logger.info(`   Rider: ${riderId}`)
+    logger.info(`   Payment ID: ${ride.razorpayPaymentId}`)
+    logger.info(`   Razorpay Amount Paid: ₹${razorpayAmountPaid}`)
+    logger.info(`   Wallet Amount Used: ₹${walletAmountUsed}`)
+    logger.info(`   Is Hybrid: ${isHybrid}`)
+    logger.info(`   Original Fare: ₹${ride.fare}`)
+    logger.info(`   Cancellation Fee: ₹${cancellationFee}`)
+    logger.info(`   Refund Amount: ₹${refundAmount}`)
+    logger.info(`   Wallet Balance: ₹${balanceBefore} → ₹${balanceAfter}`)
+    logger.info(`   Cancelled By: ${cancelledBy}`)
+    logger.info(`   Cancellation Reason: ${cancellationReason || 'none'}`)
+    logger.info(`   Razorpay Refund ID: ${razorpayRefundId || 'N/A'}`)
+    logger.info(`   Refund Transaction ID: ${refundTransaction._id}`)
+
+    return {
+      refunded: true,
+      refundAmount,
+      cancellationFee,
+      originalFare: ride.fare,
+      razorpayAmountPaid,
+      walletAmountUsed,
+      isHybrid,
+      balanceBefore,
+      balanceAfter,
+      refundTransactionId: refundTransaction._id,
+      razorpayRefundId: razorpayRefundId,
+      razorpayRefundStatus: razorpayRefundStatus,
+      cancelledBy,
+      cancellationReason: cancellationReason || null
+    }
+  } catch (error) {
+    logger.error(`❌ Error processing Razorpay refund for ride ${ride._id}: ${error.message}`)
+    logger.error(`   Stack: ${error.stack}`)
+    // Don't throw error - refund failure shouldn't prevent cancellation
+    // Log error for manual review
+    return {
+      refunded: false,
+      error: error.message
+    }
+  }
+}
+
 const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
   try {
     // Fetch ride BEFORE updating to get original status for refund calculation
@@ -1398,18 +1631,59 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
         logger.warn(`⚠️ Redis cleanup failed for cancelled ride ${ride._id}: ${cleanupError.message}`)
       }
 
-      // Process wallet refund if payment method is WALLET
+      // Process refunds based on payment method and payment details
       // Use originalRide with originalStatus for accurate cancellation fee calculation
       try {
-        const refundResult = await processWalletRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
-        if (refundResult && refundResult.refunded) {
-          logger.info(`✅ Wallet refund processed for cancelled ride ${rideId}`)
-        } else if (refundResult && !refundResult.refunded) {
-          logger.warn(`⚠️ Wallet refund failed for cancelled ride ${rideId}: ${refundResult.error || 'Unknown error'}`)
+        // Check for Razorpay payment (either pure RAZORPAY or hybrid with Razorpay portion)
+        const hasRazorpayPayment = originalRide.razorpayPaymentId && (originalRide.razorpayAmountPaid > 0 || originalRide.fare > 0)
+        const hasWalletPayment = originalRide.paymentMethod === 'WALLET' || (originalRide.walletAmountUsed && originalRide.walletAmountUsed > 0)
+        
+        if (hasRazorpayPayment && hasWalletPayment) {
+          // Hybrid payment - refund both portions
+          logger.info(`💰 Processing hybrid payment refund for ride ${rideId}`)
+          
+          // Wallet portion refunded via processWalletRefund
+          const walletRefund = await processWalletRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          if (walletRefund && walletRefund.refunded) {
+            logger.info(`✅ Wallet portion refund processed for cancelled ride ${rideId}: ₹${walletRefund.refundAmount || 0}`)
+          } else if (walletRefund && !walletRefund.refunded) {
+            logger.warn(`⚠️ Wallet portion refund failed for cancelled ride ${rideId}: ${walletRefund.error || 'Unknown error'}`)
+          }
+          
+          // Razorpay portion refunded via processRazorpayRefund
+          const razorpayRefund = await processRazorpayRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          if (razorpayRefund && razorpayRefund.refunded) {
+            logger.info(`✅ Razorpay portion refund processed for cancelled ride ${rideId}: ₹${razorpayRefund.refundAmount || 0}`)
+          } else if (razorpayRefund && !razorpayRefund.refunded) {
+            logger.warn(`⚠️ Razorpay portion refund failed for cancelled ride ${rideId}: ${razorpayRefund.error || 'Unknown error'}`)
+          }
+        } else if (hasRazorpayPayment) {
+          // Pure Razorpay payment (including case where user selected wallet but had ₹0 balance)
+          logger.info(`💰 Processing Razorpay refund for ride ${rideId}`)
+          const refundResult = await processRazorpayRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          if (refundResult && refundResult.refunded) {
+            logger.info(`✅ Razorpay refund processed for cancelled ride ${rideId}: ₹${refundResult.refundAmount || 0}`)
+          } else if (refundResult && !refundResult.refunded) {
+            logger.warn(`⚠️ Razorpay refund failed for cancelled ride ${rideId}: ${refundResult.error || 'Unknown error'}`)
+          } else if (!refundResult) {
+            logger.info(`ℹ️ No Razorpay refund needed for cancelled ride ${rideId}`)
+          }
+        } else if (originalRide.paymentMethod === 'WALLET') {
+          // Pure wallet payment
+          logger.info(`💰 Processing wallet refund for ride ${rideId}`)
+          const refundResult = await processWalletRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          if (refundResult && refundResult.refunded) {
+            logger.info(`✅ Wallet refund processed for cancelled ride ${rideId}: ₹${refundResult.refundAmount || 0}`)
+          } else if (refundResult && !refundResult.refunded) {
+            logger.warn(`⚠️ Wallet refund failed for cancelled ride ${rideId}: ${refundResult.error || 'Unknown error'}`)
+          }
+        } else {
+          logger.info(`ℹ️ No refund processing needed for cancelled ride ${rideId} - payment method: ${originalRide.paymentMethod}`)
         }
       } catch (refundError) {
         // Don't fail cancellation if refund fails - log for manual review
-        logger.error(`❌ Error processing wallet refund during cancellation: ${refundError.message}`)
+        logger.error(`❌ Error processing refund during cancellation: ${refundError.message}`)
+        logger.error(`   Stack: ${refundError.stack}`)
       }
 
       return ride
@@ -2397,6 +2671,7 @@ module.exports = {
   completeRide,
   cancelRide,
   processWalletRefund,
+  processRazorpayRefund,
   setUserSocket,
   clearUserSocket,
   setDriverSocket,

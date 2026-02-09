@@ -241,6 +241,8 @@ const rideSchema = new mongoose.Schema(
 
     transactionId: String,
     razorpayPaymentId: String,
+    razorpayRefundId: String,
+    razorpayRefundStatus: String,
 
     walletAmountUsed: {
       type: Number,
