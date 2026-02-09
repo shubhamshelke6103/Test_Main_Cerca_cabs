@@ -120,9 +120,10 @@ function initializeSocket (server) {
         socket.data.adminId = adminId
         socket.join('admin_support_online')
         socket.join(`admin_${adminId}`)
+        socket.join('admin') // Join admin room for dashboard-wide events (emergency, driver connect/disconnect, etc.)
 
         logger.info(
-          `🛠️ Admin connected for support - adminId: ${adminId}, socketId: ${socket.id}`
+          `🛠️ Admin connected for support - adminId: ${adminId}, socketId: ${socket.id}, joined rooms: admin_support_online, admin_${adminId}, admin`
         )
       } catch (err) {
         logger.error('adminSupportConnect error:', err)
@@ -2558,84 +2559,82 @@ function initializeSocket (server) {
           }
         }
 
-        // Process WALLET payment deduction if payment method is WALLET
-        // Note: Payment adjustment is handled in handleFareDifference if fare changed
-        if (
-          completedRide.paymentMethod === 'WALLET' &&
-          Math.abs(fareDifference) <= 0.01
-        ) {
-          // Only process if fare didn't change (already handled in handleFareDifference)
+        // Process WALLET payment deduction - SEPARATE BLOCK (does not affect CASH/RAZORPAY flows)
+        // This block always processes WALLET payments regardless of fareDifference
+        // CASH and RAZORPAY flows remain unchanged and unaffected
+        if (completedRide.paymentMethod === 'WALLET') {
           try {
             const User = require('../Models/User/user.model')
             const WalletTransaction = require('../Models/User/walletTransaction.model')
             const riderId = completedRide.rider._id || completedRide.rider
-            // Use fare from completed ride (which should be the correct fare after completeRide)
+            // Use fare from completed ride (final recalculated fare)
             const fareAmount = completedRide.fare || fare || 0
 
             logger.info(
-              `[Fare Tracking] Wallet deduction - rideId: ${rideId}, fareAmount: ₹${fareAmount}, fare from ride: ₹${
-                completedRide.fare
-              }, fare from event: ₹${fare || 'not provided'}`
+              `[Wallet Payment] Processing wallet deduction - rideId: ${rideId}, fareAmount: ₹${fareAmount}, paymentStatus: ${completedRide.paymentStatus || 'pending'}`
             )
 
             if (fareAmount > 0) {
+              // Check if already processed
               if (completedRide.paymentStatus === 'completed') {
                 logger.warn(
-                  `Wallet payment already completed - Ride: ${rideId}, skipping deduction`
+                  `[Wallet Payment] Payment already completed - Ride: ${rideId}, skipping deduction`
                 )
-                return
-              }
-
-              const rider = await User.findById(riderId)
-              if (!rider) {
-                logger.warn(
-                  `Rider not found for wallet deduction - Ride: ${rideId}, RiderId: ${riderId}`
-                )
+                // Skip - already processed
               } else {
-                const balanceBefore = rider.walletBalance || 0
-
-                logger.info(
-                  `[Fare Tracking] Wallet balance check - rideId: ${rideId}, balanceBefore: ₹${balanceBefore}, fareAmount: ₹${fareAmount}`
-                )
-
-                if (balanceBefore >= fareAmount) {
-                  const balanceAfter = balanceBefore - fareAmount
-                  rider.walletBalance = balanceAfter
-                  await rider.save()
-
-                  // Create wallet transaction
-                  await WalletTransaction.create({
-                    user: riderId,
-                    transactionType: 'RIDE_PAYMENT',
-                    amount: fareAmount,
-                    balanceBefore: balanceBefore,
-                    balanceAfter: balanceAfter,
-                    relatedRide: rideId,
-                    paymentMethod: 'WALLET',
-                    status: 'COMPLETED',
-                    description: `Ride payment of ₹${fareAmount}`
-                  })
-
-                  // Update ride payment status
-                  completedRide.paymentStatus = 'completed'
-                  await completedRide.save()
-
-                  logger.info(
-                    `[Fare Tracking] Wallet payment deducted successfully - Ride: ${rideId}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
+                const rider = await User.findById(riderId)
+                if (!rider) {
+                  logger.warn(
+                    `[Wallet Payment] Rider not found - Ride: ${rideId}, RiderId: ${riderId}`
                   )
-                } else {
-                  // Handle insufficient balance - mark payment as failed
                   completedRide.paymentStatus = 'failed'
                   await completedRide.save()
-                  logger.warn(
-                    `Insufficient wallet balance - Ride: ${rideId}, Required: ₹${fareAmount}, Available: ₹${balanceBefore}`
+                } else {
+                  const balanceBefore = rider.walletBalance || 0
+
+                  logger.info(
+                    `[Wallet Payment] Balance check - rideId: ${rideId}, balanceBefore: ₹${balanceBefore}, fareAmount: ₹${fareAmount}`
                   )
+
+                  if (balanceBefore >= fareAmount) {
+                    const balanceAfter = balanceBefore - fareAmount
+                    rider.walletBalance = balanceAfter
+                    await rider.save()
+
+                    // Create wallet transaction
+                    await WalletTransaction.create({
+                      user: riderId,
+                      transactionType: 'RIDE_PAYMENT',
+                      amount: fareAmount,
+                      balanceBefore: balanceBefore,
+                      balanceAfter: balanceAfter,
+                      relatedRide: rideId,
+                      paymentMethod: 'WALLET',
+                      status: 'COMPLETED',
+                      description: `Ride payment of ₹${fareAmount}`
+                    })
+
+                    // Update ride payment status
+                    completedRide.paymentStatus = 'completed'
+                    await completedRide.save()
+
+                    logger.info(
+                      `[Wallet Payment] Deduction successful - Ride: ${rideId}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
+                    )
+                  } else {
+                    // Handle insufficient balance - mark payment as failed
+                    completedRide.paymentStatus = 'failed'
+                    await completedRide.save()
+                    logger.warn(
+                      `[Wallet Payment] Insufficient balance - Ride: ${rideId}, Required: ₹${fareAmount}, Available: ₹${balanceBefore}`
+                    )
+                  }
                 }
               }
             }
           } catch (walletError) {
             logger.error(
-              `Error processing wallet payment for ride ${rideId}:`,
+              `[Wallet Payment] Error processing wallet payment for ride ${rideId}:`,
               walletError
             )
             // Don't fail ride completion if wallet deduction fails, but mark payment status appropriately
@@ -2644,7 +2643,7 @@ function initializeSocket (server) {
               await completedRide.save()
             } catch (updateError) {
               logger.error(
-                `Error updating payment status for ride ${rideId}:`,
+                `[Wallet Payment] Error updating payment status for ride ${rideId}:`,
                 updateError
               )
             }
@@ -3455,7 +3454,7 @@ function initializeSocket (server) {
           }, location: ${JSON.stringify(data.location)}`
         )
 
-        // Notify both rider and driver
+        // Refresh ride document to ensure we have latest socket IDs
         const ride = await Ride.findById(data.rideId).populate('rider driver')
 
         if (ride) {
@@ -3465,6 +3464,7 @@ function initializeSocket (server) {
             data.reason || 'Emergency alert triggered'
           }`
 
+          // Strategy 1: Emit directly to rider socket (if available)
           if (ride.userSocketId) {
             io.to(ride.userSocketId).emit('rideCancelled', {
               ride: ride,
@@ -3472,9 +3472,11 @@ function initializeSocket (server) {
             })
             io.to(ride.userSocketId).emit('emergencyAlert', emergency)
             logger.warn(
-              `Ride cancelled and emergency alert sent to rider - rideId: ${data.rideId}`
+              `Ride cancelled and emergency alert sent to rider socket - rideId: ${data.rideId}, socketId: ${ride.userSocketId}`
             )
           }
+          
+          // Strategy 2: Emit directly to driver socket (if available)
           if (ride.driverSocketId) {
             io.to(ride.driverSocketId).emit('rideCancelled', {
               ride: ride,
@@ -3482,16 +3484,26 @@ function initializeSocket (server) {
             })
             io.to(ride.driverSocketId).emit('emergencyAlert', emergency)
             logger.warn(
-              `Ride cancelled and emergency alert sent to driver - rideId: ${data.rideId}`
+              `Ride cancelled and emergency alert sent to driver socket - rideId: ${data.rideId}, socketId: ${ride.driverSocketId}`
             )
           }
 
-          // Broadcast to admin/support (you can add admin sockets later)
-          // io.emit('emergencyBroadcast', emergency)
-          io.to('admin').emit('emergencyAlert', emergency)
-
+          // Strategy 3: Emit to ride room as backup (any client in room receives it)
+          io.to(`ride_${ride._id}`).emit('rideCancelled', {
+            ride: ride,
+            reason: cancellationReason
+          })
+          io.to(`ride_${ride._id}`).emit('emergencyAlert', emergency)
           logger.warn(
-            `Emergency broadcast sent to all admins - rideId: ${data.rideId}`
+            `Emergency alert sent to ride room - rideId: ${data.rideId}, room: ride_${ride._id}`
+          )
+
+          // Strategy 4: Broadcast to ALL admins (dashboard and support)
+          // Emit to both admin rooms to ensure all admins receive it
+          io.to('admin').emit('emergencyAlert', emergency)
+          io.to('admin_support_online').emit('emergencyAlert', emergency)
+          logger.warn(
+            `Emergency broadcast sent to all admins (admin + admin_support_online) - rideId: ${data.rideId}`
           )
 
           // Create notifications
