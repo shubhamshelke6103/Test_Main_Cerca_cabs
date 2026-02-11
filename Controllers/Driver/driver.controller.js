@@ -143,7 +143,7 @@ const getDriverById = async (req, res) => {
         // Compute total earnings from AdminEarnings
         const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
         const earningsResult = await AdminEarnings.aggregate([
-            { $match: { driverId: driver._id.toString() } },
+            { $match: { driverId: driver._id } },
             { $group: { _id: null, totalEarnings: { $sum: '$driverEarning' } } }
         ]);
         const totalEarnings = earningsResult.length > 0 ? earningsResult[0].totalEarnings : 0;

@@ -95,7 +95,7 @@ app.use('/users', require('./Routes/User/support.routes'))
 app.use('/drivers', require('./Routes/Driver/driver.routes'))
 app.use('/drivers', require('./Routes/Driver/earnings.routes'))
 app.use('/drivers', require('./Routes/Driver/payout.routes'))
-app.use('/drivers', require('./Routes/Driver/message.routes'))
+app.use('/drivers/messages', require('./Routes/Driver/message.routes'))
 app.use('/drivers', require('./Routes/Driver/rating.routes'))
 
 app.use('/admin', require('./Routes/admin.routes'))

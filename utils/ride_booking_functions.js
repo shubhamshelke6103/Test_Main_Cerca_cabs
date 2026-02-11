@@ -2307,6 +2307,19 @@ const getUserNotifications = async (userId, userModel) => {
 }
 
 // Emergency Functions
+// Normalize location: accept { latitude, longitude } or { coordinates: [lng, lat] }
+const normalizeEmergencyLocation = (location) => {
+  if (!location) return null
+  if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+    return { longitude: location.longitude, latitude: location.latitude }
+  }
+  if (Array.isArray(location.coordinates) && location.coordinates.length >= 2) {
+    const [lng, lat] = location.coordinates
+    return { longitude: lng, latitude: lat }
+  }
+  return null
+}
+
 const createEmergencyAlert = async emergencyData => {
   try {
     const {
@@ -2318,16 +2331,21 @@ const createEmergencyAlert = async emergencyData => {
       description
     } = emergencyData
 
+    const normalized = normalizeEmergencyLocation(location)
+    if (!normalized) {
+      throw new Error('Invalid location: provide latitude/longitude or coordinates array')
+    }
+
     const emergency = await Emergency.create({
       ride: rideId,
       triggeredBy,
       triggeredByModel,
       location: {
         type: 'Point',
-        coordinates: [location.longitude, location.latitude]
+        coordinates: [normalized.longitude, normalized.latitude]
       },
-      reason,
-      description
+      reason: reason || 'other',
+      description: description || ''
     })
 
     // Update ride status

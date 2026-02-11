@@ -46,6 +46,7 @@ const {
   clearRideRedisKeys
 } = require('./ride_booking_functions')
 
+const Emergency = require('../Models/User/emergency.model')
 const SupportIssue = require('../Models/support/supportIssue.model')
 const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
@@ -739,6 +740,7 @@ function initializeSocket (server) {
         }
 
         await setUserSocket(userId, socket.id)
+        socket.data.userId = userId
         // socketToUser.set(socket.id, String(userId))
         socket.join('rider')
         socket.join(`user_${userId}`)
@@ -3585,12 +3587,16 @@ function initializeSocket (server) {
             data.reason || 'Emergency alert triggered'
           }`
 
+          const rideCancelledPayload = {
+            rideId: ride._id,
+            ride: ride,
+            reason: cancellationReason,
+            cancelledBy: 'system'
+          }
+
           // Strategy 1: Emit directly to rider socket (if available)
           if (ride.userSocketId) {
-            io.to(ride.userSocketId).emit('rideCancelled', {
-              ride: ride,
-              reason: cancellationReason
-            })
+            io.to(ride.userSocketId).emit('rideCancelled', rideCancelledPayload)
             io.to(ride.userSocketId).emit('emergencyAlert', emergency)
             logger.warn(
               `Ride cancelled and emergency alert sent to rider socket - rideId: ${data.rideId}, socketId: ${ride.userSocketId}`
@@ -3599,10 +3605,7 @@ function initializeSocket (server) {
           
           // Strategy 2: Emit directly to driver socket (if available)
           if (ride.driverSocketId) {
-            io.to(ride.driverSocketId).emit('rideCancelled', {
-              ride: ride,
-              reason: cancellationReason
-            })
+            io.to(ride.driverSocketId).emit('rideCancelled', rideCancelledPayload)
             io.to(ride.driverSocketId).emit('emergencyAlert', emergency)
             logger.warn(
               `Ride cancelled and emergency alert sent to driver socket - rideId: ${data.rideId}, socketId: ${ride.driverSocketId}`
@@ -3610,10 +3613,7 @@ function initializeSocket (server) {
           }
 
           // Strategy 3: Emit to ride room as backup (any client in room receives it)
-          io.to(`ride_${ride._id}`).emit('rideCancelled', {
-            ride: ride,
-            reason: cancellationReason
-          })
+          io.to(`ride_${ride._id}`).emit('rideCancelled', rideCancelledPayload)
           io.to(`ride_${ride._id}`).emit('emergencyAlert', emergency)
           logger.warn(
             `Emergency alert sent to ride room - rideId: ${data.rideId}, room: ride_${ride._id}`
@@ -3658,6 +3658,72 @@ function initializeSocket (server) {
       } catch (err) {
         logger.error('emergencyAlert error:', err)
         socket.emit('emergencyError', { message: err.message })
+      }
+    })
+
+    // Emergency live location update (reporter sends periodic lat/lng; broadcast to admin / emergency room)
+    socket.on('emergencyLocationUpdate', async data => {
+      try {
+        const { emergencyId, latitude, longitude, timestamp } = data || {}
+        if (!emergencyId || typeof latitude !== 'number' || typeof longitude !== 'number') {
+          socket.emit('emergencyError', { message: 'emergencyId, latitude, longitude required' })
+          return
+        }
+        const emergency = await Emergency.findById(emergencyId).lean()
+        if (!emergency) {
+          socket.emit('emergencyError', { message: 'Emergency not found' })
+          return
+        }
+        if (emergency.status !== 'active') {
+          socket.emit('emergencyError', { message: 'Emergency no longer active' })
+          return
+        }
+        const reporterId = String(emergency.triggeredBy)
+        const isDriver = emergency.triggeredByModel === 'Driver'
+        const socketReporterId = isDriver ? socket.data.driverId : socket.data.userId
+        if (!socketReporterId || String(socketReporterId) !== reporterId) {
+          socket.emit('emergencyError', { message: 'Only the reporter can send location updates' })
+          return
+        }
+        const payload = {
+          emergencyId,
+          latitude,
+          longitude,
+          timestamp: timestamp || new Date().toISOString()
+        }
+        io.to('admin').emit('emergencyLocationUpdate', payload)
+        io.to(`emergency_${emergencyId}`).emit('emergencyLocationUpdate', payload)
+      } catch (err) {
+        logger.error('emergencyLocationUpdate error:', err)
+        socket.emit('emergencyError', { message: err.message })
+      }
+    })
+
+    // Admin joins emergency room to receive live location updates for one emergency
+    socket.on('emergency:join', async (data) => {
+      try {
+        const { emergencyId } = data || {}
+        if (!emergencyId) return
+        const inAdminRoom = socket.rooms.has('admin') || socket.rooms.has('admin_support_online')
+        if (!inAdminRoom) {
+          logger.warn('emergency:join - socket not in admin room, ignoring')
+          return
+        }
+        socket.join(`emergency_${emergencyId}`)
+        logger.info(`Admin joined emergency_${emergencyId} for live updates`)
+      } catch (err) {
+        logger.error('emergency:join error:', err)
+      }
+    })
+
+    socket.on('emergency:leave', async (data) => {
+      try {
+        const { emergencyId } = data || {}
+        if (!emergencyId) return
+        socket.leave(`emergency_${emergencyId}`)
+        logger.info(`Admin left emergency_${emergencyId}`)
+      } catch (err) {
+        logger.error('emergency:leave error:', err)
       }
     })
 

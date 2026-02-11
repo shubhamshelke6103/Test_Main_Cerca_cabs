@@ -257,7 +257,26 @@ const requestPayout = async (req, res) => {
     }
     
     logger.info(`Payout request created: ${payout._id}, Driver: ${driverId}, Amount: ₹${amount}`);
-    
+
+    // Notify admin dashboard so they can see the new payout request
+    try {
+      const { getSocketIO } = require('../../utils/socket');
+      const io = getSocketIO();
+      if (io) {
+        io.to('admin').emit('payoutRequested', {
+          payoutId: payout._id,
+          driverId,
+          driverName: driver.name || driver.fullName || 'Driver',
+          amount,
+          requestedAt: payout.requestedAt,
+          transactionReference: payout.transactionReference,
+        });
+        logger.info(`Emitted payoutRequested to admin room for payout ${payout._id}`);
+      }
+    } catch (socketErr) {
+      logger.warn('Failed to emit payoutRequested to admin:', socketErr.message);
+    }
+
     res.status(200).json({
       success: true,
       message: 'Payout request submitted successfully. It will be processed within 1-3 business days.',

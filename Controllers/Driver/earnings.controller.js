@@ -15,6 +15,8 @@ const getDriverEarnings = async (req, res) => {
       period = 'all', // 'today', 'week', 'month', 'year', 'all'
       startDate,
       endDate,
+      sort = 'rideDate', // 'rideDate', 'grossFare', 'driverEarning'
+      order = 'desc', // 'asc', 'desc'
     } = req.query;
     
     logger.info(`getDriverEarnings: Fetching earnings for driverId: ${driverId}`, {
@@ -63,18 +65,19 @@ const getDriverEarnings = async (req, res) => {
     } else {
       const now = new Date();
       switch (period) {
-        case 'today':
-          periodStart = new Date(now.setHours(0, 0, 0, 0));
-          periodEnd = new Date(now.setHours(23, 59, 59, 999));
+        case 'today': {
+          // Do not mutate now - use explicit constructor for start/end of today
+          periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+          periodEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
           dateFilter.rideDate = { $gte: periodStart, $lte: periodEnd };
           break;
-        case 'week':
-          periodStart = new Date(now);
-          periodStart.setDate(now.getDate() - 7);
-          periodStart.setHours(0, 0, 0, 0);
-          periodEnd = new Date();
+        }
+        case 'week': {
+          periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7, 0, 0, 0, 0);
+          periodEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
           dateFilter.rideDate = { $gte: periodStart, $lte: periodEnd };
           break;
+        }
         case 'month':
           periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
           periodStart.setHours(0, 0, 0, 0);
@@ -101,11 +104,16 @@ const getDriverEarnings = async (req, res) => {
     
     logger.info(`getDriverEarnings: Query filter:`, JSON.stringify(dateFilter, null, 2));
     
+    // Sort: allow rideDate, grossFare, driverEarning; order: asc 1, desc -1
+    const sortField = ['rideDate', 'grossFare', 'driverEarning'].includes(sort) ? sort : 'rideDate';
+    const sortOrder = order === 'asc' ? 1 : -1;
+    const sortObj = { [sortField]: sortOrder };
+    
     // Get earnings from AdminEarnings
     const earnings = await AdminEarnings.find(dateFilter)
       .populate('rideId', 'fare tips discount distanceInKm pickupAddress dropoffAddress')
       .populate('riderId', 'fullName')
-      .sort({ rideDate: -1 });
+      .sort(sortObj);
     
     logger.info(`getDriverEarnings: Found ${earnings.length} earnings records for driverId: ${driverId}`);
     
@@ -500,7 +508,7 @@ const getDriverEarnings = async (req, res) => {
 const getPaymentHistory = async (req, res) => {
   try {
     const { driverId } = req.params;
-    const { page = 1, limit = 20, status } = req.query;
+    const { page = 1, limit = 20, status, sort = 'rideDate', order = 'desc' } = req.query;
     
     // Verify driver exists
     const driver = await Driver.findById(driverId);
@@ -521,11 +529,16 @@ const getPaymentHistory = async (req, res) => {
       filter.paymentStatus = status;
     }
     
+    // Sort: allow rideDate, grossFare, paymentStatus; order: asc 1, desc -1
+    const sortField = ['rideDate', 'grossFare', 'paymentStatus'].includes(sort) ? sort : 'rideDate';
+    const sortOrder = order === 'asc' ? 1 : -1;
+    const sortObj = { [sortField]: sortOrder };
+    
     // Get earnings (payment history) with filter
     const earnings = await AdminEarnings.find(filter)
       .populate('rideId', 'fare tips pickupAddress dropoffAddress')
       .populate('riderId', 'fullName')
-      .sort({ rideDate: -1 })
+      .sort(sortObj)
       .skip(skip)
       .limit(parseInt(limit));
     
