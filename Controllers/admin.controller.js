@@ -278,14 +278,16 @@ const getAdminEarnings = async (req, res) => {
         });
         earningsByPeriod.sort((a, b) => a.period.localeCompare(b.period));
 
-        // Calculate top earning drivers
+        // Calculate top earning drivers (skip earnings with missing/deleted driver)
         const driverEarningsMap = new Map();
         earnings.forEach(earning => {
-            const driverId = earning.driverId._id || earning.driverId;
+            if (!earning.driverId) return;
+            const driverId = earning.driverId?._id ?? earning.driverId;
+            if (!driverId) return;
             if (!driverEarningsMap.has(driverId.toString())) {
                 driverEarningsMap.set(driverId.toString(), {
                     driverId: driverId,
-                    driverName: earning.driverId.name || 'Unknown',
+                    driverName: earning.driverId?.name ?? 'Unknown',
                     earnings: 0,
                     rides: 0,
                 });

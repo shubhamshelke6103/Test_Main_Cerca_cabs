@@ -2480,7 +2480,19 @@ function initializeSocket (server) {
 
         if (success) {
           logger.info(`Stop OTP verified successfully - rideId: ${rideId}`)
-          socket.emit('otpVerified', { success: true, ride })
+          // Emit plain object with string IDs so driver app parses reliably
+          const ridePlain = ride.toObject ? ride.toObject() : { ...ride }
+          const ridePayload = {
+            ...ridePlain,
+            _id: String(ride._id),
+            id: String(ride._id),
+            status: String(ride.status || 'in_progress')
+          }
+          socket.emit('otpVerified', {
+            success: true,
+            ride: ridePayload,
+            rideId: String(ride._id)
+          })
         } else {
           logger.warn(`Stop OTP verification failed - rideId: ${rideId}`)
         }
@@ -2516,12 +2528,17 @@ function initializeSocket (server) {
           // Still emit rideCompleted event to ensure apps receive it
           const completedRide = await Ride.findById(rideId).populate('rider driver')
           if (completedRide) {
-            io.to(`ride_${rideId}`).emit('rideCompleted', completedRide)
+            const rideRoom = 'ride_' + String(completedRide._id)
+            io.to(rideRoom).emit('rideCompleted', completedRide)
             if (completedRide.userSocketId) {
               io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+            } else {
+              logger.warn(`⚠️ Rider socketId not available for already-completed ride ${rideId}`)
             }
             if (completedRide.driverSocketId) {
               io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+            } else {
+              logger.warn(`⚠️ Driver socketId not available for already-completed ride ${rideId}`)
             }
           }
           return
@@ -2786,9 +2803,10 @@ function initializeSocket (server) {
         })
 
         // Emit rideCompleted event using multiple strategies for reliability
-        // Strategy 1: Emit to ride room (both rider and driver)
-        io.to(`ride_${completedRide._id}`).emit('rideCompleted', completedRide)
-        logger.info(`✅ Emitted rideCompleted to room: ride_${completedRide._id}`)
+        // Strategy 1: Emit to ride room (both rider and driver) - use string room name
+        const rideRoom = 'ride_' + String(completedRide._id)
+        io.to(rideRoom).emit('rideCompleted', completedRide)
+        logger.info(`✅ Emitted rideCompleted to room: ${rideRoom}`)
 
         // Strategy 2: Emit directly to rider socket (if available)
         if (completedRide.userSocketId) {
@@ -2807,7 +2825,7 @@ function initializeSocket (server) {
         }
 
         logger.info(
-          `Ride completion notifications sent - rideId: ${rideId}, room: ride_${completedRide._id}, riderSocket: ${completedRide.userSocketId || 'N/A'}, driverSocket: ${completedRide.driverSocketId || 'N/A'}`
+          `Ride completion notifications sent - rideId: ${rideId}, room: ${rideRoom}, riderSocket: ${completedRide.userSocketId || 'N/A'}, driverSocket: ${completedRide.driverSocketId || 'N/A'}`
         )
 
         // Expire share token and broadcast to shared ride room
@@ -2845,8 +2863,8 @@ function initializeSocket (server) {
           relatedRide: rideId
         })
 
-        // io.emit('rideCompleted', completedRide)
-        io.to(`ride_${completedRide._id}`).emit('rideCompleted', completedRide)
+        // Redundant emit to ride room (same as Strategy 1) for compatibility
+        io.to(rideRoom).emit('rideCompleted', completedRide)
       } catch (err) {
         logger.error('rideCompleted error:', err)
         socket.emit('rideError', { message: 'Failed to complete ride' })
