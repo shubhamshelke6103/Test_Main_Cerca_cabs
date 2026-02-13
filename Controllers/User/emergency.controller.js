@@ -1,9 +1,10 @@
 const Emergency = require('../../Models/User/emergency.model.js');
 const Ride = require('../../Models/Driver/ride.model.js');
 const logger = require('../../utils/logger.js');
+const { createEmergencyAlert: createEmergencyAlertFromRideBooking } = require('../../utils/ride_booking_functions.js');
 
 /**
- * @desc    Create an emergency alert
+ * @desc    Create an emergency alert (delegates to ride_booking_functions: creates emergency, cancels ride, frees driver, clears Redis)
  * @route   POST /emergencies
  */
 const createEmergencyAlert = async (req, res) => {
@@ -31,34 +32,25 @@ const createEmergencyAlert = async (req, res) => {
             return res.status(404).json({ message: 'Ride not found' });
         }
 
-        // Create emergency alert
-        const emergency = await Emergency.create({
-            ride: rideId,
+        // Single source of truth: create emergency, cancel ride, free driver, clear Redis
+        const payload = {
+            rideId,
             triggeredBy,
             triggeredByModel,
-            location: {
-                type: 'Point',
-                coordinates: [location.longitude, location.latitude],
-            },
+            location: { longitude: location.longitude, latitude: location.latitude },
             reason,
-            description,
-        });
-
-        // Update ride status to cancelled
-        await Ride.findByIdAndUpdate(rideId, { 
-            status: 'cancelled',
-            cancelledBy: 'system',
-            cancellationReason: `Emergency: ${reason}`,
-        });
+            description: description || '',
+        };
+        const emergency = await createEmergencyAlertFromRideBooking(payload);
 
         const populatedEmergency = await Emergency.findById(emergency._id)
             .populate('ride')
             .populate('triggeredBy', 'name fullName phone email');
 
         logger.warn(`EMERGENCY ALERT CREATED: ${emergency._id} for ride ${rideId}`);
-        res.status(201).json({ 
-            message: 'Emergency alert created successfully', 
-            emergency: populatedEmergency 
+        res.status(201).json({
+            message: 'Emergency alert created successfully',
+            emergency: populatedEmergency,
         });
     } catch (error) {
         logger.error('Error creating emergency alert:', error);

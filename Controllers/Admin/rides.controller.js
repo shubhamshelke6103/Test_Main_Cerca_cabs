@@ -1,6 +1,7 @@
 const Ride = require('../../Models/Driver/ride.model');
 const Driver = require('../../Models/Driver/driver.model');
 const logger = require('../../utils/logger');
+const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions');
 
 const listRides = async (req, res) => {
   try {
@@ -73,20 +74,21 @@ const getRideById = async (req, res) => {
 const cancelRide = async (req, res) => {
   try {
     const { id } = req.params;
-    const { reason, cancellationFee } = req.body;
+    const { reason } = req.body;
 
     const ride = await Ride.findById(id);
     if (!ride) {
       return res.status(404).json({ message: 'Ride not found' });
     }
 
-    ride.status = 'cancelled';
-    ride.cancelledBy = 'system';
-    if (reason) ride.cancellationReason = reason;
-    if (cancellationFee !== undefined) ride.cancellationFee = cancellationFee;
-    await ride.save();
+    // Use shared cancelRide so driver/Redis cleanup and wallet/Razorpay refunds run
+    const cancelledRide = await cancelRideFromBooking(
+      id,
+      'system',
+      reason || 'Cancelled by admin'
+    );
 
-    res.status(200).json({ message: 'Ride cancelled', ride });
+    res.status(200).json({ message: 'Ride cancelled', ride: cancelledRide });
   } catch (error) {
     logger.error('Error cancelling ride:', error);
     res.status(500).json({ message: 'Error cancelling ride', error: error.message });

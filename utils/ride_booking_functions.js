@@ -1161,21 +1161,28 @@ const completeRide = async (rideId, fare) => {
  */
 const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellationReason = null) => {
   try {
-    // 1. Check if payment method is WALLET
-    if (ride.paymentMethod !== 'WALLET') {
-      logger.debug(`processWalletRefund: Skipping refund - payment method is ${ride.paymentMethod}, not WALLET`)
+    // 1. Check if payment method is WALLET (case-insensitive)
+    const paymentMethodUpper = (ride.paymentMethod || '').toUpperCase()
+    if (paymentMethodUpper !== 'WALLET') {
+      logger.info(
+        `processWalletRefund: Early return - payment method not WALLET (rideId: ${ride._id}, paymentMethod: ${ride.paymentMethod}, cancelledBy: ${cancelledBy})`
+      )
       return null
     }
 
     // 2. Check if already refunded (prevent double refunds)
     if (ride.paymentStatus === 'refunded') {
-      logger.warn(`processWalletRefund: Ride ${ride._id} already refunded, skipping duplicate refund`)
+      logger.info(
+        `processWalletRefund: Early return - already refunded (rideId: ${ride._id}, cancelledBy: ${cancelledBy})`
+      )
       return null
     }
 
     // 3. Check if ride is completed (shouldn't refund completed rides)
     if (originalStatus === 'completed') {
-      logger.warn(`processWalletRefund: Ride ${ride._id} is completed, skipping refund`)
+      logger.info(
+        `processWalletRefund: Early return - ride already completed (rideId: ${ride._id}, cancelledBy: ${cancelledBy})`
+      )
       return null
     }
 
@@ -1187,7 +1194,9 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
     })
 
     if (!paymentTransaction) {
-      logger.warn(`processWalletRefund: No RIDE_PAYMENT transaction found for ride ${ride._id}, payment may not have been deducted`)
+      logger.info(
+        `processWalletRefund: Early return - no RIDE_PAYMENT transaction (rideId: ${ride._id}, cancelledBy: ${cancelledBy}) - payment may not have been deducted`
+      )
       return null
     }
 
@@ -1199,7 +1208,9 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
     })
 
     if (existingRefund) {
-      logger.warn(`processWalletRefund: Refund transaction already exists for ride ${ride._id}, skipping duplicate refund`)
+      logger.info(
+        `processWalletRefund: Early return - refund transaction already exists (rideId: ${ride._id}, cancelledBy: ${cancelledBy})`
+      )
       return null
     }
 
@@ -1561,9 +1572,18 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
 
     const originalStatus = originalRide.status
 
+    // Normalize cancelledBy so fee logic and logs are consistent
+    const validCancelledBy = ['rider', 'driver', 'system']
+    const normalizedCancelledBy = (cancelledBy && validCancelledBy.includes(String(cancelledBy).toLowerCase()))
+      ? String(cancelledBy).toLowerCase()
+      : 'system'
+    if (cancelledBy !== normalizedCancelledBy) {
+      logger.info(`cancelRide: Normalized cancelledBy from "${cancelledBy}" to "${normalizedCancelledBy}" for ride ${rideId}`)
+    }
+
     const updateData = {
       status: 'cancelled',
-      cancelledBy
+      cancelledBy: normalizedCancelledBy
     }
 
     // Add cancellation reason if provided
@@ -1634,16 +1654,20 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
       // Process refunds based on payment method and payment details
       // Use originalRide with originalStatus for accurate cancellation fee calculation
       try {
+        logger.info(
+          `cancelRide refund path - rideId: ${rideId}, cancelledBy: ${normalizedCancelledBy}, paymentMethod: ${originalRide.paymentMethod}, originalStatus: ${originalStatus}`
+        )
+
         // Check for Razorpay payment (either pure RAZORPAY or hybrid with Razorpay portion)
         const hasRazorpayPayment = originalRide.razorpayPaymentId && (originalRide.razorpayAmountPaid > 0 || originalRide.fare > 0)
-        const hasWalletPayment = originalRide.paymentMethod === 'WALLET' || (originalRide.walletAmountUsed && originalRide.walletAmountUsed > 0)
+        const hasWalletPayment = (originalRide.paymentMethod || '').toUpperCase() === 'WALLET' || (originalRide.walletAmountUsed && originalRide.walletAmountUsed > 0)
         
         if (hasRazorpayPayment && hasWalletPayment) {
           // Hybrid payment - refund both portions
           logger.info(`💰 Processing hybrid payment refund for ride ${rideId}`)
           
           // Wallet portion refunded via processWalletRefund
-          const walletRefund = await processWalletRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          const walletRefund = await processWalletRefund(originalRide, originalStatus, normalizedCancelledBy, cancellationReason)
           if (walletRefund && walletRefund.refunded) {
             logger.info(`✅ Wallet portion refund processed for cancelled ride ${rideId}: ₹${walletRefund.refundAmount || 0}`)
           } else if (walletRefund && !walletRefund.refunded) {
@@ -1651,7 +1675,7 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
           }
           
           // Razorpay portion refunded via processRazorpayRefund
-          const razorpayRefund = await processRazorpayRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          const razorpayRefund = await processRazorpayRefund(originalRide, originalStatus, normalizedCancelledBy, cancellationReason)
           if (razorpayRefund && razorpayRefund.refunded) {
             logger.info(`✅ Razorpay portion refund processed for cancelled ride ${rideId}: ₹${razorpayRefund.refundAmount || 0}`)
           } else if (razorpayRefund && !razorpayRefund.refunded) {
@@ -1660,7 +1684,7 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
         } else if (hasRazorpayPayment) {
           // Pure Razorpay payment (including case where user selected wallet but had ₹0 balance)
           logger.info(`💰 Processing Razorpay refund for ride ${rideId}`)
-          const refundResult = await processRazorpayRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          const refundResult = await processRazorpayRefund(originalRide, originalStatus, normalizedCancelledBy, cancellationReason)
           if (refundResult && refundResult.refunded) {
             logger.info(`✅ Razorpay refund processed for cancelled ride ${rideId}: ₹${refundResult.refundAmount || 0}`)
           } else if (refundResult && !refundResult.refunded) {
@@ -1668,10 +1692,10 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
           } else if (!refundResult) {
             logger.info(`ℹ️ No Razorpay refund needed for cancelled ride ${rideId}`)
           }
-        } else if (originalRide.paymentMethod === 'WALLET') {
+        } else if ((originalRide.paymentMethod || '').toUpperCase() === 'WALLET') {
           // Pure wallet payment
           logger.info(`💰 Processing wallet refund for ride ${rideId}`)
-          const refundResult = await processWalletRefund(originalRide, originalStatus, cancelledBy, cancellationReason)
+          const refundResult = await processWalletRefund(originalRide, originalStatus, normalizedCancelledBy, cancellationReason)
           if (refundResult && refundResult.refunded) {
             logger.info(`✅ Wallet refund processed for cancelled ride ${rideId}: ₹${refundResult.refundAmount || 0}`)
           } else if (refundResult && !refundResult.refunded) {
@@ -2357,9 +2381,9 @@ const createEmergencyAlert = async emergencyData => {
 
     // Free driver and clear Redis (same as cancelRide) so driver is available for next ride
     const ride = await Ride.findById(rideId).populate('driver').lean()
-    if (ride && ride.driver) {
+    const driverId = ride && ride.driver && (ride.driver._id || ride.driver)
+    if (driverId) {
       try {
-        const driverId = ride.driver._id || ride.driver
         const driverExists = await Driver.findById(driverId)
         if (!driverExists) {
           logger.warn(`createEmergencyAlert: Driver ${driverId} not found, skipping isBusy reset`)
@@ -2383,6 +2407,7 @@ const createEmergencyAlert = async emergencyData => {
       }
     }
 
+    // Always clear Redis for this ride (worker/lock keys) even when no driver was assigned
     try {
       await clearRideRedisKeys(rideId)
       logger.info(`✅ Redis cleanup completed for ride ${rideId} after emergency`)

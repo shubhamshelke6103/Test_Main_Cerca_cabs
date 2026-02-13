@@ -2879,9 +2879,38 @@ function initializeSocket (server) {
         logger.info(
           `rideCancelled event - rideId: ${data?.rideId}, cancelledBy: ${data?.cancelledBy}`
         )
-        const { rideId, cancelledBy, reason } = data || {}
+        const { rideId, reason } = data || {}
         if (!rideId) {
           logger.warn('rideCancelled: rideId is missing')
+          socket.emit('rideError', { message: 'Ride ID is required to cancel' })
+          return
+        }
+
+        // Load ride to validate canceller and set cancelledBy server-side
+        const rideForAuth = await Ride.findById(rideId).select('rider driver').lean()
+        if (!rideForAuth) {
+          logger.warn(`rideCancelled: Ride not found - rideId: ${rideId}`)
+          socket.emit('rideError', { message: 'Ride not found' })
+          return
+        }
+
+        const riderIdStr = rideForAuth.rider ? String(rideForAuth.rider) : null
+        const driverIdStr = rideForAuth.driver ? String(rideForAuth.driver) : null
+        const socketUserId = socket.data.userId ? String(socket.data.userId) : null
+        const socketDriverId = socket.data.driverId ? String(socket.data.driverId) : null
+
+        let serverCancelledBy = null
+        if (socketUserId && riderIdStr && socketUserId === riderIdStr) {
+          serverCancelledBy = 'rider'
+        } else if (socketDriverId && driverIdStr && socketDriverId === driverIdStr) {
+          serverCancelledBy = 'driver'
+        }
+
+        if (!serverCancelledBy) {
+          logger.warn(
+            `rideCancelled: Unauthorized - socket is not rider or assigned driver (rideId: ${rideId}, socketUserId: ${socketUserId}, socketDriverId: ${socketDriverId})`
+          )
+          socket.emit('rideError', { message: 'Only the rider or assigned driver can cancel this ride' })
           return
         }
 
@@ -2894,15 +2923,15 @@ function initializeSocket (server) {
           )
         }
 
-        // Cancel ride with reason
+        // Cancel ride with reason (use server-derived cancelledBy for refund/fee logic)
         // cancelRide also calls clearRideRedisKeys automatically
         const cancelledRide = await cancelRide(
           rideId,
-          cancelledBy,
+          serverCancelledBy,
           cancellationReason
         )
         logger.info(
-          `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${cancelledBy}, reason: ${cancellationReason}`
+          `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${serverCancelledBy}, reason: ${cancellationReason}`
         )
 
         // ============================
@@ -2940,7 +2969,7 @@ function initializeSocket (server) {
             recipientId: cancelledRide.rider._id,
             recipientModel: 'User',
             title: 'Ride Cancelled',
-            message: `Ride cancelled by ${cancelledBy}`,
+            message: `Ride cancelled by ${serverCancelledBy}`,
             type: 'ride_cancelled',
             relatedRide: rideId
           })
@@ -2951,7 +2980,7 @@ function initializeSocket (server) {
             recipientId: cancelledRide.driver._id,
             recipientModel: 'Driver',
             title: 'Ride Cancelled',
-            message: `Ride cancelled by ${cancelledBy}`,
+            message: `Ride cancelled by ${serverCancelledBy}`,
             type: 'ride_cancelled',
             relatedRide: rideId
           })
@@ -2993,9 +3022,9 @@ function initializeSocket (server) {
                 if (driver.socketId) {
                   io.to(driver.socketId).emit('rideNoLongerAvailable', {
                     rideId: rideId,
-                    message: `Ride cancelled by ${cancelledBy}`,
+                    message: `Ride cancelled by ${serverCancelledBy}`,
                     reason: cancellationReason,
-                    cancelledBy: cancelledBy
+                    cancelledBy: serverCancelledBy
                   })
                   notifiedCount++
                   logger.info(
