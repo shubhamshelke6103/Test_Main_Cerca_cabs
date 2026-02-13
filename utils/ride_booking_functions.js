@@ -2355,6 +2355,41 @@ const createEmergencyAlert = async emergencyData => {
       cancellationReason: `Emergency: ${reason}`
     })
 
+    // Free driver and clear Redis (same as cancelRide) so driver is available for next ride
+    const ride = await Ride.findById(rideId).populate('driver').lean()
+    if (ride && ride.driver) {
+      try {
+        const driverId = ride.driver._id || ride.driver
+        const driverExists = await Driver.findById(driverId)
+        if (!driverExists) {
+          logger.warn(`createEmergencyAlert: Driver ${driverId} not found, skipping isBusy reset`)
+        } else {
+          await Driver.findByIdAndUpdate(driverId, {
+            isBusy: false,
+            busyUntil: null
+          })
+          logger.info(
+            `✅ createEmergencyAlert: Driver ${driverId} isBusy reset to false after emergency for ride ${rideId}`
+          )
+          const validationResult = await validateAndFixDriverStatus(driverId)
+          if (validationResult.corrected) {
+            logger.info(
+              `✅ createEmergencyAlert: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+            )
+          }
+        }
+      } catch (err) {
+        logger.error(`Error cleaning driver state after emergency: ${err.message}`)
+      }
+    }
+
+    try {
+      await clearRideRedisKeys(rideId)
+      logger.info(`✅ Redis cleanup completed for ride ${rideId} after emergency`)
+    } catch (cleanupError) {
+      logger.warn(`⚠️ Redis cleanup failed for ride ${rideId} after emergency: ${cleanupError.message}`)
+    }
+
     return emergency
   } catch (error) {
     throw new Error(`Error creating emergency alert: ${error.message}`)
