@@ -2,12 +2,12 @@ const razorpay = require("razorpay");
 const crypto = require("crypto");
 const logger = require('../utils/logger');
 
-// Test keys (default fallback)
-const key = process.env.RAZORPAY_ID || "rzp_test_Rp3ejYlVfY449V";
-const secret = process.env.RAZORPAY_SECRET || "FORM4hrZrQO8JFIiYsQSC83N";
-// Live keys (commented out for testing)
-// const key = process.env.RAZORPAY_ID || "rzp_live_S6q5OGF0WYChTn";
-// const secret = process.env.RAZORPAY_SECRET || "EZv5VecWiWi0FLyffYLDTM3H";
+// Live keys (default fallback)
+const key = process.env.RAZORPAY_ID || "rzp_live_S6q5OGF0WYChTn";
+const secret = process.env.RAZORPAY_SECRET || "EZv5VecWiWi0FLyffYLDTM3H";
+// Test keys (commented out for production)
+// const key = process.env.RAZORPAY_ID || "rzp_test_Rp3ejYlVfY449V";
+// const secret = process.env.RAZORPAY_SECRET || "FORM4hrZrQO8JFIiYsQSC83N";
 
 var instance = new razorpay({
     key_id: key,

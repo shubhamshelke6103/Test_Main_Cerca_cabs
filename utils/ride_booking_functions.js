@@ -11,10 +11,14 @@ const { redis } = require('../config/redis')
 const razorpay = require('razorpay')
 
 // Initialize Razorpay instance
+// Live keys (default fallback)
 const razorpayInstance = new razorpay({
-  key_id: process.env.RAZORPAY_ID || "rzp_test_Rp3ejYlVfY449V",
-  key_secret: process.env.RAZORPAY_SECRET || "FORM4hrZrQO8JFIiYsQSC83N"
+  key_id: process.env.RAZORPAY_ID || "rzp_live_S6q5OGF0WYChTn",
+  key_secret: process.env.RAZORPAY_SECRET || "EZv5VecWiWi0FLyffYLDTM3H"
 })
+// Test keys (commented out for production)
+// key_id: process.env.RAZORPAY_ID || "rzp_test_Rp3ejYlVfY449V",
+// key_secret: process.env.RAZORPAY_SECRET || "FORM4hrZrQO8JFIiYsQSC83N"
 
 // ============================
 // REDIS CLEANUP UTILITIES (Multi-Instance Safe)
