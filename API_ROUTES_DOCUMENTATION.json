@@ -269,7 +269,7 @@
           "requestBody": {
             "contentType": "application/json",
             "required": ["addressLine", "location", "id"],
-            "optional": ["landmark", "placeId", "formattedAddress"],
+            "optional": ["landmark", "placeId", "formattedAddress", "addressType"],
             "schema": {
               "id": "string (user ID)",
               "addressLine": "string",
@@ -279,7 +279,8 @@
                 "coordinates": ["number (longitude)", "number (latitude)"]
               },
               "placeId": "string",
-              "formattedAddress": "string"
+              "formattedAddress": "string",
+              "addressType": "string (optional, enum: home | office | other)"
             }
           },
           "response": {
@@ -389,7 +390,7 @@
           },
           "requestBody": {
             "contentType": "application/json",
-            "optional": ["addressLine", "landmark", "location", "placeId", "formattedAddress"],
+            "optional": ["addressLine", "landmark", "location", "placeId", "formattedAddress", "addressType"],
             "schema": {
               "addressLine": "string",
               "landmark": "string",
@@ -398,7 +399,8 @@
                 "coordinates": ["number (longitude)", "number (latitude)"]
               },
               "placeId": "string",
-              "formattedAddress": "string"
+              "formattedAddress": "string",
+              "addressType": "string (optional, enum: home | office | other)"
             }
           },
           "response": {

@@ -55,6 +55,13 @@ const addressSchema = new Schema(
       default: '',
     },
 
+    // Address type label: home, office, or other (Uber-style)
+    addressType: {
+      type: String,
+      enum: ['home', 'office', 'other'],
+      default: 'other',
+    },
+
     // Reference back to the owning user
     user: {
       type: Schema.Types.ObjectId,

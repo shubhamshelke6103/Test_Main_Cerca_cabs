@@ -4,7 +4,7 @@ const Address = require('../../Models/User/address.model');
 // Create a new address
 const createAddress = async (req, res) => {
   try {
-    const { addressLine, landmark, location, placeId, formattedAddress, id } = req.body;
+    const { addressLine, landmark, location, placeId, formattedAddress, addressType, id } = req.body;
 
     const address = new Address({
       addressLine,
@@ -12,6 +12,7 @@ const createAddress = async (req, res) => {
       location,
       placeId,
       formattedAddress,
+      addressType: addressType || 'other',
       user: id, // assuming user is authenticated
     });
 
