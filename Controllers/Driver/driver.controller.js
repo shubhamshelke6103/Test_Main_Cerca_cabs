@@ -159,7 +159,9 @@ const getDriverById = async (req, res) => {
         const driverObj = driver.toObject();
         driverObj.totalEarnings = Math.round(totalEarnings * 100) / 100; // Round to 2 decimal places
         driverObj.completedRidesCount = totalRides;
-        
+        delete driverObj.password;
+        driverObj.rejectionReason = driver.rejectionReason ?? null;
+
         res.status(200).json(driverObj);
     } catch (error) {
         logger.error('Error fetching driver:', error);

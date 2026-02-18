@@ -42,6 +42,10 @@ const driverSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
     },
+    rejectionReason: {
+        type: String,
+        default: null,
+    },
     isBusy: {
         type: Boolean,
         default: false,

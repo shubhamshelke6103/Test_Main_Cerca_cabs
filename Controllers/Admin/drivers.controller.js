@@ -102,7 +102,7 @@ const approveDriver = async (req, res) => {
     const { id } = req.params;
     const driver = await Driver.findByIdAndUpdate(
       id,
-      { isActive: true },
+      { isVerified: true, isActive: true, rejectionReason: null },
       { new: true }
     );
 
@@ -120,9 +120,13 @@ const approveDriver = async (req, res) => {
 const rejectDriver = async (req, res) => {
   try {
     const { id } = req.params;
+    const reason = req.body?.reason;
+    if (typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
     const driver = await Driver.findByIdAndUpdate(
       id,
-      { isActive: false },
+      { isActive: false, rejectionReason: reason.trim() },
       { new: true }
     );
 
@@ -200,7 +204,16 @@ const getDriverDocuments = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    res.status(200).json({ documents: driver.documents || [] });
+    const raw = driver.documents || [];
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const documents = raw.map((doc) => {
+      if (typeof doc !== 'string') return doc;
+      if (/^https?:\/\//i.test(doc)) return doc;
+      const path = doc.startsWith('/') ? doc : `/${doc}`;
+      return `${baseUrl}${path}`;
+    });
+
+    res.status(200).json({ documents });
   } catch (error) {
     logger.error('Error fetching driver documents:', error);
     res.status(500).json({ message: 'Error fetching driver documents', error: error.message });
