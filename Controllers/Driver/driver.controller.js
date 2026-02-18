@@ -69,6 +69,7 @@ const addDriverDocuments = async (req, res) => {
         }
 
         driver.documents.push(...documentPaths);
+        driver.rejectionReason = null;
         await driver.save();
 
         logger.info(`Documents added to driver: ${driver.email}`);
