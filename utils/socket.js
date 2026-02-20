@@ -1780,6 +1780,12 @@ function initializeSocket (server) {
         // ============================
         io.to(roomName).emit('rideAccepted', rideWithMetadata)
 
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId,
+          status: 'accepted',
+          ride: rideWithMetadata
+        })
+
         // Broadcast to shared ride room
         await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
           status: 'accepted',
@@ -2184,6 +2190,12 @@ function initializeSocket (server) {
         // Notify rider
         io.to(`ride_${ride._id}`).emit('driverArrived', ride)
 
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId: ride._id.toString(),
+          status: 'arrived',
+          ride
+        })
+
         // Broadcast to shared ride room
         await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
           status: 'arrived',
@@ -2273,6 +2285,13 @@ function initializeSocket (server) {
         logger.info(`Ride started successfully - rideId: ${rideId}`)
 
         io.to(`ride_${startedRide._id}`).emit('rideStarted', startedRide)
+
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId,
+          status: 'in_progress',
+          ride: startedRide
+        })
+
         logger.info(`Ride start notification sent to rider - rideId: ${rideId}`)
 
         if (startedRide.driverSocketId) {
@@ -2806,6 +2825,13 @@ function initializeSocket (server) {
         // Strategy 1: Emit to ride room (both rider and driver) - use string room name
         const rideRoom = 'ride_' + String(completedRide._id)
         io.to(rideRoom).emit('rideCompleted', completedRide)
+
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId,
+          status: 'completed',
+          ride: completedRide
+        })
+
         logger.info(`✅ Emitted rideCompleted to room: ${rideRoom}`)
 
         // Strategy 2: Emit directly to rider socket (if available)
@@ -2948,6 +2974,12 @@ function initializeSocket (server) {
         }
 
         io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
+
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId,
+          status: 'cancelled',
+          ride: cancelledRide
+        })
 
         logger.info(
           `Cancellation notification sent to rider - rideId: ${rideId}`
@@ -3268,6 +3300,57 @@ function initializeSocket (server) {
         logger.error(`   Error stack: ${err.stack}`)
         socket.emit('roomLeaveError', { message: err.message })
         logger.info('========================================')
+      }
+    })
+
+    // ============================
+    // ADMIN: Join/Leave ride room for live tracking
+    // ============================
+    socket.on('adminJoinRideRoom', async data => {
+      try {
+        const { rideId } = data || {}
+        if (!socket.data.adminId) {
+          socket.emit('roomJoinError', { message: 'Admin not authenticated' })
+          return
+        }
+        if (!rideId) {
+          socket.emit('roomJoinError', { message: 'Ride ID is required' })
+          return
+        }
+        if (!/^[0-9a-fA-F]{24}$/.test(rideId)) {
+          socket.emit('roomJoinError', { message: 'Invalid ride ID format' })
+          return
+        }
+        const ride = await Ride.findById(rideId)
+        if (!ride) {
+          socket.emit('roomJoinError', { message: 'Ride not found' })
+          return
+        }
+        const roomName = `ride_${rideId}`
+        socket.join(roomName)
+        if (!socket.data.rooms) socket.data.rooms = []
+        if (!socket.data.rooms.includes(roomName)) socket.data.rooms.push(roomName)
+        socket.emit('roomJoined', { success: true, rideId, roomName })
+        logger.info(`✅ Admin ${socket.data.adminId} joined ride room: ${roomName}`)
+      } catch (err) {
+        logger.error('adminJoinRideRoom error:', err)
+        socket.emit('roomJoinError', { message: err.message })
+      }
+    })
+
+    socket.on('adminLeaveRideRoom', async data => {
+      try {
+        const { rideId } = data || {}
+        if (!rideId) return
+        const roomName = `ride_${rideId}`
+        socket.leave(roomName)
+        if (socket.data.rooms) {
+          socket.data.rooms = socket.data.rooms.filter(r => r !== roomName)
+        }
+        socket.emit('roomLeft', { success: true, rideId, roomName })
+        logger.info(`✅ Admin left ride room: ${roomName}`)
+      } catch (err) {
+        logger.error('adminLeaveRideRoom error:', err)
       }
     })
 
@@ -3662,6 +3745,13 @@ function initializeSocket (server) {
           // Strategy 3: Emit to ride room as backup (any client in room receives it)
           io.to(`ride_${ride._id}`).emit('rideCancelled', rideCancelledPayload)
           io.to(`ride_${ride._id}`).emit('emergencyAlert', emergency)
+
+          io.to('admin').emit('rideStatusUpdated', {
+            rideId: ride._id.toString(),
+            status: 'cancelled',
+            ride: ride
+          })
+
           logger.warn(
             `Emergency alert sent to ride room - rideId: ${data.rideId}, room: ride_${ride._id}`
           )

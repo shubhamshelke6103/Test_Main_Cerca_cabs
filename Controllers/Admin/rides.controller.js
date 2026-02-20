@@ -3,6 +3,8 @@ const Driver = require('../../Models/Driver/driver.model');
 const logger = require('../../utils/logger');
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions');
 
+const SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'status', 'fare', 'actualStartTime', 'actualEndTime'];
+
 const listRides = async (req, res) => {
   try {
     const {
@@ -14,6 +16,8 @@ const listRides = async (req, res) => {
       driverId,
       startDate,
       endDate,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
     } = req.query;
 
     const query = {};
@@ -27,10 +31,14 @@ const listRides = async (req, res) => {
       if (endDate) query.createdAt.$lte = new Date(endDate);
     }
 
+    const sortField = SORTABLE_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
+    const sortDir = sortOrder === 'asc' ? 1 : -1;
+    const sortOpt = { [sortField]: sortDir };
+
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const [rides, total] = await Promise.all([
       Ride.find(query)
-        .sort({ createdAt: -1 })
+        .sort(sortOpt)
         .skip(skip)
         .limit(parseInt(limit, 10))
         .populate('rider', 'fullName phoneNumber')
