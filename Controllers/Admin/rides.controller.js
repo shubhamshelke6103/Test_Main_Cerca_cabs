@@ -2,6 +2,7 @@ const Ride = require('../../Models/Driver/ride.model');
 const Driver = require('../../Models/Driver/driver.model');
 const logger = require('../../utils/logger');
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions');
+const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket');
 
 const SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'status', 'fare', 'actualStartTime', 'actualEndTime'];
 
@@ -95,6 +96,19 @@ const cancelRide = async (req, res) => {
       'system',
       reason || 'Cancelled by admin'
     );
+
+    // Emit socket events so user and driver apps receive rideCancelled and update UI
+    try {
+      const io = getSocketIO();
+      await emitRideCancelledToClients(
+        io,
+        cancelledRide,
+        'system',
+        reason || 'Cancelled by admin'
+      );
+    } catch (socketErr) {
+      logger.warn('Admin cancel: socket emit failed (ride already cancelled in DB)', socketErr);
+    }
 
     res.status(200).json({ message: 'Ride cancelled', ride: cancelledRide });
   } catch (error) {

@@ -79,6 +79,85 @@ async function broadcastToSharedRide (rideId, eventName, data) {
   }
 }
 
+/**
+ * Emit rideCancelled to clients (ride room, rider, driver, admin, notifications, notified drivers).
+ * Used by socket handler and admin controller.
+ */
+async function emitRideCancelledToClients (
+  ioInstance,
+  cancelledRide,
+  serverCancelledBy,
+  cancellationReason = ''
+) {
+  const rideId = cancelledRide._id.toString()
+  ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
+  ioInstance.to('admin').emit('rideStatusUpdated', {
+    rideId,
+    status: 'cancelled',
+    ride: cancelledRide
+  })
+  if (cancelledRide.userSocketId) {
+    ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', cancelledRide)
+  }
+  if (cancelledRide.driverSocketId) {
+    ioInstance.to(cancelledRide.driverSocketId).emit('rideCancelled', cancelledRide)
+  }
+  if (cancelledRide.rider) {
+    await createNotification({
+      recipientId: cancelledRide.rider._id,
+      recipientModel: 'User',
+      title: 'Ride Cancelled',
+      message: `Ride cancelled by ${serverCancelledBy}`,
+      type: 'ride_cancelled',
+      relatedRide: rideId
+    })
+  }
+  if (cancelledRide.driver) {
+    await createNotification({
+      recipientId: cancelledRide.driver._id,
+      recipientModel: 'Driver',
+      title: 'Ride Cancelled',
+      message: `Ride cancelled by ${serverCancelledBy}`,
+      type: 'ride_cancelled',
+      relatedRide: rideId
+    })
+  }
+  try {
+    const rideWithNotifiedDrivers = await Ride.findById(rideId)
+      .select('notifiedDrivers driver')
+      .lean()
+    if (rideWithNotifiedDrivers?.notifiedDrivers?.length > 0) {
+      const acceptingDriverId = cancelledRide.driver
+        ? cancelledRide.driver._id || cancelledRide.driver
+        : null
+      const otherDriverIds =
+        rideWithNotifiedDrivers.notifiedDrivers.filter(id => {
+          if (!acceptingDriverId) return true
+          return id.toString() !== acceptingDriverId.toString()
+        })
+      if (otherDriverIds.length > 0) {
+        const notifiedDrivers = await Driver.find({ _id: { $in: otherDriverIds } })
+          .select('socketId _id')
+          .lean()
+        for (const driver of notifiedDrivers) {
+          if (driver.socketId) {
+            ioInstance.to(driver.socketId).emit('rideNoLongerAvailable', {
+              rideId,
+              message: `Ride cancelled by ${serverCancelledBy}`,
+              reason: cancellationReason,
+              cancelledBy: serverCancelledBy
+            })
+          }
+        }
+      }
+    }
+  } catch (notifyError) {
+    logger.error(
+      `❌ Error notifying drivers about ride cancellation: ${notifyError.message}`
+    )
+  }
+}
+
 function initializeSocket (server) {
   io = new Server(server, {
     cors: {
@@ -2973,112 +3052,12 @@ function initializeSocket (server) {
           )
         }
 
-        io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
-
-        io.to('admin').emit('rideStatusUpdated', {
-          rideId,
-          status: 'cancelled',
-          ride: cancelledRide
-        })
-
-        logger.info(
-          `Cancellation notification sent to rider - rideId: ${rideId}`
+        await emitRideCancelledToClients(
+          io,
+          cancelledRide,
+          serverCancelledBy,
+          cancellationReason
         )
-
-        if (cancelledRide.driverSocketId) {
-          io.to(cancelledRide.driverSocketId).emit(
-            'rideCancelled',
-            cancelledRide
-          )
-          logger.info(
-            `Cancellation notification sent to driver - rideId: ${rideId}`
-          )
-        }
-
-        // Create notifications
-        if (cancelledRide.rider) {
-          await createNotification({
-            recipientId: cancelledRide.rider._id,
-            recipientModel: 'User',
-            title: 'Ride Cancelled',
-            message: `Ride cancelled by ${serverCancelledBy}`,
-            type: 'ride_cancelled',
-            relatedRide: rideId
-          })
-        }
-
-        if (cancelledRide.driver) {
-          await createNotification({
-            recipientId: cancelledRide.driver._id,
-            recipientModel: 'Driver',
-            title: 'Ride Cancelled',
-            message: `Ride cancelled by ${serverCancelledBy}`,
-            type: 'ride_cancelled',
-            relatedRide: rideId
-          })
-        }
-
-        // 🔥 CRITICAL: Notify all notified drivers that ride is no longer available
-        // This ensures drivers viewing the ride or have it in their pending list get notified
-        try {
-          const rideWithNotifiedDrivers = await Ride.findById(rideId)
-            .select('notifiedDrivers driver')
-            .lean()
-
-          if (rideWithNotifiedDrivers?.notifiedDrivers?.length > 0) {
-            const Driver = require('../Models/Driver/driver.model')
-            const acceptingDriverId = cancelledRide.driver
-              ? cancelledRide.driver._id || cancelledRide.driver
-              : null
-
-            // Get all notified drivers except the one who accepted (if any)
-            const otherDriverIds =
-              rideWithNotifiedDrivers.notifiedDrivers.filter(id => {
-                if (!acceptingDriverId) return true
-                return id.toString() !== acceptingDriverId.toString()
-              })
-
-            if (otherDriverIds.length > 0) {
-              logger.info(
-                `📢 Notifying ${otherDriverIds.length} notified drivers that ride ${rideId} is cancelled`
-              )
-
-              const notifiedDrivers = await Driver.find({
-                _id: { $in: otherDriverIds }
-              })
-                .select('socketId _id')
-                .lean()
-
-              let notifiedCount = 0
-              for (const driver of notifiedDrivers) {
-                if (driver.socketId) {
-                  io.to(driver.socketId).emit('rideNoLongerAvailable', {
-                    rideId: rideId,
-                    message: `Ride cancelled by ${serverCancelledBy}`,
-                    reason: cancellationReason,
-                    cancelledBy: serverCancelledBy
-                  })
-                  notifiedCount++
-                  logger.info(
-                    `✅ Notified driver ${driver._id} that ride ${rideId} is cancelled`
-                  )
-                }
-              }
-
-              logger.info(
-                `✅ Successfully notified ${notifiedCount} drivers about ride cancellation`
-              )
-            }
-          }
-        } catch (notifyError) {
-          logger.error(
-            `❌ Error notifying drivers about ride cancellation: ${notifyError.message}`
-          )
-          // Don't fail cancellation if notification fails
-        }
-
-        // io.emit('rideCancelled', cancelledRide)
-        io.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
 
         logger.info(`rideCancelled completed successfully - rideId: ${rideId}`)
       } catch (err) {
@@ -4385,4 +4364,4 @@ async function processReferralRewardIfFirstRide (userId, rideId) {
   }
 }
 
-module.exports = { initializeSocket, getSocketIO }
+module.exports = { initializeSocket, getSocketIO, emitRideCancelledToClients }
