@@ -260,6 +260,71 @@ const updateDriverDocuments = async (req, res) => {
     }
 };
 
+const uploadPriorityDocument = async (req, res) => {
+    try {
+        const driverId = req.params.id;
+
+        if (!req.file) {
+            return res.status(400).json({ message: "No document uploaded" });
+        }
+
+        const driver = await Driver.findById(driverId);
+        if (!driver) {
+            return res.status(404).json({ message: "Driver not found" });
+        }
+
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const documentUrl = `${baseUrl}/${req.file.path}`;
+
+        driver.priorityDocument = documentUrl;
+        driver.isPriorityDriver = false;      // Reset until approved
+        driver.priorityApprovedAt = null;     // Reset approval time
+
+        await driver.save();
+
+        res.status(200).json({
+            message: "Priority document uploaded. Waiting for admin approval."
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: "Error uploading priority document",
+            error: error.message
+        });
+    }
+};
+
+const approvePriorityDriver = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: "Driver not found" });
+        }
+
+        if (!driver.priorityDocument) {
+            return res.status(400).json({
+                message: "No priority document uploaded"
+            });
+        }
+
+        driver.isPriorityDriver = true;
+        driver.priorityApprovedAt = new Date();
+
+        await driver.save();
+
+        res.status(200).json({
+            message: "Driver upgraded to PRIORITY successfully"
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: "Error approving driver",
+            error: error.message
+        });
+    }
+};
+
 /**
  * @desc    Update the isActive status of a driver
  * @route   PATCH /drivers/:id/isActive
@@ -750,4 +815,6 @@ module.exports = {
     getNearbyDrivers,
     updateDriverBusyStatus,
     markCashCollected,
+    uploadPriorityDocument,
+    approvePriorityDriver
 };

@@ -18,6 +18,7 @@ const {
     updateDriverBusyStatus,
     getUpcomingBookings,
     markCashCollected,
+    uploadPriorityDocument
 } = require('../../Controllers/Driver/driver.controller.js');
 
 const router = express.Router();
@@ -47,6 +48,9 @@ router.post('/:id/documents', upload.array('documents', 10), addDriverDocuments)
 
 // Route to update a driver's documents
 router.put('/:id/documents', upload.array('documents', 10), updateDriverDocuments);
+
+// Upload priority document
+router.post('/:id/priority-document', upload.single('document'),uploadPriorityDocument);
 
 // Route to get all rides of a driver
 router.get('/:id/rides', getAllRidesOfDriver);
