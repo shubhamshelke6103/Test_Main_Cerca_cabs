@@ -106,6 +106,7 @@ app.use('/admin', require('./Routes/Admin/rides.routes'))
 app.use('/admin', require('./Routes/Admin/payments.routes'))
 app.use('/admin', require('./Routes/Admin/analytics.routes'))
 app.use('/admin/support', require('./Routes/Admin/support.routes'))
+app.use('/admin', require('./Routes/Admin/vendor.routes'))
 
 app.use('/settings', require('./Routes/admin.routes'))
 app.use('/coupons', require('./Routes/coupon.routes'))
