@@ -120,6 +120,7 @@ app.use('/api/rides', require('./Routes/ride.routes'))
 app.use('/rides', require('./Routes/ride.routes'))
 // Mount shared ride page route at root level for easy access
 app.use('/', require('./Routes/ride.routes'))
+app.use('/vendor', require('./Routes/Vendor/vendor.routes') )
 
 /* =======================
    HEALTH & UPLOAD
