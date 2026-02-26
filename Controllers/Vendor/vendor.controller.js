@@ -339,9 +339,7 @@ exports.getDashboardStats = async (req, res) => {
     const activeDrivers = drivers.filter(d => d.isActive).length
     const verifiedDrivers = drivers.filter(d => d.isVerified).length
     const totalDriverEarnings = drivers.reduce(
-      (sum, d) => sum + (d.totalEarnings || 0),
-      0
-    )
+      (sum, d) => sum + (d.totalEarnings || 0), 0)
 
     res.json({
       success: true,
@@ -369,7 +367,7 @@ exports.getDashboardStats = async (req, res) => {
   }
 }
 
-//Documents Uploads
+
 
 // Add Driver To Vendor
 exports.addDriver = async (req, res) => {
