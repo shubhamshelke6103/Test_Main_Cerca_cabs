@@ -38,10 +38,20 @@ exports.getVendorById = async (req, res) => {
 // ======================================
 exports.verifyVendor = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id);
+    const { vendorId } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({
+        message: "vendorId is required"
+      });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
 
     if (!vendor) {
-      return res.status(404).json({ message: "Vendor not found" });
+      return res.status(404).json({
+        message: "Vendor not found"
+      });
     }
 
     vendor.isVerified = true;
@@ -49,9 +59,17 @@ exports.verifyVendor = async (req, res) => {
 
     await vendor.save();
 
-    res.json({ message: "Vendor verified successfully" });
+    res.json({
+      success: true,
+      message: "Vendor verified successfully",
+      vendor
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -60,12 +78,26 @@ exports.verifyVendor = async (req, res) => {
 // ======================================
 exports.rejectVendor = async (req, res) => {
   try {
-    const { reason } = req.body;
+    const { vendorId, reason } = req.body;
 
-    const vendor = await Vendor.findById(req.params.id);
+    if (!vendorId) {
+      return res.status(400).json({
+        message: "vendorId is required"
+      });
+    }
+
+    if (!reason) {
+      return res.status(400).json({
+        message: "Rejection reason is required"
+      });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
 
     if (!vendor) {
-      return res.status(404).json({ message: "Vendor not found" });
+      return res.status(404).json({
+        message: "Vendor not found"
+      });
     }
 
     vendor.isVerified = false;
@@ -73,9 +105,17 @@ exports.rejectVendor = async (req, res) => {
 
     await vendor.save();
 
-    res.json({ message: "Vendor rejected successfully" });
+    res.json({
+      success: true,
+      message: "Vendor rejected successfully",
+      vendor
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -84,37 +124,92 @@ exports.rejectVendor = async (req, res) => {
 // ======================================
 exports.blockVendor = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id);
+    const { vendorId } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({
+        message: "vendorId is required"
+      });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
 
     if (!vendor) {
-      return res.status(404).json({ message: "Vendor not found" });
+      return res.status(404).json({
+        message: "Vendor not found"
+      });
     }
 
     vendor.isActive = false;
+
     await vendor.save();
 
-    res.json({ message: "Vendor blocked successfully" });
+    res.json({
+      success: true,
+      message: "Vendor blocked successfully",
+      vendor
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
 // ======================================
 // Unblock Vendor
 // ======================================
+// exports.unblockVendor = async (req, res) => {
+//   try {
+//     const vendor = await Vendor.findById(req.params.id);
+
+//     if (!vendor) {
+//       return res.status(404).json({ message: "Vendor not found" });
+//     }
+
+//     vendor.isActive = true;
+//     await vendor.save();
+
+//     res.json({ message: "Vendor unblocked successfully" });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
 exports.unblockVendor = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id);
+    const { vendorId } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({
+        message: "vendorId is required"
+      });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
 
     if (!vendor) {
-      return res.status(404).json({ message: "Vendor not found" });
+      return res.status(404).json({
+        message: "Vendor not found"
+      });
     }
 
     vendor.isActive = true;
+
     await vendor.save();
 
-    res.json({ message: "Vendor unblocked successfully" });
+    res.json({
+      success: true,
+      message: "Vendor unblocked successfully",
+      vendor
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };

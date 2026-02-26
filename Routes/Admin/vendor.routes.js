@@ -10,12 +10,12 @@ router.get("/", authenticateAdmin, adminVendorController.getAllVendors);
 
 router.get("/:id", authenticateAdmin, adminVendorController.getVendorById);
 
-router.patch("/verify/:id", authenticateAdmin, adminVendorController.verifyVendor);
+router.patch("/verify", authenticateAdmin, adminVendorController.verifyVendor);
 
-router.patch("/reject/:id", authenticateAdmin, adminVendorController.rejectVendor);
+router.patch("/reject", authenticateAdmin, adminVendorController.rejectVendor);
 
-router.patch("/block/:id", authenticateAdmin, adminVendorController.blockVendor);
+router.patch("/block", authenticateAdmin, adminVendorController.blockVendor);
 
-router.patch("/unblock/:id", authenticateAdmin, adminVendorController.unblockVendor);
+router.patch("/unblock", authenticateAdmin, adminVendorController.unblockVendor);
 
 module.exports = router;

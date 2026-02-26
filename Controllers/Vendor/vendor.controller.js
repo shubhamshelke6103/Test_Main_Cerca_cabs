@@ -216,7 +216,13 @@ exports.removeDriverFromVendor = async (req, res) => {
 // =============================
 exports.verifyDriver = async (req, res) => {
   try {
-    const { driverId } = req.params;
+    const { driverId } = req.body;
+
+    if (!driverId) {
+      return res.status(400).json({
+        message: "driverId is required"
+      });
+    }
 
     const driver = await Driver.findOne({
       _id: driverId,
@@ -224,7 +230,9 @@ exports.verifyDriver = async (req, res) => {
     });
 
     if (!driver) {
-      return res.status(404).json({ message: "Driver not found" });
+      return res.status(404).json({
+        message: "Driver not found or not under your vendor account"
+      });
     }
 
     driver.isVerified = true;
@@ -232,9 +240,17 @@ exports.verifyDriver = async (req, res) => {
 
     await driver.save();
 
-    res.json({ message: "Driver verified successfully" });
+    res.json({
+      success: true,
+      message: "Driver verified successfully",
+      driver
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
@@ -243,8 +259,19 @@ exports.verifyDriver = async (req, res) => {
 // =============================
 exports.rejectDriver = async (req, res) => {
   try {
-    const { driverId } = req.params;
-    const { reason } = req.body;
+    const { driverId, reason } = req.body;
+
+    if (!driverId) {
+      return res.status(400).json({
+        message: "driverId is required"
+      });
+    }
+
+    if (!reason) {
+      return res.status(400).json({
+        message: "Rejection reason is required"
+      });
+    }
 
     const driver = await Driver.findOne({
       _id: driverId,
@@ -252,7 +279,9 @@ exports.rejectDriver = async (req, res) => {
     });
 
     if (!driver) {
-      return res.status(404).json({ message: "Driver not found" });
+      return res.status(404).json({
+        message: "Driver not found or not under your vendor account"
+      });
     }
 
     driver.isVerified = false;
@@ -260,9 +289,17 @@ exports.rejectDriver = async (req, res) => {
 
     await driver.save();
 
-    res.json({ message: "Driver rejected" });
+    res.json({
+      success: true,
+      message: "Driver rejected successfully",
+      driver
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 

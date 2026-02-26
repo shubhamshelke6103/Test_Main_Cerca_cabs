@@ -16,9 +16,9 @@ router.post("/assign-driver", vendorController.assignDriverToVendor);
 
 router.delete("/remove-driver/:driverId",  vendorController.removeDriverFromVendor);
 
-router.patch("/verify-driver/:driverId",  vendorController.verifyDriver);
+router.patch("/verify-driver", vendorController.verifyDriver);
 
-router.patch("/reject-driver/:driverId",  vendorController.rejectDriver);
+router.patch("/reject-driver", vendorController.rejectDriver);
 
 router.get("/dashboard",  vendorController.getDashboardStats);
 
