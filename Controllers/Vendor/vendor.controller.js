@@ -182,7 +182,7 @@ exports.assignDriverToVendor = async (req, res) => {
     driver.vendorId = vendorId;
     await driver.save();
 
-    await Vendor.findByIdAndUpdate(req.user.id, {
+    await Vendor.findByIdAndUpdate(vendorId, {
       $inc: { totalDrivers: 1 }
     });
 
@@ -214,7 +214,7 @@ exports.removeDriverFromVendor = async (req, res) => {
     driver.vendorId = null;
     await driver.save();
 
-    await Vendor.findByIdAndUpdate(req.user.id, {
+    await Vendor.findByIdAndUpdate(vendorId, {
       $inc: { totalDrivers: -1 }
     });
 
@@ -357,3 +357,31 @@ exports.getDashboardStats = async (req, res) => {
     });
   }
 };
+
+
+//Documents Uploads
+
+// Add Driver To Vendor
+
+
+// Block/Unblock Driver 
+
+
+// Vendor Drivers Locations
+
+
+// Add Vendor Bank Account Details
+
+
+// Get Vendor Bank Account Details 
+
+
+
+// Update Vendor Bank Account Details
+
+
+// Delete Vendor Bank Account Details
+
+
+
+//Vendor Heatmap to show most active rides
