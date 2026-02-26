@@ -14,6 +14,10 @@ router.get("/drivers/:id", vendorController.getVendorDrivers);
 
 router.post("/assign-driver", vendorController.assignDriverToVendor);
 
+router.post("/drivers", vendorController.addDriver);
+router.patch("/block-driver", vendorController.blockDriver);
+router.patch("/unblock-driver", vendorController.unblockDriver);
+
 router.delete("/remove-driver/:driverId/:vendorId",  vendorController.removeDriverFromVendor);
 
 router.patch("/verify-driver", vendorController.verifyDriver);

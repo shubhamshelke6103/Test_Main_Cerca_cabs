@@ -362,12 +362,121 @@ exports.getDashboardStats = async (req, res) => {
 //Documents Uploads
 
 // Add Driver To Vendor
+exports.addDriver = async (req, res) => {
+  try {
+    const vendorId = req.body.vendorId;
+    const { name, email, phone, password, location } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({ message: "vendorId is required" });
+    }
+
+    if (!name || !phone || !password) {
+      return res.status(400).json({ message: "name, phone and password are required" });
+    }
+
+    // prevent duplicate phone
+    const existing = await Driver.findOne({ phone });
+    if (existing) {
+      return res.status(400).json({ message: "Driver with this phone already exists" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const driver = await Driver.create({
+      name,
+      email,
+      phone,
+      password: hashedPassword,
+      location: location || {},
+      documents: [],
+      vendorId: vendorId,
+      isVerified: false, // vendor-created drivers require vendor approval
+      isActive: false
+    });
+
+    // increment vendor's driver count
+    await Vendor.findByIdAndUpdate(vendorId, { $inc: { totalDrivers: 1 } });
+
+    res.status(201).json({ success: true, message: "Driver created under vendor", driver });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 
 // Block/Unblock Driver 
+exports.blockDriver = async (req, res) => {
+  try {
+    const { driverId } = req.body;
+    const vendorId = req.body.vendorId;
+
+    if (!driverId) {
+      return res.status(400).json({ message: "driverId is required" });
+    }
+
+    const driver = await Driver.findOne({ _id: driverId, vendorId });
+    if (!driver) {
+      return res.status(404).json({ message: "Driver not found or not under your vendor account" });
+    }
+
+    driver.isActive = false;
+    await driver.save();
+
+    res.json({ success: true, message: "Driver blocked successfully", driver });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.unblockDriver = async (req, res) => {
+  try {
+    const { driverId } = req.body;
+    const vendorId = req.body.vendorId;
+
+    if (!driverId) {
+      return res.status(400).json({ message: "driverId is required" });
+    }
+
+    const driver = await Driver.findOne({ _id: driverId, vendorId });
+    if (!driver) {
+      return res.status(404).json({ message: "Driver not found or not under your vendor account" });
+    }
+
+    driver.isActive = true;
+    await driver.save();
+
+    res.json({ success: true, message: "Driver unblocked successfully", driver });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 
 // Vendor Drivers Locations
+exports.getVendorDriversLocations = async (req, res) => {
+  try {
+    const vendorId = req.params.vendorId || req.query.vendorId || req.body.vendorId || req.user?.id;
+
+    if (!vendorId) {
+      return res.status(400).json({ message: "vendorId is required" });
+    }
+
+    const drivers = await Driver.find({ vendorId }).select("name phone isOnline location");
+
+    const locations = drivers.map((d) => ({
+      id: d._id,
+      name: d.name,
+      phone: d.phone,
+      isOnline: d.isOnline,
+      location: d.location
+    }));
+
+    res.json({ success: true, total: locations.length, locations });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 
 // Add Vendor Bank Account Details
