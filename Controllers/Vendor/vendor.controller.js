@@ -118,7 +118,7 @@ exports.loginVendor = async (req, res) => {
 // =============================
 exports.getVendorProfile = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.user.id).select("-password");
+    const vendor = await Vendor.findById(req.params.id).select("-password");
 
     if (!vendor) {
       return res.status(404).json({ message: "Vendor not found" });
@@ -135,8 +135,9 @@ exports.getVendorProfile = async (req, res) => {
 // =============================
 exports.updateVendorProfile = async (req, res) => {
   try {
+    let vendorId = req.body.id;
     const vendor = await Vendor.findByIdAndUpdate(
-      req.user.id,
+      vendorId,
       req.body,
       { new: true }
     );
@@ -155,7 +156,7 @@ exports.updateVendorProfile = async (req, res) => {
 // =============================
 exports.getVendorDrivers = async (req, res) => {
   try {
-    const drivers = await Driver.find({ vendorId: req.user.id });
+    const drivers = await Driver.find({ vendorId: req.params.id });
 
     res.json({
       total: drivers.length,
@@ -171,14 +172,14 @@ exports.getVendorDrivers = async (req, res) => {
 // =============================
 exports.assignDriverToVendor = async (req, res) => {
   try {
-    const { driverId } = req.body;
+    const { driverId,vendorId } = req.body;
 
     const driver = await Driver.findById(driverId);
     if (!driver) {
       return res.status(404).json({ message: "Driver not found" });
     }
 
-    driver.vendorId = req.user.id;
+    driver.vendorId = vendorId;
     await driver.save();
 
     await Vendor.findByIdAndUpdate(req.user.id, {
@@ -199,11 +200,11 @@ exports.assignDriverToVendor = async (req, res) => {
 // =============================
 exports.removeDriverFromVendor = async (req, res) => {
   try {
-    const { driverId } = req.params;
+    const { driverId ,vendorId} = req.params;
 
     const driver = await Driver.findOne({
       _id: driverId,
-      vendorId: req.user.id
+      vendorId: vendorId
     });
 
     if (!driver) {
@@ -230,7 +231,7 @@ exports.removeDriverFromVendor = async (req, res) => {
 // =============================
 exports.verifyDriver = async (req, res) => {
   try {
-    const { driverId } = req.body;
+    const { driverId,vendorId } = req.body;
 
     if (!driverId) {
       return res.status(400).json({
@@ -240,7 +241,7 @@ exports.verifyDriver = async (req, res) => {
 
     const driver = await Driver.findOne({
       _id: driverId,
-      vendorId: req.user.id
+      vendorId: vendorId
     });
 
     if (!driver) {
@@ -322,7 +323,7 @@ exports.rejectDriver = async (req, res) => {
 // =============================
 exports.getDashboardStats = async (req, res) => {
   try {
-    const { vendorId } = req.body;
+    const { vendorId } = req.params;
 
     if (!vendorId) {
       return res.status(400).json({

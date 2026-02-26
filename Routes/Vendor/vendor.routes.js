@@ -7,19 +7,19 @@ const vendorController = require("../../Controllers/Vendor/vendor.controller");
 router.post("/register", vendorController.registerVendor);
 router.post("/login", vendorController.loginVendor);
 // Protected routes
-router.get("/profile", vendorController.getVendorProfile);
+router.get("/profile/:id", vendorController.getVendorProfile);
 router.put("/profile", vendorController.updateVendorProfile);
 
-router.get("/drivers", vendorController.getVendorDrivers);
+router.get("/drivers/:id", vendorController.getVendorDrivers);
 
 router.post("/assign-driver", vendorController.assignDriverToVendor);
 
-router.delete("/remove-driver/:driverId",  vendorController.removeDriverFromVendor);
+router.delete("/remove-driver/:driverId/:vendorId",  vendorController.removeDriverFromVendor);
 
 router.patch("/verify-driver", vendorController.verifyDriver);
 
 router.patch("/reject-driver", vendorController.rejectDriver);
 
-router.get("/dashboard",  vendorController.getDashboardStats);
+router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 
 module.exports = router;
