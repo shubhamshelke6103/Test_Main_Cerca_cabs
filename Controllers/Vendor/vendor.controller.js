@@ -322,7 +322,13 @@ exports.rejectDriver = async (req, res) => {
 // =============================
 exports.getDashboardStats = async (req, res) => {
   try {
-    const vendorId = req.user.id;
+    const { vendorId } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({
+        message: "vendorId is required"
+      });
+    }
 
     const totalDrivers = await Driver.countDocuments({ vendorId });
 
@@ -337,11 +343,16 @@ exports.getDashboardStats = async (req, res) => {
     ]);
 
     res.json({
+      success: true,
       totalDrivers,
       onlineDrivers,
       totalEarnings: totalEarnings[0]?.total || 0
     });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
