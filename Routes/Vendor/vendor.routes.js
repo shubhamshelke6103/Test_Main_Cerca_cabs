@@ -19,6 +19,9 @@ router.patch("/block-driver", vendorController.blockDriver);
 router.patch("/unblock-driver", vendorController.unblockDriver);
 router.get("/driver-location/:driverId", vendorController.getDriverLocationById);
 
+// vendor can fetch documents of their own driver
+router.get("/driver-document/:driverId", vendorController.getDriverDocuments);
+
 router.delete("/remove-driver/:driverId/:vendorId",  vendorController.removeDriverFromVendor);
 
 router.patch("/verify-driver", vendorController.verifyDriver);
@@ -26,5 +29,11 @@ router.patch("/verify-driver", vendorController.verifyDriver);
 router.patch("/reject-driver", vendorController.rejectDriver);
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
+
+// Bank account CRUD
+router.post('/:vendorId/bank-account', vendorController.addVendorBankAccount);
+router.get('/:vendorId/bank-account', vendorController.getVendorBankAccount);
+router.put('/:vendorId/bank-account', vendorController.updateVendorBankAccount);
+router.delete('/:vendorId/bank-account', vendorController.deleteVendorBankAccount);
 
 module.exports = router;

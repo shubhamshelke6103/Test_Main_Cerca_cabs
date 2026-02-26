@@ -795,6 +795,21 @@ const markCashCollected = async (req, res) => {
     }
 };
 
+// new helper: retrieve driver documents
+const getDriverDocuments = async (req, res) => {
+    try {
+        const driverId = req.params.id;
+        const driver = await Driver.findById(driverId).select('documents');
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+        res.status(200).json({ documents: driver.documents || [] });
+    } catch (error) {
+        logger.error('Error fetching driver documents:', error);
+        res.status(500).json({ message: 'Error fetching driver documents', error });
+    }
+};
+
 module.exports = {
     addDriver,
     addDriverDocuments,
@@ -816,5 +831,6 @@ module.exports = {
     updateDriverBusyStatus,
     markCashCollected,
     uploadPriorityDocument,
-    approvePriorityDriver
+    approvePriorityDriver,
+    getDriverDocuments
 };

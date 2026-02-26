@@ -13,8 +13,12 @@ const parseBoolean = (value) => {
 
 const listDrivers = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, isActive, isVerified, isOnline } = req.query;
+    const { page = 1, limit = 20, search, isActive, isVerified, isOnline, includeVendor } = req.query;
     const query = {};
+    // by default hide drivers that belong to a vendor (only show standalone drivers)
+    if (!parseBoolean(includeVendor)) {
+      query.vendorId = null; // vendors drivers have this field set when assigned
+    }
 
     const activeValue = parseBoolean(isActive);
     if (activeValue !== undefined) query.isActive = activeValue;

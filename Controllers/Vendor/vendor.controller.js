@@ -508,19 +508,155 @@ exports.getDriverLocationById = async (req, res) => {
   }
 };
 
+// Get driver documents (vendor only)
+exports.getDriverDocuments = async (req, res) => {
+  try {
+    const vendorId = req.body.vendorId; // should come from auth
+    const { driverId } = req.params;
+
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "Vendor ID is required" });
+    }
+
+    if (!driverId) {
+      return res.status(400).json({ success: false, message: "Driver ID is required" });
+    }
+
+    const driver = await Driver.findOne({ _id: driverId, vendorId }).select('documents');
+    if (!driver) {
+      return res.status(404).json({ success: false, message: "Driver not found under this vendor" });
+    }
+
+    return res.status(200).json({ success: true, documents: driver.documents || [] });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+
 
 // Add Vendor Bank Account Details
+exports.addVendorBankAccount = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const { accountNumber, ifscCode, accountHolderName, bankName, accountType } = req.body;
 
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
+
+    if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
+      return res.status(400).json({
+        success: false,
+        message: "All bank account fields (accountNumber, ifscCode, accountHolderName, bankName) are required"
+      });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    vendor.bankAccount = {
+      accountNumber,
+      ifscCode,
+      accountHolderName,
+      bankName,
+      accountType: accountType || vendor.bankAccount?.accountType || "CURRENT"
+    };
+
+    await vendor.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Bank account added successfully",
+      data: { bankAccount: vendor.bankAccount }
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // Get Vendor Bank Account Details 
+exports.getVendorBankAccount = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
 
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
 
+    const vendor = await Vendor.findById(vendorId).select('bankAccount');
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { bankAccount: vendor.bankAccount || null }
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // Update Vendor Bank Account Details
+exports.updateVendorBankAccount = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const update = req.body;
 
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
+
+    const vendor = await Vendor.findById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    vendor.bankAccount = {
+      ...vendor.bankAccount,
+      ...update
+    };
+
+    await vendor.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Bank account updated successfully",
+      data: { bankAccount: vendor.bankAccount }
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // Delete Vendor Bank Account Details
+exports.deleteVendorBankAccount = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
 
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
 
+    const vendor = await Vendor.findById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    vendor.bankAccount = {};
+    await vendor.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Bank account deleted successfully"
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 //Vendor Heatmap to show most active rides

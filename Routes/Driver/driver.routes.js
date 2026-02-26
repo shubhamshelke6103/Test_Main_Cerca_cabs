@@ -9,6 +9,7 @@ const {
     updateDriver,
     addDriverDocuments,
     updateDriverDocuments,
+    getDriverDocuments,
     getAllRidesOfDriver,
     updateDriverLocation,
     updateDriverOnlineStatus,
@@ -48,6 +49,9 @@ router.post('/:id/documents', upload.array('documents', 10), addDriverDocuments)
 
 // Route to update a driver's documents
 router.put('/:id/documents', upload.array('documents', 10), updateDriverDocuments);
+
+// Route to fetch a driver's documents
+router.get('/:id/documents', getDriverDocuments);
 
 // Upload priority document
 router.post('/:id/priority-document', upload.single('document'),uploadPriorityDocument);
