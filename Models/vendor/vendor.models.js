@@ -36,17 +36,17 @@ const vendorSchema = new mongoose.Schema({
     required: true
   },
 
-  location: {
-    type: {
-      type: String,
-      enum: ["Point"],
-      default: "Point"
-    },
-    coordinates: {
-      type: [Number], // [lng, lat]
-      required: true
-    }
-  },
+  // location: {
+  //   type: {
+  //     type: String,
+  //     enum: ["Point"],
+  //     default: "Point"
+  //   },
+  //   coordinates: {
+  //     type: [Number], // [lng, lat]
+  //     required: true
+  //   }
+  // },
 
   // Commission vendor takes from their drivers
   commissionType: {

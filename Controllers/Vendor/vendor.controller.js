@@ -15,13 +15,21 @@ exports.registerVendor = async (req, res) => {
       email,
       phone,
       password,
-      address,
-      location
+      address
     } = req.body;
+
+    // Basic validation
+    if (!businessName || !ownerName || !email || !phone || !password) {
+      return res.status(400).json({
+        message: "All required fields must be provided"
+      });
+    }
 
     const existing = await Vendor.findOne({ email });
     if (existing) {
-      return res.status(400).json({ message: "Vendor already exists" });
+      return res.status(400).json({
+        message: "Vendor already exists"
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -33,16 +41,22 @@ exports.registerVendor = async (req, res) => {
       phone,
       password: hashedPassword,
       address,
-      location,
-      documents: req.body.documents || []
+      documents: req.body.documents || [],
+      isVerified: false,   // default pending
+      isActive: true       // default active
     });
 
     res.status(201).json({
+      success: true,
       message: "Vendor registered successfully. Awaiting admin approval.",
       vendor
     });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
