@@ -454,27 +454,57 @@ exports.unblockDriver = async (req, res) => {
 
 
 // Vendor Drivers Locations
-exports.getVendorDriversLocations = async (req, res) => {
+// Get Single Driver Location (Vendor Only)
+exports.getDriverLocationById = async (req, res) => {
   try {
-    const vendorId = req.params.vendorId || req.query.vendorId || req.body.vendorId || req.user?.id;
+    const vendorId = req.body.vendorId; // use req.user.id in production
+    const { driverId } = req.params;
 
     if (!vendorId) {
-      return res.status(400).json({ message: "vendorId is required" });
+      return res.status(400).json({
+        success: false,
+        message: "Vendor ID is required"
+      });
     }
 
-    const drivers = await Driver.find({ vendorId }).select("name phone isOnline location");
+    if (!driverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Driver ID is required"
+      });
+    }
 
-    const locations = drivers.map((d) => ({
-      id: d._id,
-      name: d.name,
-      phone: d.phone,
-      isOnline: d.isOnline,
-      location: d.location
-    }));
+    // Check driver belongs to this vendor
+    const driver = await Driver.findOne({
+      _id: driverId,
+      vendorId: vendorId
+    }).select("name phone isOnline location");
 
-    res.json({ success: true, total: locations.length, locations });
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "Driver not found under this vendor"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Driver location fetched successfully",
+      data: {
+        driverId: driver._id,
+        name: driver.name,
+        phone: driver.phone,
+        isOnline: driver.isOnline,
+        latitude: driver.location?.coordinates?.[1] || null,
+        longitude: driver.location?.coordinates?.[0] || null
+      }
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
