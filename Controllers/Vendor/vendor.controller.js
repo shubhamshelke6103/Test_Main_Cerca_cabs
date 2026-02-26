@@ -58,7 +58,7 @@ exports.loginVendor = async (req, res) => {
     const vendor = await Vendor.findOne({ email });
 
     if (!vendor) {
-      return res.status(400).json({ message: "Invalid credentials" });
+      return res.status(400).json({ message: "Vendor account not found. Please register first." });
     }
 
     if (!vendor.isVerified) {
