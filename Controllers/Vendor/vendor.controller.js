@@ -397,13 +397,13 @@ exports.addDriver = async (req, res) => {
 
     const driver = await Driver.create({
       name,
-      email,
+      email: email || `${phone}@vendor.local`,
       phone,
       password: hashedPassword,
-      location: location || {},
+      location: location && location.coordinates ? location : { type: 'Point', coordinates: [0, 0] },
       documents: [],
       vendorId: vendorId,
-      isVerified: false, // vendor-created drivers require vendor approval
+      isVerified: false,
       isActive: false
     })
 
@@ -477,7 +477,7 @@ exports.unblockDriver = async (req, res) => {
 // Get Single Driver Location (Vendor Only)
 exports.getDriverLocationById = async (req, res) => {
   try {
-    const vendorId = req.body.vendorId 
+    const vendorId = req.user?.id || req.body.vendorId
     const { driverId } = req.params
 
     if (!vendorId) {
@@ -530,7 +530,7 @@ exports.getDriverLocationById = async (req, res) => {
 // Get driver documents (vendor only)
 exports.getDriverDocuments = async (req, res) => {
   try {
-    const vendorId = req.body.vendorId 
+    const vendorId = req.user?.id || req.body.vendorId
     const { driverId } = req.params
 
     if (!vendorId) {
@@ -702,6 +702,75 @@ exports.deleteVendorBankAccount = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Bank account deleted successfully'
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+// =============================
+// Upload vendor document (Aadhaar) – post-registration (public)
+// Only allowed when vendor has no documents yet.
+// =============================
+exports.uploadVendorDocumentPostRegister = async (req, res) => {
+  try {
+    const vendorId = req.body.vendorId
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: 'vendorId is required' })
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No document file uploaded' })
+    }
+
+    const vendor = await Vendor.findById(vendorId)
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
+    }
+    if (vendor.documents && vendor.documents.length > 0) {
+      return res.status(400).json({ success: false, message: 'Vendor already has documents uploaded' })
+    }
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`
+    const documentUrl = `${baseUrl}/uploads/vendorDocuments/${req.file.filename}`
+    vendor.documents = vendor.documents || []
+    vendor.documents.push(documentUrl)
+    await vendor.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Document submitted for verification.',
+      documents: vendor.documents
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+// =============================
+// Upload vendor document (protected – logged-in vendor)
+// =============================
+exports.uploadVendorDocument = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No document file uploaded' })
+    }
+
+    const vendor = await Vendor.findById(vendorId)
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
+    }
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`
+    const documentUrl = `${baseUrl}/uploads/vendorDocuments/${req.file.filename}`
+    vendor.documents = vendor.documents || []
+    vendor.documents.push(documentUrl)
+    await vendor.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Document uploaded successfully.',
+      documents: vendor.documents
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })

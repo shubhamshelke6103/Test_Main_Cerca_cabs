@@ -34,6 +34,32 @@ exports.getVendorById = async (req, res) => {
 };
 
 // ======================================
+// Get Vendor Documents (for admin – list with full URLs)
+// ======================================
+exports.getVendorDocuments = async (req, res) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id).select("documents");
+
+    if (!vendor) {
+      return res.status(404).json({ message: "Vendor not found" });
+    }
+
+    const raw = vendor.documents || [];
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const documents = raw.map((doc) => {
+      if (typeof doc !== "string") return doc;
+      if (/^https?:\/\//i.test(doc)) return doc;
+      const path = doc.startsWith("/") ? doc : `/${doc}`;
+      return `${baseUrl}${path}`;
+    });
+
+    res.status(200).json({ documents });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ======================================
 // Verify Vendor
 // ======================================
 exports.verifyVendor = async (req, res) => {

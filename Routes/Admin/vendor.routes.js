@@ -9,6 +9,7 @@ const { authenticateAdmin } = require('../../utils/adminAuth');
 router.get("/", authenticateAdmin, adminVendorController.getAllVendors);
 
 router.get("/:id", authenticateAdmin, adminVendorController.getVendorById);
+router.get("/:id/documents", authenticateAdmin, adminVendorController.getVendorDocuments);
 
 router.patch("/verify", authenticateAdmin, adminVendorController.verifyVendor);
 
