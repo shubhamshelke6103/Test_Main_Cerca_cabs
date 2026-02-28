@@ -2039,7 +2039,7 @@ function initializeSocket (server) {
 
           // 🔒 CRITICAL: Check ride status before retrying search
           // This prevents retrying for cancelled rides
-          const rideStatusCheck = await Ride.findById(rideId).select('status')
+          const rideStatusCheck = await Ride.findById(rideId).select('status discoveryPhase')
           if (!rideStatusCheck) {
             logger.warn(
               `⚠️ Ride ${rideId} not found during status check before retry, aborting retry`
@@ -2057,6 +2057,15 @@ function initializeSocket (server) {
           logger.info(
             `✅ Ride ${rideId} status verified as 'requested' before retry search`
           )
+
+          // Priority phase: hand off to worker for normal-phase (notify non-priority drivers only)
+          if (rideStatusCheck.discoveryPhase === 'priority') {
+            logger.info(
+              `🔀 Ride ${rideId} was in priority phase; enqueueing normal-phase job for worker`
+            )
+            await rideBookingQueue.add('process-ride', { rideId, phase: 'normal' })
+            return
+          }
 
           // Try searching again with larger radius (15km, 20km, 25km)
           logger.info(

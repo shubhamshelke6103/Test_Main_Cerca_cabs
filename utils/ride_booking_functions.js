@@ -2466,11 +2466,13 @@ const autoAssignDriver = async (rideId, pickupLocation, maxDistance = 5000) => {
 }
 
 // Search drivers with progressive radius expansion
+// options (optional): { priorityOnly: true|false, excludeDriverIds: [ObjectId] }
 const searchDriversWithProgressiveRadius = async (
   pickupLocation,
   radii = [3000, 6000, 9000, 12000, 15000, 20000],
   bookingType = null, // Optional: 'INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'
-  vehicleType = null // Optional: 'sedan', 'suv', 'hatchback', 'auto' - filters drivers by vehicle type
+  vehicleType = null, // Optional: 'sedan', 'suv', 'hatchback', 'auto' - filters drivers by vehicle type
+  options = null // Optional: { priorityOnly: true|false, excludeDriverIds: [ObjectId] } - when omitted, behavior is unchanged
 ) => {
   try {
     // Ensure pickupLocation has coordinates array
@@ -2579,6 +2581,21 @@ const searchDriversWithProgressiveRadius = async (
       if (vehicleType) {
         driverQuery['vehicleInfo.vehicleType'] = vehicleType
         logger.info(`   🚗 Filtering drivers by vehicle type: ${vehicleType}`)
+      }
+
+      // Priority driver filter (only when options passed - backward compatible)
+      if (options && typeof options.priorityOnly === 'boolean') {
+        if (options.priorityOnly) {
+          driverQuery.isPriorityDriver = true
+          logger.info(`   ⭐ Filtering priority drivers only`)
+        } else {
+          driverQuery.isPriorityDriver = { $ne: true }
+          logger.info(`   ⭐ Excluding priority drivers (normal phase)`)
+        }
+      }
+      if (options && Array.isArray(options.excludeDriverIds) && options.excludeDriverIds.length > 0) {
+        driverQuery._id = { $nin: options.excludeDriverIds }
+        logger.info(`   🚫 Excluding ${options.excludeDriverIds.length} driver(s) (e.g. already rejected)`)
       }
 
       // Now apply filters - including socketId to ensure only connected drivers

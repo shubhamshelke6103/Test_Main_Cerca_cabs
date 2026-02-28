@@ -270,6 +270,13 @@ const rideSchema = new mongoose.Schema(
       }
     ],
 
+    // Priority driver discovery phase: 'priority' | 'normal' | null
+    discoveryPhase: {
+      type: String,
+      enum: ['priority', 'normal'],
+      default: null
+    },
+
     // =========================
     // Ride Sharing
     // =========================

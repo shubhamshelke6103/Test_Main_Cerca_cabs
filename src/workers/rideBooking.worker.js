@@ -26,9 +26,9 @@ const { getSocketIO } = require('../../utils/socket')
 const rideBookingWorker = new Worker(
   QUEUE_NAME, // ✅ FIXED — NO MORE 'ride-booking'
   async job => {
-    const { rideId } = job.data
+    const { rideId, phase } = job.data
 
-    logger.info(`🚀 Processing ride job | rideId: ${rideId}`)
+    logger.info(`🚀 Processing ride job | rideId: ${rideId}${phase ? ` | phase: ${phase}` : ''}`)
 
     // ============================
     // 🔒 REDIS WORKER LOCK (cluster-safe)
@@ -60,29 +60,99 @@ const rideBookingWorker = new Worker(
 
     const io = getSocketIO()
 
-    // ============================
-    // FIND DRIVERS
-    // ============================
-    // Get vehicleType from ride for filtering drivers
     const vehicleType = ride.vehicleType || null
+    const radii = [3000, 6000, 9000, 12000, 15000, 20000]
+    const bookingType = ride.bookingType || null
+
     if (vehicleType) {
       logger.info(`🚗 Searching drivers for vehicle type: ${vehicleType}`)
     }
 
-    const { drivers, radiusUsed } =
-      await searchDriversWithProgressiveRadius(
-        ride.pickupLocation,
-        [3000, 6000, 9000, 12000, 15000, 20000],
-        ride.bookingType || null,
-        vehicleType // Pass vehicleType to filter drivers
-      )
-
-    logger.info(
-      `📍 Found ${drivers.length} drivers within ${radiusUsed}m for ride ${rideId}`
-    )
+    let drivers
+    let radiusUsed
+    let discoveryPhase = null
 
     // ============================
-    // NO DRIVERS → CANCEL RIDE
+    // PHASE 'normal': notify only non-priority drivers (after priority rejections)
+    // ============================
+    if (phase === 'normal') {
+      const { drivers: normalDrivers, radiusUsed: ru } =
+        await searchDriversWithProgressiveRadius(
+          ride.pickupLocation,
+          radii,
+          bookingType,
+          vehicleType,
+          { priorityOnly: false, excludeDriverIds: ride.rejectedDrivers || [] }
+        )
+      drivers = normalDrivers
+      radiusUsed = ru
+      discoveryPhase = 'normal'
+
+      if (!drivers.length) {
+        logger.warn(`❌ No normal drivers found for ride ${rideId} (phase normal)`)
+
+        const cancelledRide = await cancelRide(
+          rideId,
+          'system',
+          `No drivers available after priority rejections`
+        )
+
+        if (ride.userSocketId) {
+          io.to(ride.userSocketId).emit('noDriverFound', {
+            rideId,
+            message: 'No drivers available. All nearby drivers have declined.'
+          })
+          io.to(ride.userSocketId).emit('rideCancelled', {
+            ride: cancelledRide,
+            reason: 'No drivers available',
+            cancelledBy: 'system'
+          })
+        }
+        await createNotification({
+          recipientId: ride.rider._id || ride.rider,
+          recipientModel: 'User',
+          title: 'Ride Cancelled',
+          message: 'No drivers available. All nearby drivers have declined.',
+          type: 'ride_cancelled',
+          relatedRide: rideId
+        })
+        return
+      }
+    } else {
+      // ============================
+      // DEFAULT: try priority drivers first, else fall back to all drivers
+      // ============================
+      const { drivers: priorityDrivers, radiusUsed: ruPriority } =
+        await searchDriversWithProgressiveRadius(
+          ride.pickupLocation,
+          radii,
+          bookingType,
+          vehicleType,
+          { priorityOnly: true }
+        )
+
+      if (priorityDrivers.length > 0) {
+        drivers = priorityDrivers
+        radiusUsed = ruPriority
+        discoveryPhase = 'priority'
+        logger.info(`📍 Found ${drivers.length} priority drivers within ${radiusUsed}m for ride ${rideId}`)
+      } else {
+        // No priority drivers: same as current behavior (all drivers, no options)
+        const result = await searchDriversWithProgressiveRadius(
+          ride.pickupLocation,
+          radii,
+          bookingType,
+          vehicleType
+        )
+        drivers = result.drivers
+        radiusUsed = result.radiusUsed
+        discoveryPhase = null
+        logger.info(`📍 No priority drivers; found ${drivers.length} drivers within ${radiusUsed}m for ride ${rideId}`)
+      }
+    }
+
+    // ============================
+    // NO DRIVERS → CANCEL RIDE (default phase when no drivers at all)
     // ============================
     if (!drivers.length) {
       logger.warn(`❌ No drivers found for ride ${rideId}`)
@@ -145,12 +215,15 @@ const rideBookingWorker = new Worker(
       }
     }
 
-    await Ride.findByIdAndUpdate(rideId, {
-      $set: { notifiedDrivers: notifiedDriverIds }
-    })
+    const updatePayload = { $set: { notifiedDrivers: phase === 'normal' ? [...(ride.notifiedDrivers || []), ...notifiedDriverIds] : notifiedDriverIds } }
+    if (discoveryPhase !== null) {
+      updatePayload.$set.discoveryPhase = discoveryPhase
+    }
+
+    await Ride.findByIdAndUpdate(rideId, updatePayload)
 
     logger.info(
-      `✅ Ride ${rideId} processed | notifiedDrivers: ${notifiedDriverIds.length}`
+      `✅ Ride ${rideId} processed | notifiedDrivers: ${notifiedDriverIds.length}${discoveryPhase ? ` | discoveryPhase: ${discoveryPhase}` : ''}`
     )
 
     // ============================
