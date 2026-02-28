@@ -326,6 +326,36 @@ const approvePriorityDriver = async (req, res) => {
 };
 
 /**
+ * @desc    Reject priority driver application (clears document so driver can re-apply)
+ * @route   PUT /admin/drivers/:id/reject-priority
+ */
+const rejectPriorityDriver = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: "Driver not found" });
+        }
+
+        driver.priorityDocument = null;
+        driver.isPriorityDriver = false;
+        driver.priorityApprovedAt = null;
+
+        await driver.save();
+
+        res.status(200).json({
+            message: "Priority application rejected. Driver can re-apply."
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            message: "Error rejecting priority driver",
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Update the isActive status of a driver
  * @route   PATCH /drivers/:id/isActive
  */
@@ -832,5 +862,6 @@ module.exports = {
     markCashCollected,
     uploadPriorityDocument,
     approvePriorityDriver,
+    rejectPriorityDriver,
     getDriverDocuments
 };

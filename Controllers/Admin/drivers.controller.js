@@ -13,7 +13,7 @@ const parseBoolean = (value) => {
 
 const listDrivers = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, isActive, isVerified, isOnline, includeVendor } = req.query;
+    const { page = 1, limit = 20, search, isActive, isVerified, isOnline, includeVendor, priorityPending } = req.query;
     const query = {};
     // by default hide drivers that belong to a vendor (only show standalone drivers)
     if (!parseBoolean(includeVendor)) {
@@ -28,6 +28,11 @@ const listDrivers = async (req, res) => {
 
     const onlineValue = parseBoolean(isOnline);
     if (onlineValue !== undefined) query.isOnline = onlineValue;
+
+    if (parseBoolean(priorityPending)) {
+      query.priorityDocument = { $exists: true, $ne: null, $ne: '' };
+      query.isPriorityDriver = false;
+    }
 
     if (search) {
       const regex = new RegExp(search, 'i');
