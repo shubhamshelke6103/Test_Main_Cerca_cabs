@@ -1,3 +1,4 @@
+const path = require('path');
 const Driver = require('../../Models/Driver/driver.model');
 const Ride = require('../../Models/Driver/ride.model');
 const Payout = require('../../Models/Driver/payout.model');
@@ -229,6 +230,49 @@ const getDriverDocuments = async (req, res) => {
   }
 };
 
+const getPriorityDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const driver = await Driver.findById(id).select('priorityDocument');
+
+    if (!driver || !driver.priorityDocument) {
+      return res.status(404).json({ message: 'Priority document not found' });
+    }
+
+    const stored = driver.priorityDocument;
+    let filePath;
+
+    if (/^https?:\/\//i.test(stored)) {
+      try {
+        const u = new URL(stored);
+        const pathname = u.pathname.replace(/^\//, '');
+        filePath = path.join(process.cwd(), pathname);
+      } catch (e) {
+        return res.status(400).json({ message: 'Invalid priority document URL' });
+      }
+    } else {
+      filePath = path.join(process.cwd(), stored);
+    }
+
+    const resolvedPath = path.resolve(filePath);
+    const uploadsDir = path.resolve(process.cwd(), 'uploads');
+    if (!resolvedPath.startsWith(uploadsDir)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const mimeTypes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png' };
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', 'inline');
+    res.sendFile(resolvedPath);
+  } catch (error) {
+    logger.error('Error serving priority document:', error);
+    res.status(500).json({ message: 'Error serving priority document', error: error.message });
+  }
+};
+
 module.exports = {
   listDrivers,
   getDriverDetails,
@@ -237,5 +281,6 @@ module.exports = {
   blockDriver,
   verifyDriver,
   getDriverDocuments,
+  getPriorityDocument,
 };
 

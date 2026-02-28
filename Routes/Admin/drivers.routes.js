@@ -7,6 +7,7 @@ const {
   blockDriver,
   verifyDriver,
   getDriverDocuments,
+  getPriorityDocument,
 } = require('../../Controllers/Admin/drivers.controller');
 const { authenticateAdmin } = require('../../utils/adminAuth');
 const { approvePriorityDriver, rejectPriorityDriver } = require('../../Controllers/Driver/driver.controller')
@@ -21,6 +22,7 @@ router.patch('/drivers/:id/reject', rejectDriver);
 router.patch('/drivers/:id/block', blockDriver);
 router.patch('/drivers/:id/verify', verifyDriver);
 router.get('/drivers/:id/documents', getDriverDocuments);
+router.get('/drivers/:id/priority-document', getPriorityDocument);
 // Approve / reject priority driver
 router.put('/drivers/:id/approve-priority', approvePriorityDriver);
 router.put('/drivers/:id/reject-priority', rejectPriorityDriver);
