@@ -34,10 +34,12 @@ router.get("/profile/:id", vendorController.getVendorProfile);
 router.put("/profile", vendorController.updateVendorProfile);
 
 router.get("/drivers/:id", vendorController.getVendorDrivers);
+router.get("/driver/:driverId", vendorController.getVendorDriverById);
 
 router.post("/assign-driver", vendorController.assignDriverToVendor);
 
 router.post("/drivers", vendorController.addDriver);
+router.patch("/drivers/:driverId", vendorController.updateVendorDriver);
 router.patch("/block-driver", vendorController.blockDriver);
 router.patch("/unblock-driver", vendorController.unblockDriver);
 router.get("/driver-location/:driverId", vendorController.getDriverLocationById);

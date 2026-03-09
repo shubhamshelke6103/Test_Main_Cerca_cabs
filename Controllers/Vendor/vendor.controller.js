@@ -157,6 +157,25 @@ exports.getVendorDrivers = async (req, res) => {
 }
 
 // =============================
+// Get single driver (vendor-scoped; for detail view)
+// =============================
+exports.getVendorDriverById = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { driverId } = req.params
+
+    const driver = await Driver.findOne({ _id: driverId, vendorId }).select('-password')
+    if (!driver) {
+      return res.status(404).json({ message: 'Driver not found or not under your vendor account' })
+    }
+
+    res.json(driver)
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+}
+
+// =============================
 // 5. Assign Existing Driver to Vendor
 // =============================
 exports.assignDriverToVendor = async (req, res) => {
@@ -413,6 +432,45 @@ exports.addDriver = async (req, res) => {
     res
       .status(201)
       .json({ success: true, message: 'Driver created under vendor', driver })
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+// Update driver (vendor-scoped: only allowed fields, driver must belong to vendor)
+exports.updateVendorDriver = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { driverId } = req.params
+    const { name, email, phone, password } = req.body
+
+    if (!driverId) {
+      return res.status(400).json({ message: 'driverId is required' })
+    }
+
+    const driver = await Driver.findOne({ _id: driverId, vendorId })
+    if (!driver) {
+      return res
+        .status(404)
+        .json({ message: 'Driver not found or not under your vendor account' })
+    }
+
+    if (name !== undefined) driver.name = name
+    if (email !== undefined) driver.email = email
+    if (phone !== undefined) {
+      const existing = await Driver.findOne({ phone, _id: { $ne: driverId } })
+      if (existing) {
+        return res.status(400).json({ message: 'Another driver already has this phone number' })
+      }
+      driver.phone = phone
+    }
+    if (password && password.length >= 4) {
+      driver.password = await bcrypt.hash(password, 10)
+    }
+
+    await driver.save()
+
+    res.json({ success: true, message: 'Driver updated', driver })
   } catch (error) {
     res.status(500).json({ success: false, message: error.message })
   }
