@@ -64,6 +64,26 @@ const driverSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  rideRejectionCount: {
+    type: Number,
+    default: 0
+  },
+  rideRejectionThreshold: {
+    type: Number,
+    default: 5
+  },
+  rideRejectionLastNotifiedAt: {
+    type: Date,
+    default: null
+  },
+  currentOnlineSessionStartedAt: {
+    type: Date,
+    default: null
+  },
+  totalOnlineMinutes: {
+    type: Number,
+    default: 0
+  },
   bankAccount: {
     accountNumber: String,
     ifscCode: String,
@@ -96,6 +116,71 @@ const driverSchema = new mongoose.Schema({
     type: [String], // Array of document URLs or file paths
     required: true
   },
+  complianceDocuments: [
+    {
+      documentType: {
+        type: String,
+        trim: true,
+        required: true
+      },
+      documentNumber: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      expiryDate: {
+        type: Date,
+        required: true
+      },
+      verifiedAt: {
+        type: Date,
+        default: null
+      },
+      status: {
+        type: String,
+        enum: ['valid', 'expiring_soon', 'expired'],
+        default: 'valid'
+      },
+      alertSentBeforeExpiryAt: {
+        type: Date,
+        default: null
+      },
+      alertSentAfterExpiryAt: {
+        type: Date,
+        default: null
+      },
+      notes: {
+        type: String,
+        trim: true,
+        default: null
+      }
+    }
+  ],
+  trustedContacts: [
+    {
+      name: {
+        type: String,
+        trim: true,
+        required: true
+      },
+      relation: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      phone: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      email: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        default: null
+      }
+    }
+  ],
 
   isPriorityDriver: {
     type: Boolean,

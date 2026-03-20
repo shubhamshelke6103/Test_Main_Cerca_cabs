@@ -50,6 +50,8 @@ const Emergency = require('../Models/User/emergency.model')
 const SupportIssue = require('../Models/support/supportIssue.model')
 const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
+const LiveLocationShare = require('../Models/Shared/liveLocationShare.model')
+const { notifyAdmins, notifyVendor } = require('./alerting.service')
 
 let io
 
@@ -122,6 +124,10 @@ async function emitRideCancelledToClients (
       relatedRide: rideId
     })
   }
+  await LiveLocationShare.updateMany(
+    { ride: cancelledRide._id, isActive: true },
+    { $set: { isActive: false, expiresAt: new Date() } }
+  )
   try {
     const rideWithNotifiedDrivers = await Ride.findById(rideId)
       .select('notifiedDrivers driver')
@@ -2004,6 +2010,53 @@ function initializeSocket (server) {
           `Driver ${driverId} rejected ride ${rideId}. Total rejections: ${updatedRide.rejectedDrivers.length}`
         )
 
+        const updatedDriver = await Driver.findByIdAndUpdate(
+          driverId,
+          { $inc: { rideRejectionCount: 1 } },
+          { new: true }
+        ).select(
+          'name vendorId rideRejectionCount rideRejectionThreshold rideRejectionLastNotifiedAt'
+        )
+
+        if (
+          updatedDriver &&
+          updatedDriver.rideRejectionCount >=
+            (updatedDriver.rideRejectionThreshold || 5)
+        ) {
+          const lastNotifiedAt = updatedDriver.rideRejectionLastNotifiedAt
+          const shouldNotify =
+            !lastNotifiedAt ||
+            new Date(lastNotifiedAt).toDateString() !== new Date().toDateString()
+
+          if (shouldNotify) {
+            const message = `Driver ${updatedDriver.name} has reached ${updatedDriver.rideRejectionCount} ride rejections.`
+            await notifyAdmins({
+              title: 'Driver rejection threshold reached',
+              message,
+              type: 'driver_rejection_alert',
+              data: {
+                driverId: updatedDriver._id,
+                rideId,
+                rejectionCount: updatedDriver.rideRejectionCount
+              }
+            })
+            await notifyVendor(updatedDriver.vendorId, {
+              title: 'Driver rejection threshold reached',
+              message,
+              type: 'driver_rejection_alert',
+              data: {
+                driverId: updatedDriver._id,
+                rideId,
+                rejectionCount: updatedDriver.rideRejectionCount
+              }
+            })
+
+            await Driver.findByIdAndUpdate(updatedDriver._id, {
+              $set: { rideRejectionLastNotifiedAt: new Date() }
+            })
+          }
+        }
+
         // Clean up any redis lock and ensure driver is marked not busy
         try {
           // Ensure driver is not stuck as busy after rejecting the ride
@@ -2947,6 +3000,11 @@ function initializeSocket (server) {
           completedRide.isShared = false
           completedRide.shareTokenExpiresAt = new Date()
           await completedRide.save()
+
+          await LiveLocationShare.updateMany(
+            { ride: completedRide._id, isActive: true },
+            { $set: { isActive: false, expiresAt: new Date() } }
+          )
 
           await broadcastToSharedRide(rideId, 'sharedRideStatusUpdate', {
             status: 'completed',

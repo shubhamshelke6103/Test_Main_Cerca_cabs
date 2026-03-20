@@ -105,6 +105,46 @@ const vendorSchema = new mongoose.Schema({
     type: [String], // GST, business license, etc
     default: []
   },
+  complianceDocuments: [
+    {
+      documentType: {
+        type: String,
+        trim: true,
+        required: true
+      },
+      documentNumber: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      expiryDate: {
+        type: Date,
+        required: true
+      },
+      verifiedAt: {
+        type: Date,
+        default: null
+      },
+      status: {
+        type: String,
+        enum: ['valid', 'expiring_soon', 'expired'],
+        default: 'valid'
+      },
+      alertSentBeforeExpiryAt: {
+        type: Date,
+        default: null
+      },
+      alertSentAfterExpiryAt: {
+        type: Date,
+        default: null
+      },
+      notes: {
+        type: String,
+        trim: true,
+        default: null
+      }
+    }
+  ],
 
   bankAccount: {
     accountNumber: String,

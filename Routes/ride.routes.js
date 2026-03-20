@@ -14,7 +14,11 @@ const {
   generateShareLink,
   getSharedRide,
   revokeShareLink,
-  serveSharedRidePage
+  serveSharedRidePage,
+  createRideLiveLocationShare,
+  listRideLiveLocationShares,
+  revokeRideLiveLocationShare,
+  getSharedLiveLocation
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 const { createRidePaymentOrder, verifyRidePayment } = require('../Controllers/payment.controller');
@@ -43,9 +47,13 @@ router.get('/shared-ride/:shareToken', sharedRideRateLimiter, serveSharedRidePag
 
 // GET /rides/shared/:shareToken - Get shared ride data (public, no auth)
 router.get('/shared/:shareToken', sharedRideRateLimiter, getSharedRide);
+router.get('/live-location/shared/:shareToken', sharedRideRateLimiter, getSharedLiveLocation);
 
 // POST /rides/:rideId/share - Generate share link (requires auth)
 router.post('/:rideId/share', generateShareLink);
+router.post('/:rideId/live-location/share', createRideLiveLocationShare);
+router.get('/:rideId/live-location/shares', listRideLiveLocationShares);
+router.delete('/:rideId/live-location/share/:shareId', revokeRideLiveLocationShare);
 
 // DELETE /rides/:rideId/share - Revoke share linRk (requires auth)
 router.delete('/:rideId/share', revokeShareLink);

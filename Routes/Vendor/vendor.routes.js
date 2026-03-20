@@ -54,6 +54,9 @@ router.patch("/verify-driver", vendorController.verifyDriver);
 router.patch("/reject-driver", vendorController.rejectDriver);
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
+router.get("/earnings-report", vendorController.getVendorEarningsReport);
+router.put("/compliance-documents", vendorController.updateVendorComplianceDocuments);
+router.put("/drivers/:driverId/compliance-documents", vendorController.updateVendorDriverComplianceDocuments);
 
 // Bank account CRUD
 router.post('/:vendorId/bank-account', vendorController.addVendorBankAccount);

@@ -3,6 +3,51 @@ const Ride = require('../../Models/Driver/ride.model.js');
 const bcrypt = require("bcryptjs");
 const jwt = require('jsonwebtoken');
 const logger = require('../../utils/logger.js');
+const LiveLocationShare = require('../../Models/Shared/liveLocationShare.model.js');
+const {
+    createLiveLocationShare,
+    revokeLiveLocationShare,
+    getSharedLiveLocationPayload,
+} = require('../../utils/liveLocationShare.service.js');
+const {
+    startDriverOnlineSession,
+    stopDriverOnlineSession,
+    getDriverOnlineHoursSummary,
+} = require('../../utils/driverSession.service.js');
+const { syncComplianceStatuses } = require('../../utils/compliance.service.js');
+
+const buildDateRange = (period, startDate, endDate) => {
+    const now = new Date();
+    if (startDate || endDate) {
+        return {
+            start: startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1),
+            end: endDate ? new Date(endDate) : now,
+            groupBy: period || 'daily',
+        };
+    }
+
+    if (period === 'monthly') {
+        return {
+            start: new Date(now.getFullYear(), 0, 1),
+            end: now,
+            groupBy: 'monthly',
+        };
+    }
+
+    if (period === 'weekly') {
+        return {
+            start: new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000),
+            end: now,
+            groupBy: 'weekly',
+        };
+    }
+
+    return {
+        start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+        end: now,
+        groupBy: 'daily',
+    };
+};
 
 /**
  * @desc    Add a new driver
@@ -107,6 +152,8 @@ const loginDriver = async (req, res) => {
             "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%",
             { expiresIn: '7d' }
         );
+
+        await startDriverOnlineSession(driver._id, 'login');
 
         logger.info(`Driver logged in: ${driver.email}`);
         res.status(200).json({ message: 'Login successful', token, id:driver._id });
@@ -508,18 +555,38 @@ const updateDriverOnlineStatus = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        driver.isOnline = isOnline;
-        driver.lastSeen = new Date();
-        await driver.save();
+        const updatedDriver = isOnline
+            ? await startDriverOnlineSession(driver._id, 'manual_toggle')
+            : await stopDriverOnlineSession(driver._id, 'manual_toggle');
 
         logger.info(`Driver online status updated: ${driver.email}, isOnline: ${isOnline}`);
         res.status(200).json({ 
             message: 'Driver online status updated successfully', 
-            driver 
+            driver: updatedDriver
         });
     } catch (error) {
         logger.error('Error updating driver online status:', error);
         res.status(500).json({ message: 'Error updating driver online status', error });
+    }
+};
+
+const logoutDriver = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const updatedDriver = await stopDriverOnlineSession(driver._id, 'manual_toggle');
+
+        res.status(200).json({
+            message: 'Driver logged out successfully',
+            driver: updatedDriver,
+        });
+    } catch (error) {
+        logger.error('Error logging out driver:', error);
+        res.status(500).json({ message: 'Error logging out driver', error: error.message });
     }
 };
 
@@ -665,6 +732,9 @@ const getDriverStats = async (req, res) => {
             isActive: driver.isActive,
             isBusy: driver.isBusy,
             lastSeen: driver.lastSeen,
+            rideRejectionCount: driver.rideRejectionCount || 0,
+            rideRejectionThreshold: driver.rideRejectionThreshold || 5,
+            totalOnlineMinutes: driver.totalOnlineMinutes || 0,
         };
 
         res.status(200).json({ stats });
@@ -840,6 +910,169 @@ const getDriverDocuments = async (req, res) => {
     }
 };
 
+const getDriverOnlineHours = async (req, res) => {
+    try {
+        const driverId = req.params.id;
+        const driver = await Driver.findById(driverId).select('name totalOnlineMinutes currentOnlineSessionStartedAt');
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const { period, startDate, endDate } = req.query;
+        const range = buildDateRange(period, startDate, endDate);
+        const report = await getDriverOnlineHoursSummary(
+            driverId,
+            range.start,
+            range.end,
+            range.groupBy
+        );
+
+        res.status(200).json({
+            success: true,
+            driver: {
+                id: driver._id,
+                name: driver.name,
+                totalOnlineMinutes: driver.totalOnlineMinutes || 0,
+                currentOnlineSessionStartedAt: driver.currentOnlineSessionStartedAt,
+            },
+            report: {
+                ...report,
+                period: range.groupBy,
+                startDate: range.start,
+                endDate: range.end,
+            },
+        });
+    } catch (error) {
+        logger.error('Error fetching driver online hours:', error);
+        res.status(500).json({ message: 'Error fetching driver online hours', error: error.message });
+    }
+};
+
+const updateDriverComplianceDocuments = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const complianceDocuments = Array.isArray(req.body.complianceDocuments)
+            ? req.body.complianceDocuments
+            : [];
+
+        driver.complianceDocuments = syncComplianceStatuses(complianceDocuments);
+        await driver.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Driver compliance documents updated successfully',
+            complianceDocuments: driver.complianceDocuments,
+        });
+    } catch (error) {
+        logger.error('Error updating driver compliance documents:', error);
+        res.status(500).json({ message: 'Error updating driver compliance documents', error: error.message });
+    }
+};
+
+const createDriverLocationShare = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id).select('name');
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const {
+            recipientName,
+            recipientPhone,
+            recipientEmail,
+            recipientType,
+            relation,
+            durationMinutes,
+        } = req.body;
+
+        if (!recipientName) {
+            return res.status(400).json({ message: 'recipientName is required' });
+        }
+
+        const share = await createLiveLocationShare({
+            ownerId: driver._id,
+            ownerModel: 'Driver',
+            recipientName,
+            recipientPhone,
+            recipientEmail,
+            recipientType,
+            relation,
+            durationMinutes: durationMinutes || 120,
+        });
+
+        const baseUrl = process.env.API_URL || `${req.protocol}://${req.get('host')}`;
+
+        res.status(201).json({
+            success: true,
+            message: 'Driver live location share created successfully',
+            share: {
+                id: share._id,
+                recipientName: share.recipientName,
+                recipientType: share.recipientType,
+                relation: share.relation,
+                expiresAt: share.expiresAt,
+                shareUrl: `${baseUrl}/drivers/live-location/shared/${share.shareToken}`,
+            },
+        });
+    } catch (error) {
+        logger.error('Error creating driver live location share:', error);
+        res.status(500).json({ message: 'Error creating driver live location share', error: error.message });
+    }
+};
+
+const listDriverLocationShares = async (req, res) => {
+    try {
+        const shares = await LiveLocationShare.find({
+            owner: req.params.id,
+            ownerModel: 'Driver',
+        }).sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            shares,
+        });
+    } catch (error) {
+        logger.error('Error listing driver live location shares:', error);
+        res.status(500).json({ message: 'Error listing driver live location shares', error: error.message });
+    }
+};
+
+const deleteDriverLocationShare = async (req, res) => {
+    try {
+        const share = await revokeLiveLocationShare(req.params.shareId, req.params.id);
+        if (!share) {
+            return res.status(404).json({ message: 'Share not found' });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Driver live location share revoked successfully',
+            share,
+        });
+    } catch (error) {
+        logger.error('Error revoking driver live location share:', error);
+        res.status(500).json({ message: 'Error revoking driver live location share', error: error.message });
+    }
+};
+
+const getSharedDriverLocation = async (req, res) => {
+    try {
+        const data = await getSharedLiveLocationPayload(req.params.shareToken);
+        res.status(200).json({
+            success: true,
+            data,
+        });
+    } catch (error) {
+        logger.error('Error fetching shared driver live location:', error);
+        res.status(400).json({ message: error.message });
+    }
+};
+
 module.exports = {
     addDriver,
     addDriverDocuments,
@@ -854,6 +1087,7 @@ module.exports = {
     getUpcomingBookings,
     updateDriverLocation,
     updateDriverOnlineStatus,
+    logoutDriver,
     updateDriverVehicle,
     getDriverEarnings,
     getDriverStats,
@@ -863,5 +1097,11 @@ module.exports = {
     uploadPriorityDocument,
     approvePriorityDriver,
     rejectPriorityDriver,
-    getDriverDocuments
+    getDriverDocuments,
+    getDriverOnlineHours,
+    updateDriverComplianceDocuments,
+    createDriverLocationShare,
+    listDriverLocationShares,
+    deleteDriverLocationShare,
+    getSharedDriverLocation
 };

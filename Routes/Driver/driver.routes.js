@@ -13,13 +13,20 @@ const {
     getAllRidesOfDriver,
     updateDriverLocation,
     updateDriverOnlineStatus,
+    logoutDriver,
     updateDriverVehicle,
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
     getUpcomingBookings,
     markCashCollected,
-    uploadPriorityDocument
+    uploadPriorityDocument,
+    getDriverOnlineHours,
+    updateDriverComplianceDocuments,
+    createDriverLocationShare,
+    listDriverLocationShares,
+    deleteDriverLocationShare,
+    getSharedDriverLocation
 } = require('../../Controllers/Driver/driver.controller.js');
 
 const router = express.Router();
@@ -67,6 +74,13 @@ router.patch('/:id/location', updateDriverLocation);
 
 // Route to update driver online/offline status
 router.patch('/:id/online-status', updateDriverOnlineStatus);
+router.post('/:id/logout', logoutDriver);
+router.get('/:id/online-hours', getDriverOnlineHours);
+router.put('/:id/compliance-documents', updateDriverComplianceDocuments);
+router.post('/:id/live-location/share', createDriverLocationShare);
+router.get('/:id/live-location/shares', listDriverLocationShares);
+router.delete('/:id/live-location/share/:shareId', deleteDriverLocationShare);
+router.get('/live-location/shared/:shareToken', getSharedDriverLocation);
 
 // Route to update driver vehicle information
 router.patch('/:id/vehicle', updateDriverVehicle);

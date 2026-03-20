@@ -20,6 +20,12 @@ const {
   validateShareToken
 } = require('../../utils/shareToken.service')
 const { sanitizeRideData } = require('../../middleware/shareToken.middleware')
+const LiveLocationShare = require('../../Models/Shared/liveLocationShare.model')
+const {
+  createLiveLocationShare,
+  revokeLiveLocationShare,
+  getSharedLiveLocationPayload
+} = require('../../utils/liveLocationShare.service')
 
 /**
  * @desc    Create a new ride
@@ -1222,6 +1228,167 @@ const revokeShareLink = async (req, res) => {
   }
 }
 
+const createRideLiveLocationShare = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const userId = getUserIdFromToken(req)
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      })
+    }
+
+    const ride = await Ride.findById(rideId)
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      })
+    }
+
+    if (ride.rider.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to share this ride location'
+      })
+    }
+
+    const {
+      recipientName,
+      recipientPhone,
+      recipientEmail,
+      recipientType,
+      relation,
+      durationMinutes
+    } = req.body
+
+    if (!recipientName) {
+      return res.status(400).json({
+        success: false,
+        message: 'recipientName is required'
+      })
+    }
+
+    const share = await createLiveLocationShare({
+      ownerId: userId,
+      ownerModel: 'User',
+      rideId,
+      recipientName,
+      recipientPhone,
+      recipientEmail,
+      recipientType,
+      relation,
+      durationMinutes: durationMinutes || 180
+    })
+
+    const apiUrl =
+      process.env.API_URL ||
+      req.protocol + '://' + req.get('host')
+
+    res.status(201).json({
+      success: true,
+      message: 'Ride live location share created successfully',
+      data: {
+        shareId: share._id,
+        shareUrl: `${apiUrl}/rides/live-location/shared/${share.shareToken}`,
+        expiresAt: share.expiresAt,
+        recipientName: share.recipientName,
+        recipientType: share.recipientType
+      }
+    })
+  } catch (error) {
+    logger.error('Error creating ride live location share:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error creating ride live location share',
+      error: error.message
+    })
+  }
+}
+
+const listRideLiveLocationShares = async (req, res) => {
+  try {
+    const userId = getUserIdFromToken(req)
+    const { rideId } = req.params
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' })
+    }
+
+    const ride = await Ride.findById(rideId)
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+
+    if (ride.rider.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const shares = await LiveLocationShare.find({
+      owner: userId,
+      ownerModel: 'User',
+      ride: rideId
+    }).sort({ createdAt: -1 })
+
+    res.status(200).json({
+      success: true,
+      data: shares
+    })
+  } catch (error) {
+    logger.error('Error listing ride live location shares:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error listing ride live location shares',
+      error: error.message
+    })
+  }
+}
+
+const revokeRideLiveLocationShare = async (req, res) => {
+  try {
+    const userId = getUserIdFromToken(req)
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' })
+    }
+
+    const share = await revokeLiveLocationShare(req.params.shareId, userId)
+    if (!share) {
+      return res.status(404).json({ success: false, message: 'Share not found' })
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Ride live location share revoked successfully',
+      data: share
+    })
+  } catch (error) {
+    logger.error('Error revoking ride live location share:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Error revoking ride live location share',
+      error: error.message
+    })
+  }
+}
+
+const getSharedLiveLocation = async (req, res) => {
+  try {
+    const data = await getSharedLiveLocationPayload(req.params.shareToken)
+    res.status(200).json({
+      success: true,
+      data
+    })
+  } catch (error) {
+    logger.error('Error fetching shared live location:', error)
+    res.status(400).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
 module.exports = {
   createRide,
   getAllRides,
@@ -1236,5 +1403,9 @@ module.exports = {
   generateShareLink,
   getSharedRide,
   revokeShareLink,
-  serveSharedRidePage
+  serveSharedRidePage,
+  createRideLiveLocationShare,
+  listRideLiveLocationShares,
+  revokeRideLiveLocationShare,
+  getSharedLiveLocation
 }

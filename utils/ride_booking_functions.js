@@ -5,6 +5,10 @@ const Rating = require('../Models/Driver/rating.model')
 const Message = require('../Models/Driver/message.model')
 const Notification = require('../Models/User/notification.model')
 const Emergency = require('../Models/User/emergency.model')
+const {
+  startDriverOnlineSession,
+  stopDriverOnlineSession
+} = require('./driverSession.service')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
@@ -1741,21 +1745,21 @@ async function clearUserSocket (userId, socketId) {
 }
 
 async function setDriverSocket (driverId, socketId) {
-  return Driver.findByIdAndUpdate(
-    driverId,
-    { $set: { socketId, isOnline: true, lastSeen: new Date() } },
-    { new: true }
-  )
+  const driver = await startDriverOnlineSession(driverId, 'socket_connect')
+  driver.socketId = socketId
+  driver.lastSeen = new Date()
+  await driver.save()
+  return driver
 }
 
 async function clearDriverSocket (driverId, socketId) {
-  return Driver.updateOne(
-    { _id: driverId, socketId },
-    {
-      $set: { isOnline: false, lastSeen: new Date() },
-      $unset: { socketId: '' }
-    }
-  )
+  const driver = await Driver.findOne({ _id: driverId, socketId })
+  if (!driver) {
+    return { matchedCount: 0, modifiedCount: 0 }
+  }
+
+  await stopDriverOnlineSession(driverId, 'socket_disconnect', socketId)
+  return { matchedCount: 1, modifiedCount: 1 }
 }
 //end of socket management functions
 
@@ -2163,6 +2167,14 @@ const submitRating = async ratingData => {
       tags
     } = ratingData
 
+    const RatedByModel = ratedByModel === 'Driver' ? Driver : User
+    const RatedToModel = ratedToModel === 'Driver' ? Driver : User
+
+    const [ratedByEntity, ratedToEntity] = await Promise.all([
+      RatedByModel.findById(ratedBy).select('name fullName phone phoneNumber email'),
+      RatedToModel.findById(ratedTo).select('name fullName phone phoneNumber email')
+    ])
+
     // Check if rating already exists
     const existingRating = await Rating.findOne({
       ride: rideId,
@@ -2183,7 +2195,21 @@ const submitRating = async ratingData => {
       ratedToModel,
       rating,
       review,
-      tags
+      tags,
+      ratedBySnapshot: ratedByEntity
+        ? {
+            name: ratedByEntity.name || ratedByEntity.fullName || null,
+            phone: ratedByEntity.phone || ratedByEntity.phoneNumber || null,
+            email: ratedByEntity.email || null
+          }
+        : {},
+      ratedToSnapshot: ratedToEntity
+        ? {
+            name: ratedToEntity.name || ratedToEntity.fullName || null,
+            phone: ratedToEntity.phone || ratedToEntity.phoneNumber || null,
+            email: ratedToEntity.email || null
+          }
+        : {}
     })
 
     // Update ride with rating

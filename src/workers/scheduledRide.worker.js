@@ -3,6 +3,7 @@ const cron = require('node-cron')
 
 const Ride = require('../../Models/Driver/ride.model')
 const socketUtils = require('../../utils/socket')
+const { processComplianceAlerts } = require('../../utils/compliance.service')
 
 const {
   startRide,
@@ -34,6 +35,16 @@ function initScheduledRideWorker () {
         await checkAndStartScheduledRides(io)
       } catch (error) {
         logger.error('❌ Error in scheduled ride check:', error)
+      }
+    })
+
+    // Run compliance checks every day at 09:00 server time
+    cron.schedule('0 9 * * *', async () => {
+      try {
+        logger.info('Running compliance alert check')
+        await processComplianceAlerts()
+      } catch (error) {
+        logger.error('Error in compliance alert check:', error)
       }
     })
 

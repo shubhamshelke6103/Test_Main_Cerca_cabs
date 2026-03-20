@@ -120,12 +120,12 @@ function sanitizeRideData(ride) {
     actualStartTime: ride.actualStartTime,
     createdAt: ride.createdAt,
     updatedAt: ride.updatedAt,
-    // OTP codes for passenger verification
-    startOtp: ride.startOtp,
-    stopOtp: ride.stopOtp,
     // Ride sharing info
     rideFor: ride.rideFor,
-    passenger: ride.passenger,
+    passenger: ride.passenger ? {
+      name: ride.passenger.name,
+      relation: ride.passenger.relation || null
+    } : null,
     // Driver info (sanitized - no personal contact info)
     driver: ride.driver ? {
       name: ride.driver.name,
@@ -139,9 +139,7 @@ function sanitizeRideData(ride) {
       } : null
     } : null,
     // Rider info (minimal - no personal details)
-    rider: ride.rider ? {
-      fullName: ride.rider.fullName
-    } : null
+    rider: null
   }
 
   return sanitized

@@ -4,6 +4,39 @@ const User = require('../../Models/User/user.model.js');
 const Ride = require('../../Models/Driver/ride.model.js');
 const logger = require('../../utils/logger.js');
 
+const maskName = (value) => {
+    if (!value) return null;
+    const trimmed = String(value).trim();
+    if (trimmed.length <= 2) return `${trimmed[0] || ''}*`;
+    return `${trimmed[0]}${'*'.repeat(Math.max(1, trimmed.length - 2))}${trimmed[trimmed.length - 1]}`;
+};
+
+const maskPhone = (value) => {
+    if (!value) return null;
+    const stringValue = String(value);
+    if (stringValue.length <= 4) return stringValue;
+    return `${'*'.repeat(Math.max(0, stringValue.length - 4))}${stringValue.slice(-4)}`;
+};
+
+const serializeRating = (ratingDoc) => ({
+    id: ratingDoc._id,
+    ride: ratingDoc.ride,
+    ratedByModel: ratingDoc.ratedByModel,
+    ratedToModel: ratingDoc.ratedToModel,
+    rating: ratingDoc.rating,
+    review: ratingDoc.review,
+    tags: ratingDoc.tags || [],
+    createdAt: ratingDoc.createdAt,
+    ratedBy: {
+        name: maskName(ratingDoc.ratedBySnapshot?.name),
+        phone: maskPhone(ratingDoc.ratedBySnapshot?.phone),
+    },
+    ratedTo: {
+        name: maskName(ratingDoc.ratedToSnapshot?.name),
+        phone: maskPhone(ratingDoc.ratedToSnapshot?.phone),
+    },
+});
+
 /**
  * @desc    Submit a rating for a ride
  * @route   POST /ratings
@@ -27,6 +60,13 @@ const submitRating = async (req, res) => {
         if (!ride) {
             return res.status(404).json({ message: 'Ride not found' });
         }
+
+        const RatedByModel = ratedByModel === 'Driver' ? Driver : User;
+        const RatedToModel = ratedToModel === 'Driver' ? Driver : User;
+        const [ratedByEntity, ratedToEntity] = await Promise.all([
+            RatedByModel.findById(ratedBy).select('name fullName phone phoneNumber email'),
+            RatedToModel.findById(ratedTo).select('name fullName phone phoneNumber email'),
+        ]);
 
         // Check if ride is completed
         if (ride.status !== 'completed') {
@@ -56,6 +96,16 @@ const submitRating = async (req, res) => {
             rating,
             review,
             tags,
+            ratedBySnapshot: ratedByEntity ? {
+                name: ratedByEntity.name || ratedByEntity.fullName || null,
+                phone: ratedByEntity.phone || ratedByEntity.phoneNumber || null,
+                email: ratedByEntity.email || null,
+            } : {},
+            ratedToSnapshot: ratedToEntity ? {
+                name: ratedToEntity.name || ratedToEntity.fullName || null,
+                phone: ratedToEntity.phone || ratedToEntity.phoneNumber || null,
+                email: ratedToEntity.email || null,
+            } : {},
         });
 
         // Update ride with rating
@@ -71,7 +121,7 @@ const submitRating = async (req, res) => {
         logger.info(`Rating submitted: ${newRating._id}`);
         res.status(201).json({ 
             message: 'Rating submitted successfully', 
-            rating: newRating 
+            rating: serializeRating(newRating) 
         });
     } catch (error) {
         logger.error('Error submitting rating:', error);
@@ -96,8 +146,6 @@ const getRatingsForEntity = async (req, res) => {
             ratedTo: entityId, 
             ratedToModel: entityModel 
         })
-        .populate('ratedBy', 'name fullName')
-        .populate('ride', 'pickupAddress dropoffAddress createdAt')
         .sort({ createdAt: -1 })
         .limit(parseInt(limit))
         .skip(parseInt(skip));
@@ -108,7 +156,7 @@ const getRatingsForEntity = async (req, res) => {
         });
 
         res.status(200).json({ 
-            ratings, 
+            ratings: ratings.map(serializeRating), 
             total: totalRatings,
             count: ratings.length 
         });
@@ -127,10 +175,9 @@ const getRatingByRide = async (req, res) => {
         const { rideId } = req.params;
 
         const ratings = await Rating.find({ ride: rideId })
-            .populate('ratedBy', 'name fullName')
-            .populate('ratedTo', 'name fullName');
+            .sort({ createdAt: -1 });
 
-        res.status(200).json({ ratings });
+        res.status(200).json({ ratings: ratings.map(serializeRating) });
     } catch (error) {
         logger.error('Error fetching ride ratings:', error);
         res.status(500).json({ message: 'Error fetching ride ratings', error: error.message });

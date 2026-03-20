@@ -1,7 +1,10 @@
 const Vendor = require('../../Models/vendor/vendor.models')
 const Driver = require('../../Models/Driver/driver.model')
+const Ride = require('../../Models/Driver/ride.model')
+const AdminEarnings = require('../../Models/Admin/adminEarnings.model')
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
+const { syncComplianceStatuses } = require('../../utils/compliance.service')
 
 // =============================
 // 1. Register Vendor
@@ -350,7 +353,7 @@ exports.getDashboardStats = async (req, res) => {
 
     // fetch drivers belonging to this vendor
     const drivers = await Driver.find({ vendorId })
-      .select('name phone isOnline isActive isVerified totalEarnings')
+      .select('name phone isOnline isActive isVerified totalEarnings rideRejectionCount')
       .lean()
 
     const totalDrivers = drivers.length
@@ -374,9 +377,152 @@ exports.getDashboardStats = async (req, res) => {
         onlineDrivers,
         activeDrivers,
         verifiedDrivers,
-        totalDriverEarnings: Math.round(totalDriverEarnings * 100) / 100
+        totalDriverEarnings: Math.round(totalDriverEarnings * 100) / 100,
+        totalRideRejections: drivers.reduce((sum, driver) => sum + (driver.rideRejectionCount || 0), 0)
       },
       drivers
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorEarningsReport = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { startDate, endDate } = req.query
+
+    const drivers = await Driver.find({ vendorId }).select('name phone email').lean()
+    const driverIds = drivers.map(driver => driver._id)
+
+    if (driverIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          summary: {
+            totalGrossRevenue: 0,
+            totalDriverEarnings: 0,
+            totalVendorCommission: 0,
+            totalPlatformFee: 0,
+            rideCount: 0
+          },
+          driverWiseEarnings: [],
+          rideWiseRevenue: []
+        }
+      })
+    }
+
+    const earningsFilter = { driverId: { $in: driverIds } }
+    if (startDate || endDate) {
+      earningsFilter.rideDate = {}
+      if (startDate) earningsFilter.rideDate.$gte = new Date(startDate)
+      if (endDate) earningsFilter.rideDate.$lte = new Date(endDate)
+    }
+
+    const vendor = await Vendor.findById(vendorId).select('commissionType commissionValue businessName').lean()
+    const earnings = await AdminEarnings.find(earningsFilter)
+      .populate('rideId', 'pickupAddress dropoffAddress fare createdAt paymentMethod')
+      .populate('driverId', 'name phone email')
+      .sort({ rideDate: -1 })
+      .lean()
+
+    const commissionFromDriverEarning = driverEarning => {
+      if (!vendor) return 0
+      if (vendor.commissionType === 'FIXED') {
+        return Math.min(vendor.commissionValue || 0, driverEarning || 0)
+      }
+      return Math.round(((driverEarning || 0) * ((vendor.commissionValue || 0) / 100)) * 100) / 100
+    }
+
+    const rideWiseRevenue = earnings.map(entry => {
+      const vendorCommission = commissionFromDriverEarning(entry.driverEarning)
+      return {
+        earningId: entry._id,
+        rideId: entry.rideId?._id || null,
+        rideDate: entry.rideDate,
+        driver: entry.driverId ? {
+          id: entry.driverId._id,
+          name: entry.driverId.name,
+          phone: entry.driverId.phone
+        } : null,
+        pickupAddress: entry.rideId?.pickupAddress || null,
+        dropoffAddress: entry.rideId?.dropoffAddress || null,
+        grossRevenue: Math.round((entry.grossFare || 0) * 100) / 100,
+        platformFee: Math.round((entry.platformFee || 0) * 100) / 100,
+        driverEarning: Math.round((entry.driverEarning || 0) * 100) / 100,
+        vendorCommission: Math.round(vendorCommission * 100) / 100,
+        vendorProfit: Math.round(vendorCommission * 100) / 100,
+        paymentStatus: entry.paymentStatus
+      }
+    })
+
+    const driverWiseMap = new Map()
+    for (const row of rideWiseRevenue) {
+      if (!row.driver?.id) continue
+      const key = row.driver.id.toString()
+      if (!driverWiseMap.has(key)) {
+        driverWiseMap.set(key, {
+          driverId: row.driver.id,
+          name: row.driver.name,
+          phone: row.driver.phone,
+          rideCount: 0,
+          grossRevenue: 0,
+          driverEarning: 0,
+          vendorCommission: 0
+        })
+      }
+
+      const current = driverWiseMap.get(key)
+      current.rideCount += 1
+      current.grossRevenue += row.grossRevenue || 0
+      current.driverEarning += row.driverEarning || 0
+      current.vendorCommission += row.vendorCommission || 0
+    }
+
+    const driverWiseEarnings = Array.from(driverWiseMap.values()).map(item => ({
+      ...item,
+      grossRevenue: Math.round(item.grossRevenue * 100) / 100,
+      driverEarning: Math.round(item.driverEarning * 100) / 100,
+      vendorCommission: Math.round(item.vendorCommission * 100) / 100
+    }))
+
+    const summary = rideWiseRevenue.reduce((acc, row) => {
+      acc.totalGrossRevenue += row.grossRevenue || 0
+      acc.totalDriverEarnings += row.driverEarning || 0
+      acc.totalVendorCommission += row.vendorCommission || 0
+      acc.totalPlatformFee += row.platformFee || 0
+      acc.rideCount += 1
+      return acc
+    }, {
+      totalGrossRevenue: 0,
+      totalDriverEarnings: 0,
+      totalVendorCommission: 0,
+      totalPlatformFee: 0,
+      rideCount: 0
+    })
+
+    res.status(200).json({
+      success: true,
+      data: {
+        vendor: {
+          id: vendor?._id,
+          businessName: vendor?.businessName || null,
+          commissionType: vendor?.commissionType || null,
+          commissionValue: vendor?.commissionValue || 0
+        },
+        summary: {
+          totalGrossRevenue: Math.round(summary.totalGrossRevenue * 100) / 100,
+          totalDriverEarnings: Math.round(summary.totalDriverEarnings * 100) / 100,
+          totalVendorCommission: Math.round(summary.totalVendorCommission * 100) / 100,
+          totalPlatformFee: Math.round(summary.totalPlatformFee * 100) / 100,
+          rideCount: summary.rideCount
+        },
+        driverWiseEarnings,
+        rideWiseRevenue
+      }
     })
   } catch (error) {
     res.status(500).json({
@@ -615,6 +761,54 @@ exports.getDriverDocuments = async (req, res) => {
     return res
       .status(200)
       .json({ success: true, documents: driver.documents || [] })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+exports.updateVendorComplianceDocuments = async (req, res) => {
+  try {
+    const vendor = await Vendor.findById(req.user.id)
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
+    }
+
+    vendor.complianceDocuments = syncComplianceStatuses(
+      Array.isArray(req.body.complianceDocuments) ? req.body.complianceDocuments : []
+    )
+    await vendor.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Vendor compliance documents updated successfully',
+      data: vendor.complianceDocuments
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+exports.updateVendorDriverComplianceDocuments = async (req, res) => {
+  try {
+    const driver = await Driver.findOne({
+      _id: req.params.driverId,
+      vendorId: req.user.id
+    })
+
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver not found under this vendor' })
+    }
+
+    driver.complianceDocuments = syncComplianceStatuses(
+      Array.isArray(req.body.complianceDocuments) ? req.body.complianceDocuments : []
+    )
+    await driver.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver compliance documents updated successfully',
+      data: driver.complianceDocuments
+    })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }

@@ -41,6 +41,34 @@ const ratingSchema = new mongoose.Schema({
         type: String,
         enum: ['polite', 'professional', 'clean_vehicle', 'safe_driving', 'rude', 'late', 'unsafe']
     }],
+    ratedBySnapshot: {
+        name: {
+            type: String,
+            default: null,
+        },
+        phone: {
+            type: String,
+            default: null,
+        },
+        email: {
+            type: String,
+            default: null,
+        },
+    },
+    ratedToSnapshot: {
+        name: {
+            type: String,
+            default: null,
+        },
+        phone: {
+            type: String,
+            default: null,
+        },
+        email: {
+            type: String,
+            default: null,
+        },
+    },
     createdAt: {
         type: Date,
         default: Date.now,
