@@ -1,5 +1,6 @@
 const Driver = require('../../Models/Driver/driver.model.js');
 const Ride = require('../../Models/Driver/ride.model.js');
+const Vendor = require('../../Models/vendor/vendor.models.js');
 const bcrypt = require("bcryptjs");
 const jwt = require('jsonwebtoken');
 const logger = require('../../utils/logger.js');
@@ -976,12 +977,12 @@ const updateDriverComplianceDocuments = async (req, res) => {
 
 const createDriverLocationShare = async (req, res) => {
     try {
-        const driver = await Driver.findById(req.params.id).select('name');
+        const driver = await Driver.findById(req.params.id).select('name vendorId');
         if (!driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        const {
+        let {
             recipientName,
             recipientPhone,
             recipientEmail,
@@ -989,6 +990,22 @@ const createDriverLocationShare = async (req, res) => {
             relation,
             durationMinutes,
         } = req.body;
+
+        if (recipientType === 'vendor') {
+            if (!driver.vendorId) {
+                return res.status(400).json({ message: 'Driver is not assigned to any vendor' });
+            }
+
+            const vendor = await Vendor.findById(driver.vendorId).select('businessName email phone');
+            if (!vendor) {
+                return res.status(404).json({ message: 'Assigned vendor not found' });
+            }
+
+            recipientName = vendor.businessName;
+            recipientPhone = vendor.phone || recipientPhone || null;
+            recipientEmail = vendor.email || recipientEmail || null;
+            relation = relation || 'assigned_vendor';
+        }
 
         if (!recipientName) {
             return res.status(400).json({ message: 'recipientName is required' });

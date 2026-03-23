@@ -120,6 +120,24 @@ const userSchema = new Schema(
       type: Boolean,
       default: true,
     },
+    privacyPolicyAccepted: {
+      type: Boolean,
+      default: false,
+    },
+    privacyPolicyAcceptedAt: {
+      type: Date,
+      default: null,
+    },
+    privacyPolicyVersion: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    privacyPolicyUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
   },
   {
     timestamps: true,

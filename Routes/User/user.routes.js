@@ -1,11 +1,12 @@
 const express = require('express');
-const { getAllUsers, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken } = require('../../Controllers/User/user.controller.js');
+const { getAllUsers, getPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken } = require('../../Controllers/User/user.controller.js');
 
 const router = express.Router();
 
 // Specific routes MUST come before parameterized routes to avoid conflicts
 // GET /users/validate-token - Validate JWT token (must be before /:id)
 router.get('/validate-token', validateToken);
+router.get('/privacy-policy', getPrivacyPolicy);
 
 // POST /users/login - Login user
 router.post('/login', loginUserByMobile);

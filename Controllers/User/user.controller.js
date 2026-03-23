@@ -10,6 +10,50 @@ const logger = require('../../utils/logger');
 const fs = require('fs');
 const path = require('path');
 
+const PRIVACY_POLICY_VERSION = process.env.PRIVACY_POLICY_VERSION || '2026-03-23';
+const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL || '/privacy-policy';
+
+const parseBoolean = (value) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+    }
+    return false;
+};
+
+const getPrivacyPolicyMetadata = () => ({
+    version: PRIVACY_POLICY_VERSION,
+    url: PRIVACY_POLICY_URL,
+});
+
+const buildPrivacyPolicyAcceptance = (payload = {}) => {
+    const accepted = parseBoolean(payload.privacyPolicyAccepted);
+
+    if (!accepted) {
+        return {
+            error: {
+                message: 'Privacy policy acceptance is required during registration',
+                privacyPolicy: getPrivacyPolicyMetadata(),
+            },
+        };
+    }
+
+    return {
+        privacyPolicyAccepted: true,
+        privacyPolicyAcceptedAt: new Date(),
+        privacyPolicyVersion: payload.privacyPolicyVersion || PRIVACY_POLICY_VERSION,
+        privacyPolicyUrl: payload.privacyPolicyUrl || PRIVACY_POLICY_URL,
+    };
+};
+
+const getPrivacyPolicy = async (req, res) => {
+    return res.status(200).json({
+        success: true,
+        privacyPolicy: getPrivacyPolicyMetadata(),
+    });
+};
 
 /**
  * @desc    Get a single user by ID
@@ -35,7 +79,12 @@ const getUserById = async (req, res) => {
 const createUser = async (req, res) => {
     try {
         // Extract user data from the request body
-        const userData = req.body;
+        const userData = { ...req.body };
+        const acceptance = buildPrivacyPolicyAcceptance(userData);
+
+        if (acceptance.error) {
+            return res.status(400).json(acceptance.error);
+        }
 
         // Check if a file (profile picture) is uploaded
         if (req.file) {
@@ -43,6 +92,8 @@ const createUser = async (req, res) => {
             const profilePicUrl = `${req.protocol}://${req.get('host')}/uploads/profilePics/${req.file.filename}`;
             userData.profilePic = profilePicUrl; // Save the URL in the user data
         }
+
+        Object.assign(userData, acceptance);
 
         // Create a new user
         const user = new User(userData);
@@ -288,6 +339,11 @@ const loginUserByMobile = async (req, res) => {
             // Auto-create user if not found
             try {
                 logger.info(`Auto-creating new user with phone number: ${phoneNumber}`);
+                const acceptance = buildPrivacyPolicyAcceptance(req.body);
+
+                if (acceptance.error) {
+                    return res.status(400).json(acceptance.error);
+                }
                 
                 // Create new user with minimal data
                 // Using placeholder values for required fields that will be updated in profile-details
@@ -298,6 +354,7 @@ const loginUserByMobile = async (req, res) => {
                     isActive: true,
                     lastLogin: new Date(),
                     isVerified: false,
+                    ...acceptance,
                 });
 
                 await newUser.save();
@@ -397,6 +454,7 @@ const updateUserWallet = async (req, res) => {
 
 
 module.exports = {
+  getPrivacyPolicy,
   getUserById,
   createUser,
   updateUser,
