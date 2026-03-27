@@ -9,6 +9,7 @@ const {
   startDriverOnlineSession,
   stopDriverOnlineSession
 } = require('./driverSession.service')
+const { isGoToRideEligible } = require('./goToRoute.service')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
@@ -2492,13 +2493,13 @@ const autoAssignDriver = async (rideId, pickupLocation, maxDistance = 5000) => {
 }
 
 // Search drivers with progressive radius expansion
-// options (optional): { priorityOnly: true|false, excludeDriverIds: [ObjectId] }
+// options (optional): { priorityOnly: true|false, excludeDriverIds: [ObjectId], dropoffLocation }
 const searchDriversWithProgressiveRadius = async (
   pickupLocation,
   radii = [3000, 6000, 9000, 12000, 15000, 20000],
   bookingType = null, // Optional: 'INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'
   vehicleType = null, // Optional: 'sedan', 'suv', 'hatchback', 'auto' - filters drivers by vehicle type
-  options = null // Optional: { priorityOnly: true|false, excludeDriverIds: [ObjectId] } - when omitted, behavior is unchanged
+  options = null // Optional: { priorityOnly: true|false, excludeDriverIds: [ObjectId], dropoffLocation } - when omitted, behavior is unchanged
 ) => {
   try {
     // Ensure pickupLocation has coordinates array
@@ -2625,8 +2626,8 @@ const searchDriversWithProgressiveRadius = async (
       }
 
       // Now apply filters - including socketId to ensure only connected drivers
-      const drivers = await Driver.find(driverQuery)
-        .select('socketId') // Explicitly select socketId field
+      let drivers = await Driver.find(driverQuery)
+        .select('socketId goTo location') // Select GO TO state for route-aware filtering
         .limit(10) // Limit to 10 drivers per radius
 
       const filterDescription = (() => {
@@ -2644,6 +2645,37 @@ const searchDriversWithProgressiveRadius = async (
       logger.info(
         `   ✅ Found ${drivers.length} drivers after applying filters (${filterDescription})`
       )
+
+      if (options?.dropoffLocation && drivers.length > 0) {
+        const routeFilteredDrivers = []
+        let goToExcludedCount = 0
+
+        for (const driver of drivers) {
+          const goToDecision = isGoToRideEligible(
+            driver.goTo,
+            pickupLocation,
+            options.dropoffLocation
+          )
+
+          if (goToDecision.eligible) {
+            routeFilteredDrivers.push(driver)
+            continue
+          }
+
+          goToExcludedCount += 1
+          logger.info(
+            `   GO TO excluded driver ${driver._id} (${goToDecision.reason})`
+          )
+        }
+
+        if (goToExcludedCount > 0) {
+          logger.info(
+            `   GO TO filter excluded ${goToExcludedCount} driver(s) in ${radius}m radius`
+          )
+        }
+
+        drivers = routeFilteredDrivers
+      }
 
       // Log how many drivers have socketId
       const driversWithSocketId = drivers.filter(

@@ -6,6 +6,29 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
+const {
+  REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
+  getMissingDriverApprovalDocuments,
+  buildInitialApprovalWorkflow,
+  setDriverPendingApproval,
+  vendorApproveDriver,
+  rejectDriverApproval,
+  getDriverApprovalSummary,
+  DRIVER_APPROVAL_ACTOR
+} = require('../../utils/driverApproval.service')
+
+const serializeVehicleState = (driver) => ({
+  approvedVehicle: driver.vehicleInfo || null,
+  pendingVehicle: driver.pendingVehicleInfo || null,
+  vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
+})
+
+const serializeDriverForResponse = driver => ({
+  ...driver.toObject(),
+  vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
+  approvalStatus: getDriverApprovalSummary(driver).status,
+  approvalWorkflow: getDriverApprovalSummary(driver)
+})
 
 const buildDateRange = (period, startDate, endDate) => {
   const now = new Date()
@@ -183,7 +206,7 @@ exports.getVendorDrivers = async (req, res) => {
 
     res.json({
       total: drivers.length,
-      drivers
+      drivers: drivers.map(driver => serializeDriverForResponse(driver))
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -203,7 +226,7 @@ exports.getVendorDriverById = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found or not under your vendor account' })
     }
 
-    res.json(driver)
+    res.json(serializeDriverForResponse(driver))
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -222,6 +245,9 @@ exports.assignDriverToVendor = async (req, res) => {
     }
 
     driver.vendorId = vendorId
+    if (!driver.isVerified) {
+      setDriverPendingApproval(driver)
+    }
     await driver.save()
 
     await Vendor.findByIdAndUpdate(vendorId, {
@@ -254,6 +280,9 @@ exports.removeDriverFromVendor = async (req, res) => {
     }
 
     driver.vendorId = null
+    if (!driver.isVerified) {
+      setDriverPendingApproval(driver)
+    }
     await driver.save()
 
     await Vendor.findByIdAndUpdate(vendorId, {
@@ -273,7 +302,7 @@ exports.removeDriverFromVendor = async (req, res) => {
 // =============================
 exports.verifyDriver = async (req, res) => {
   try {
-    const { driverId, vendorId } = req.body
+    const { driverId } = req.body
 
     if (!driverId) {
       return res.status(400).json({
@@ -283,7 +312,7 @@ exports.verifyDriver = async (req, res) => {
 
     const driver = await Driver.findOne({
       _id: driverId,
-      vendorId: vendorId
+      vendorId: req.user.id
     })
 
     if (!driver) {
@@ -292,18 +321,26 @@ exports.verifyDriver = async (req, res) => {
       })
     }
 
-    driver.isVerified = true
-    driver.rejectionReason = null
+    const missingDocuments = getMissingDriverApprovalDocuments(driver)
+    if (missingDocuments.length > 0) {
+      return res.status(400).json({
+        message: `Driver approval requires ${REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES.join(', ')} compliance documents`,
+        missingDocuments
+      })
+    }
+
+    vendorApproveDriver(driver)
 
     await driver.save()
 
     res.json({
       success: true,
-      message: 'Driver verified successfully',
-      driver
+      message: 'Driver verified by vendor and forwarded to admin for final approval',
+      driver: serializeDriverForResponse(driver)
     })
   } catch (error) {
-    res.status(500).json({
+    const statusCode = error.message.includes('pending vendor approval') ? 400 : 500
+    res.status(statusCode).json({
       success: false,
       message: error.message
     })
@@ -340,18 +377,129 @@ exports.rejectDriver = async (req, res) => {
       })
     }
 
-    driver.isVerified = false
-    driver.rejectionReason = reason
+    rejectDriverApproval(driver, DRIVER_APPROVAL_ACTOR.VENDOR, reason)
 
     await driver.save()
 
     res.json({
       success: true,
       message: 'Driver rejected successfully',
-      driver
+      driver: serializeDriverForResponse(driver)
     })
   } catch (error) {
-    res.status(500).json({
+    const statusCode = error.message.includes('pending vendor approval') ? 400 : 500
+    res.status(statusCode).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.approveDriverVehicle = async (req, res) => {
+  try {
+    const driver = await Driver.findOne({
+      _id: req.params.driverId,
+      vendorId: req.user.id
+    })
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found or not under your vendor account'
+      })
+    }
+
+    if (!driver.pendingVehicleInfo) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending vehicle approval found'
+      })
+    }
+
+    if (driver.pendingVehicleInfo.approvalRoutedTo !== 'VENDOR') {
+      return res.status(403).json({
+        success: false,
+        message: 'This vehicle approval is routed to admin'
+      })
+    }
+
+    driver.vehicleInfo = {
+      make: driver.pendingVehicleInfo.make,
+      model: driver.pendingVehicleInfo.model,
+      year: driver.pendingVehicleInfo.year,
+      color: driver.pendingVehicleInfo.color,
+      licensePlate: driver.pendingVehicleInfo.licensePlate,
+      vehicleType: driver.pendingVehicleInfo.vehicleType
+    }
+    driver.pendingVehicleInfo = null
+    await driver.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver vehicle approved successfully',
+      ...serializeVehicleState(driver)
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.rejectDriverVehicle = async (req, res) => {
+  try {
+    const { reason } = req.body
+
+    if (typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required'
+      })
+    }
+
+    const driver = await Driver.findOne({
+      _id: req.params.driverId,
+      vendorId: req.user.id
+    })
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found or not under your vendor account'
+      })
+    }
+
+    if (!driver.pendingVehicleInfo) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending vehicle approval found'
+      })
+    }
+
+    if (driver.pendingVehicleInfo.approvalRoutedTo !== 'VENDOR') {
+      return res.status(403).json({
+        success: false,
+        message: 'This vehicle approval is routed to admin'
+      })
+    }
+
+    driver.pendingVehicleInfo = {
+      ...driver.pendingVehicleInfo.toObject(),
+      approvalStatus: 'REJECTED',
+      rejectedAt: new Date(),
+      approvedAt: null,
+      rejectionReason: reason.trim()
+    }
+    await driver.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver vehicle rejected successfully',
+      ...serializeVehicleState(driver)
+    })
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       message: error.message
     })
@@ -656,7 +804,8 @@ exports.addDriver = async (req, res) => {
       documents: [],
       vendorId: vendorId,
       isVerified: false,
-      isActive: false
+      isActive: false,
+      approvalWorkflow: buildInitialApprovalWorkflow(vendorId)
     })
 
     // increment vendor's driver count
@@ -664,7 +813,7 @@ exports.addDriver = async (req, res) => {
 
     res
       .status(201)
-      .json({ success: true, message: 'Driver created under vendor', driver })
+      .json({ success: true, message: 'Driver created under vendor', driver: serializeDriverForResponse(driver) })
   } catch (error) {
     res.status(500).json({ success: false, message: error.message })
   }

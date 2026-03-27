@@ -14,6 +14,8 @@ const { authenticateAdmin } = require('../../utils/adminAuth');
 const {
   approvePriorityDriver,
   rejectPriorityDriver,
+  approveDriverVehicle,
+  rejectDriverVehicle,
   getDriverOnlineHours,
   updateDriverComplianceDocuments
 } = require('../../Controllers/Driver/driver.controller')
@@ -29,6 +31,8 @@ router.patch('/drivers/:id/block', blockDriver);
 router.patch('/drivers/:id/verify', verifyDriver);
 router.get('/drivers/:id/documents', getDriverDocuments);
 router.get('/drivers/:id/priority-document', getPriorityDocument);
+router.patch('/drivers/:id/vehicle/approve', approveDriverVehicle);
+router.patch('/drivers/:id/vehicle/reject', rejectDriverVehicle);
 router.get('/drivers/online-hours/report', getFleetOnlineHoursReport);
 router.get('/drivers/:id/online-hours', getDriverOnlineHours);
 router.put('/drivers/:id/compliance-documents', updateDriverComplianceDocuments);

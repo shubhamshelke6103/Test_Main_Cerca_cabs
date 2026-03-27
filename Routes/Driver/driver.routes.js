@@ -12,6 +12,10 @@ const {
     getDriverDocuments,
     getAllRidesOfDriver,
     updateDriverLocation,
+    upsertDriverGoToHome,
+    activateDriverGoTo,
+    deactivateDriverGoTo,
+    getDriverGoToStatus,
     updateDriverOnlineStatus,
     logoutDriver,
     updateDriverVehicle,
@@ -50,6 +54,12 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+const vehicleDocumentUpload = upload.fields([
+    { name: 'vehicleRc', maxCount: 1 },
+    { name: 'vehicleInsurance', maxCount: 1 },
+    { name: 'vehiclePermit', maxCount: 1 },
+    { name: 'vehiclePuc', maxCount: 1 },
+]);
 
 // Routes for driver management
 router.post('/', addDriver); // Add a new driver with documents
@@ -79,6 +89,10 @@ router.get('/:id/upcoming-bookings', getUpcomingBookings);
 
 // Route to update a driver's location
 router.patch('/:id/location', updateDriverLocation);
+router.put('/:id/go-to/home', upsertDriverGoToHome);
+router.get('/:id/go-to', getDriverGoToStatus);
+router.post('/:id/go-to/activate', activateDriverGoTo);
+router.post('/:id/go-to/deactivate', deactivateDriverGoTo);
 
 // Route to update driver online/offline status
 router.patch('/:id/online-status', updateDriverOnlineStatus);
@@ -91,7 +105,7 @@ router.delete('/:id/live-location/share/:shareId', authenticateDriver, requireOw
 router.get('/live-location/shared/:shareToken', sharedLiveLocationRateLimiter, getSharedDriverLocation);
 
 // Route to update driver vehicle information
-router.patch('/:id/vehicle', updateDriverVehicle);
+router.patch('/:id/vehicle', vehicleDocumentUpload, updateDriverVehicle);
 
 // Route to update driver busy status
 router.patch('/:id/busy-status', updateDriverBusyStatus);

@@ -1,5 +1,114 @@
 const mongoose = require('mongoose')
 
+const vehicleDetailsSchema = new mongoose.Schema(
+  {
+    make: String,
+    model: String,
+    year: Number,
+    color: String,
+    licensePlate: String,
+    vehicleType: {
+      type: String,
+      enum: ['sedan', 'suv', 'hatchback', 'auto'],
+      default: 'sedan'
+    }
+  },
+  { _id: false }
+)
+
+const vehicleDocumentSchema = new mongoose.Schema(
+  {
+    documentType: {
+      type: String,
+      enum: ['RC', 'INSURANCE', 'PERMIT', 'PUC'],
+      required: true
+    },
+    documentUrl: {
+      type: String,
+      required: true
+    }
+  },
+  { _id: false }
+)
+
+const pendingVehicleSchema = new mongoose.Schema(
+  {
+    ...vehicleDetailsSchema.obj,
+    documents: {
+      type: [vehicleDocumentSchema],
+      default: []
+    },
+    approvalStatus: {
+      type: String,
+      enum: ['UNDER_APPROVAL', 'APPROVED', 'REJECTED'],
+      default: 'UNDER_APPROVAL'
+    },
+    approvalRoutedTo: {
+      type: String,
+      enum: ['ADMIN', 'VENDOR'],
+      required: true
+    },
+    submittedAt: {
+      type: Date,
+      default: Date.now
+    },
+    approvedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
+    rejectionReason: {
+      type: String,
+      default: null
+    }
+  },
+  { _id: false }
+)
+
+const driverApprovalWorkflowSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['PENDING_VENDOR', 'PENDING_ADMIN', 'APPROVED', 'REJECTED'],
+      default: 'PENDING_ADMIN'
+    },
+    routedTo: {
+      type: String,
+      enum: ['VENDOR', 'ADMIN', null],
+      default: 'ADMIN'
+    },
+    submittedAt: {
+      type: Date,
+      default: Date.now
+    },
+    vendorApprovedAt: {
+      type: Date,
+      default: null
+    },
+    adminApprovedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedBy: {
+      type: String,
+      enum: ['VENDOR', 'ADMIN', null],
+      default: null
+    },
+    rejectionReason: {
+      type: String,
+      default: null
+    }
+  },
+  { _id: false }
+)
+
 const driverSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -96,15 +205,103 @@ const driverSchema = new mongoose.Schema({
     }
   },
   vehicleInfo: {
-    make: String,
-    model: String,
-    year: Number,
-    color: String,
-    licensePlate: String,
-    vehicleType: {
+    type: vehicleDetailsSchema,
+    default: null
+  },
+  pendingVehicleInfo: {
+    type: pendingVehicleSchema,
+    default: null
+  },
+  approvalWorkflow: {
+    type: driverApprovalWorkflowSchema,
+    default: null
+  },
+  goTo: {
+    isEnabled: {
+      type: Boolean,
+      default: false
+    },
+    status: {
       type: String,
-      enum: ['sedan', 'suv', 'hatchback', 'auto'],
-      default: 'sedan'
+      enum: ['OFF', 'ACTIVE', 'STALE'],
+      default: 'OFF'
+    },
+    staleReason: {
+      type: String,
+      default: null
+    },
+    homeAddress: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    homeLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined
+      }
+    },
+    routeOrigin: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined
+      }
+    },
+    routePolyline: {
+      type: String,
+      default: null
+    },
+    routePoints: {
+      type: [[Number]],
+      default: []
+    },
+    routeBounds: {
+      north: {
+        type: Number,
+        default: null
+      },
+      south: {
+        type: Number,
+        default: null
+      },
+      east: {
+        type: Number,
+        default: null
+      },
+      west: {
+        type: Number,
+        default: null
+      }
+    },
+    routeDistanceMeters: {
+      type: Number,
+      default: null
+    },
+    routeDurationSeconds: {
+      type: Number,
+      default: null
+    },
+    corridorRadiusMeters: {
+      type: Number,
+      default: 500
+    },
+    activatedAt: {
+      type: Date,
+      default: null
+    },
+    lastRouteRefreshAt: {
+      type: Date,
+      default: null
     }
   },
   isOnline: {
@@ -168,31 +365,40 @@ const driverSchema = new mongoose.Schema({
       }
     }
   ],
-  trustedContacts: [
-    {
-      name: {
-        type: String,
-        trim: true,
-        required: true
-      },
-      relation: {
-        type: String,
-        trim: true,
-        default: null
-      },
-      phone: {
-        type: String,
-        trim: true,
-        default: null
-      },
-      email: {
-        type: String,
-        trim: true,
-        lowercase: true,
-        default: null
+  trustedContacts: {
+    type: [
+      {
+        name: {
+          type: String,
+          trim: true,
+          required: true
+        },
+        relation: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        phone: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        email: {
+          type: String,
+          trim: true,
+          lowercase: true,
+          default: null
+        }
       }
-    }
-  ],
+    ],
+    validate: {
+      validator: function (contacts) {
+        return !Array.isArray(contacts) || contacts.length <= 5
+      },
+      message: 'Driver can add up to 5 emergency contacts only'
+    },
+    default: []
+  },
 
   isPriorityDriver: {
     type: Boolean,

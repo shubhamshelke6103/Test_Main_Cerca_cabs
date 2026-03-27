@@ -680,7 +680,6 @@ Driver stats screen support.
 - Hotspot area identification APIs are not implemented.
 - Real email/SMS delivery status APIs are not included in this handoff.
 
-## Suggested Postman Checks for Frontend Team
 
 1. `GET /users/privacy-policy`
 2. `POST /users` with `privacyPolicyAccepted: true`

@@ -16,6 +16,20 @@ const {
     getDriverOnlineHoursSummary,
 } = require('../../utils/driverSession.service.js');
 const { syncComplianceStatuses } = require('../../utils/compliance.service.js');
+const {
+    DEFAULT_CORRIDOR_RADIUS_METERS,
+    buildGoToRouteSnapshot,
+    deactivateGoToState,
+    markGoToRouteStale,
+    normalizeGeoPoint,
+    normalizeLocationCoordinates,
+    sanitizeGoToResponse,
+    shouldRefreshGoToRoute,
+} = require('../../utils/goToRoute.service.js');
+const {
+    buildInitialApprovalWorkflow,
+    getDriverApprovalSummary,
+} = require('../../utils/driverApproval.service.js');
 
 const buildDateRange = (period, startDate, endDate) => {
     const now = new Date();
@@ -50,6 +64,138 @@ const buildDateRange = (period, startDate, endDate) => {
     };
 };
 
+const getDriverOr404 = async (driverId, res) => {
+    const driver = await Driver.findById(driverId);
+
+    if (!driver) {
+        res.status(404).json({ message: 'Driver not found' });
+        return null;
+    }
+
+    return driver;
+};
+
+const resolveHomeLocationPayload = (body = {}, driver = null) => {
+    const locationInput =
+        body.homeLocation ||
+        (body.homeCoordinates ? { coordinates: body.homeCoordinates } : null) ||
+        (body.coordinates ? { coordinates: body.coordinates } : null) ||
+        driver?.goTo?.homeLocation ||
+        null;
+
+    const normalizedLocation = normalizeGeoPoint(locationInput);
+
+    return {
+        homeAddress:
+            typeof body.homeAddress === 'string'
+                ? body.homeAddress.trim()
+                : driver?.goTo?.homeAddress || '',
+        homeLocation: normalizedLocation,
+        corridorRadiusMeters:
+            typeof body.corridorRadiusMeters === 'number' &&
+            body.corridorRadiusMeters > 0
+                ? body.corridorRadiusMeters
+                : driver?.goTo?.corridorRadiusMeters || DEFAULT_CORRIDOR_RADIUS_METERS,
+    };
+};
+
+const VEHICLE_DOCUMENT_FIELDS = [
+    { field: 'vehicleRc', type: 'RC' },
+    { field: 'vehicleInsurance', type: 'INSURANCE' },
+    { field: 'vehiclePermit', type: 'PERMIT' },
+    { field: 'vehiclePuc', type: 'PUC' },
+];
+
+const buildUploadedFileUrl = (req, file) => {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const normalizedPath = String(file.path || '').replace(/\\/g, '/');
+    return `${baseUrl}/${normalizedPath}`;
+};
+
+const collectVehicleDocuments = (req) => {
+    const uploadedFields = req.files || {};
+    const missingFields = VEHICLE_DOCUMENT_FIELDS
+        .filter(({ field }) => !uploadedFields[field] || !uploadedFields[field][0])
+        .map(({ field }) => field);
+
+    if (missingFields.length > 0) {
+        return {
+            missingFields,
+            documents: [],
+        };
+    }
+
+    const documents = VEHICLE_DOCUMENT_FIELDS.map(({ field, type }) => ({
+        documentType: type,
+        documentUrl: buildUploadedFileUrl(req, uploadedFields[field][0]),
+    }));
+
+    return {
+        missingFields: [],
+        documents,
+    };
+};
+
+const serializeVehicleState = (driver) => ({
+    approvedVehicle: driver.vehicleInfo || null,
+    pendingVehicle: driver.pendingVehicleInfo || null,
+    vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
+});
+
+const serializeDriverApprovalState = (driver) => ({
+    approvalStatus: getDriverApprovalSummary(driver).status,
+    approvalWorkflow: getDriverApprovalSummary(driver),
+});
+
+const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
+    if (!driver.pendingVehicleInfo) {
+        throw new Error('No pending vehicle found');
+    }
+
+    const approvedVehicle = {
+        make: driver.pendingVehicleInfo.make,
+        model: driver.pendingVehicleInfo.model,
+        year: driver.pendingVehicleInfo.year,
+        color: driver.pendingVehicleInfo.color,
+        licensePlate: driver.pendingVehicleInfo.licensePlate,
+        vehicleType: driver.pendingVehicleInfo.vehicleType,
+    };
+
+    driver.vehicleInfo = approvedVehicle;
+    driver.pendingVehicleInfo = {
+        ...driver.pendingVehicleInfo.toObject(),
+        approvalStatus: 'APPROVED',
+        approvedAt: new Date(),
+        rejectedAt: null,
+        rejectionReason: null,
+        approvedBy,
+    };
+
+    await driver.save();
+
+    driver.pendingVehicleInfo = null;
+    await driver.save();
+
+    return driver;
+};
+
+const rejectPendingVehicleForDriver = async (driver, reason) => {
+    if (!driver.pendingVehicleInfo) {
+        throw new Error('No pending vehicle found');
+    }
+
+    driver.pendingVehicleInfo = {
+        ...driver.pendingVehicleInfo.toObject(),
+        approvalStatus: 'REJECTED',
+        rejectedAt: new Date(),
+        approvedAt: null,
+        rejectionReason: reason,
+    };
+
+    await driver.save();
+    return driver;
+};
+
 /**
  * @desc    Add a new driver
  * @route   POST /drivers
@@ -76,6 +222,7 @@ const addDriver = async (req, res) => {
             password: hashedPassword,
             location,
             documents: [], // Initialize with an empty array
+            approvalWorkflow: buildInitialApprovalWorkflow(null),
         });
 
         await driverObj.save();
@@ -210,6 +357,9 @@ const getDriverById = async (req, res) => {
         driverObj.completedRidesCount = totalRides;
         delete driverObj.password;
         driverObj.rejectionReason = driver.rejectionReason ?? null;
+        driverObj.vehicleStatus =
+            driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED');
+        Object.assign(driverObj, serializeDriverApprovalState(driver));
 
         res.status(200).json(driverObj);
     } catch (error) {
@@ -250,6 +400,14 @@ const updateDriver = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
+        if (Array.isArray(req.body?.trustedContacts) && req.body.trustedContacts.length > 5) {
+            return res.status(400).json({ message: 'Driver can add up to 5 emergency contacts only' });
+        }
+
+        if (req.body.vendorId !== undefined && !driver.isVerified && req.body.approvalWorkflow === undefined) {
+            req.body.approvalWorkflow = buildInitialApprovalWorkflow(req.body.vendorId || null);
+        }
+
         // Update the driver with the new data (excluding files)
         const updatedDriver = await Driver.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
@@ -257,7 +415,10 @@ const updateDriver = async (req, res) => {
         });
 
         logger.info(`Driver updated successfully: ${updatedDriver.email}`);
-        res.status(200).json(updatedDriver);
+        res.status(200).json({
+            ...updatedDriver.toObject(),
+            ...serializeDriverApprovalState(updatedDriver),
+        });
     } catch (error) {
         logger.error('Error updating driver:', error);
         res.status(400).json({ message: 'Error updating driver', error });
@@ -522,19 +683,167 @@ const updateDriverLocation = async (req, res) => {
             return res.status(400).json({ message: 'Invalid coordinates. Must be an array of [longitude, latitude].' });
         }
 
-        const driver = await Driver.findById(req.params.id);
-
-        if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
-        }
+        const driver = await getDriverOr404(req.params.id, res);
+        if (!driver) return;
 
         driver.location.coordinates = coordinates;
+
+        let goToRefreshed = false;
+        if (
+            driver.goTo?.isEnabled &&
+            driver.goTo?.homeLocation?.coordinates &&
+            shouldRefreshGoToRoute(driver.goTo, { coordinates })
+        ) {
+            try {
+                driver.goTo = await buildGoToRouteSnapshot({
+                    origin: { coordinates },
+                    destination: driver.goTo.homeLocation,
+                    homeAddress: driver.goTo.homeAddress,
+                    corridorRadiusMeters:
+                        driver.goTo.corridorRadiusMeters ||
+                        DEFAULT_CORRIDOR_RADIUS_METERS,
+                    activatedAt: driver.goTo.activatedAt || new Date(),
+                });
+                goToRefreshed = true;
+            } catch (routeError) {
+                driver.goTo = markGoToRouteStale(
+                    driver.goTo?.toObject?.() || driver.goTo || {},
+                    'ROUTE_REFRESH_FAILED'
+                );
+                logger.warn(
+                    `GO TO route refresh failed for driver ${driver._id}: ${routeError.message}`
+                );
+            }
+        }
+
         await driver.save();
 
-        res.status(200).json({ message: 'Driver location updated successfully', location: driver.location });
+        res.status(200).json({
+            message: 'Driver location updated successfully',
+            location: driver.location,
+            goTo: sanitizeGoToResponse(driver.goTo),
+            goToRouteRefreshed: goToRefreshed,
+        });
     } catch (error) {
         logger.error('Error updating driver location:', error);
         res.status(500).json({ message: 'Error updating driver location', error });
+    }
+};
+
+/**
+ * @desc    Save or update a driver's GO TO home destination
+ * @route   PUT /drivers/:id/go-to/home
+ */
+const upsertDriverGoToHome = async (req, res) => {
+    try {
+        const driver = await getDriverOr404(req.params.id, res);
+        if (!driver) return;
+
+        const { homeAddress, homeLocation, corridorRadiusMeters } =
+            resolveHomeLocationPayload(req.body, driver);
+        const currentGoTo = driver.goTo?.toObject?.() || driver.goTo || {};
+
+        driver.goTo = {
+            ...currentGoTo,
+            homeAddress,
+            homeLocation,
+            corridorRadiusMeters,
+        };
+
+        await driver.save();
+
+        res.status(200).json({
+            message: 'Driver GO TO home destination updated successfully',
+            goTo: sanitizeGoToResponse(driver.goTo),
+        });
+    } catch (error) {
+        logger.error('Error updating GO TO home destination:', error);
+        res.status(400).json({
+            message: 'Error updating GO TO home destination',
+            error: error.message,
+        });
+    }
+};
+
+/**
+ * @desc    Activate GO TO mode for a driver
+ * @route   POST /drivers/:id/go-to/activate
+ */
+const activateDriverGoTo = async (req, res) => {
+    try {
+        const driver = await getDriverOr404(req.params.id, res);
+        if (!driver) return;
+
+        const originCoordinates = normalizeLocationCoordinates(driver.location);
+        const { homeAddress, homeLocation, corridorRadiusMeters } =
+            resolveHomeLocationPayload(req.body, driver);
+
+        driver.goTo = await buildGoToRouteSnapshot({
+            origin: { coordinates: originCoordinates },
+            destination: homeLocation,
+            homeAddress,
+            corridorRadiusMeters,
+        });
+
+        await driver.save();
+
+        res.status(200).json({
+            message: 'GO TO activated successfully',
+            goTo: sanitizeGoToResponse(driver.goTo),
+        });
+    } catch (error) {
+        logger.error('Error activating GO TO:', error);
+        res.status(400).json({
+            message: 'Error activating GO TO',
+            error: error.message,
+        });
+    }
+};
+
+/**
+ * @desc    Deactivate GO TO mode for a driver
+ * @route   POST /drivers/:id/go-to/deactivate
+ */
+const deactivateDriverGoTo = async (req, res) => {
+    try {
+        const driver = await getDriverOr404(req.params.id, res);
+        if (!driver) return;
+
+        driver.goTo = deactivateGoToState(driver.goTo?.toObject?.() || driver.goTo || {});
+        await driver.save();
+
+        res.status(200).json({
+            message: 'GO TO deactivated successfully',
+            goTo: sanitizeGoToResponse(driver.goTo),
+        });
+    } catch (error) {
+        logger.error('Error deactivating GO TO:', error);
+        res.status(500).json({
+            message: 'Error deactivating GO TO',
+            error: error.message,
+        });
+    }
+};
+
+/**
+ * @desc    Get current GO TO state for a driver
+ * @route   GET /drivers/:id/go-to
+ */
+const getDriverGoToStatus = async (req, res) => {
+    try {
+        const driver = await getDriverOr404(req.params.id, res);
+        if (!driver) return;
+
+        res.status(200).json({
+            message: 'Driver GO TO status fetched successfully',
+            goTo: sanitizeGoToResponse(driver.goTo),
+        });
+    } catch (error) {
+        logger.error('Error fetching GO TO status:', error);
+        res.status(500).json({
+            message: 'Error fetching GO TO status',
+            error: error.message,
+        });
     }
 };
 
@@ -605,25 +914,108 @@ const updateDriverVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        driver.vehicleInfo = {
-            make: make || driver.vehicleInfo?.make,
-            model: model || driver.vehicleInfo?.model,
-            year: year || driver.vehicleInfo?.year,
-            color: color || driver.vehicleInfo?.color,
-            licensePlate: licensePlate || driver.vehicleInfo?.licensePlate,
-            vehicleType: vehicleType || driver.vehicleInfo?.vehicleType || 'sedan',
+        if (!make || !model || !year || !color || !licensePlate) {
+            return res.status(400).json({
+                message: 'make, model, year, color, and licensePlate are required',
+            });
+        }
+
+        const { missingFields, documents } = collectVehicleDocuments(req);
+        if (missingFields.length > 0) {
+            return res.status(400).json({
+                message: 'Vehicle RC, Insurance, Permit, and PUC documents are required',
+                missingFields,
+            });
+        }
+
+        driver.pendingVehicleInfo = {
+            make,
+            model,
+            year: Number(year),
+            color,
+            licensePlate,
+            vehicleType: vehicleType || 'sedan',
+            documents,
+            approvalStatus: 'UNDER_APPROVAL',
+            approvalRoutedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',
+            submittedAt: new Date(),
+            approvedAt: null,
+            rejectedAt: null,
+            rejectionReason: null,
         };
 
         await driver.save();
 
         logger.info(`Driver vehicle info updated: ${driver.email}`);
         res.status(200).json({ 
-            message: 'Driver vehicle information updated successfully', 
-            vehicleInfo: driver.vehicleInfo 
+            message: `Vehicle submitted for ${driver.vendorId ? 'vendor' : 'admin'} approval successfully`,
+            routedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',
+            ...serializeVehicleState(driver),
         });
     } catch (error) {
         logger.error('Error updating driver vehicle:', error);
         res.status(500).json({ message: 'Error updating driver vehicle information', error });
+    }
+};
+
+const approveDriverVehicle = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (!driver.pendingVehicleInfo) {
+            return res.status(400).json({ message: 'No pending vehicle approval found' });
+        }
+
+        if (driver.pendingVehicleInfo.approvalRoutedTo !== 'ADMIN') {
+            return res.status(403).json({ message: 'This vehicle approval is routed to vendor' });
+        }
+
+        await approvePendingVehicleForDriver(driver, 'ADMIN');
+
+        return res.status(200).json({
+            message: 'Driver vehicle approved successfully',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error approving driver vehicle:', error);
+        return res.status(500).json({ message: 'Error approving driver vehicle', error: error.message });
+    }
+};
+
+const rejectDriverVehicle = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+        const reason = req.body?.reason;
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (!driver.pendingVehicleInfo) {
+            return res.status(400).json({ message: 'No pending vehicle approval found' });
+        }
+
+        if (driver.pendingVehicleInfo.approvalRoutedTo !== 'ADMIN') {
+            return res.status(403).json({ message: 'This vehicle approval is routed to vendor' });
+        }
+
+        if (typeof reason !== 'string' || !reason.trim()) {
+            return res.status(400).json({ message: 'Rejection reason is required' });
+        }
+
+        await rejectPendingVehicleForDriver(driver, reason.trim());
+
+        return res.status(200).json({
+            message: 'Driver vehicle rejected successfully',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error rejecting driver vehicle:', error);
+        return res.status(500).json({ message: 'Error rejecting driver vehicle', error: error.message });
     }
 };
 
@@ -1103,9 +1495,15 @@ module.exports = {
     getAllRidesOfDriver,
     getUpcomingBookings,
     updateDriverLocation,
+    upsertDriverGoToHome,
+    activateDriverGoTo,
+    deactivateDriverGoTo,
+    getDriverGoToStatus,
     updateDriverOnlineStatus,
     logoutDriver,
     updateDriverVehicle,
+    approveDriverVehicle,
+    rejectDriverVehicle,
     getDriverEarnings,
     getDriverStats,
     getNearbyDrivers,

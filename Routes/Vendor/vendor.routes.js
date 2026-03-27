@@ -52,6 +52,8 @@ router.delete("/remove-driver/:driverId/:vendorId",  vendorController.removeDriv
 router.patch("/verify-driver", vendorController.verifyDriver);
 
 router.patch("/reject-driver", vendorController.rejectDriver);
+router.patch("/drivers/:driverId/vehicle/approve", vendorController.approveDriverVehicle);
+router.patch("/drivers/:driverId/vehicle/reject", vendorController.rejectDriverVehicle);
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);

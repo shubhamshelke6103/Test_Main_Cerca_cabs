@@ -82,7 +82,11 @@ const rideBookingWorker = new Worker(
           radii,
           bookingType,
           vehicleType,
-          { priorityOnly: false, excludeDriverIds: ride.rejectedDrivers || [] }
+          {
+            priorityOnly: false,
+            excludeDriverIds: ride.rejectedDrivers || [],
+            dropoffLocation: ride.dropoffLocation
+          }
         )
       drivers = normalDrivers
       radiusUsed = ru
@@ -128,7 +132,7 @@ const rideBookingWorker = new Worker(
           radii,
           bookingType,
           vehicleType,
-          { priorityOnly: true }
+          { priorityOnly: true, dropoffLocation: ride.dropoffLocation }
         )
 
       if (priorityDrivers.length > 0) {
@@ -142,7 +146,8 @@ const rideBookingWorker = new Worker(
           ride.pickupLocation,
           radii,
           bookingType,
-          vehicleType
+          vehicleType,
+          { dropoffLocation: ride.dropoffLocation }
         )
         drivers = result.drivers
         radiusUsed = result.radiusUsed

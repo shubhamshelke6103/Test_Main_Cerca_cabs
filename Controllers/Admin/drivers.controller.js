@@ -5,6 +5,15 @@ const Payout = require('../../Models/Driver/payout.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const logger = require('../../utils/logger');
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service');
+const {
+  REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
+  getMissingDriverApprovalDocuments,
+  adminApproveDriver,
+  rejectDriverApproval,
+  getDriverApprovalSummary,
+  DRIVER_APPROVAL_ACTOR,
+  setDriverPendingApproval,
+} = require('../../utils/driverApproval.service');
 
 const parseBoolean = (value) => {
   if (value === undefined) return undefined;
@@ -12,6 +21,17 @@ const parseBoolean = (value) => {
   if (value === 'false' || value === false) return false;
   return undefined;
 };
+
+const resolveVehicleStatus = (driver) => (
+  driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
+);
+
+const serializeDriverForResponse = (driver) => ({
+  ...driver.toObject(),
+  vehicleStatus: resolveVehicleStatus(driver),
+  approvalStatus: getDriverApprovalSummary(driver).status,
+  approvalWorkflow: getDriverApprovalSummary(driver),
+});
 
 const listDrivers = async (req, res) => {
   try {
@@ -64,8 +84,8 @@ const listDrivers = async (req, res) => {
     }, {});
 
     const driversWithEarnings = drivers.map((driver) => ({
-      ...driver.toObject(),
-      totalEarnings: Math.round((earningsMap[driver._id.toString()] || 0) * 100) / 100
+      ...serializeDriverForResponse(driver),
+      totalEarnings: Math.round((earningsMap[driver._id.toString()] || 0) * 100) / 100,
     }));
 
     res.status(200).json({
@@ -98,7 +118,7 @@ const getDriverDetails = async (req, res) => {
     ]);
 
     res.status(200).json({
-      driver,
+      driver: serializeDriverForResponse(driver),
       rides,
       payouts,
     });
@@ -111,20 +131,31 @@ const getDriverDetails = async (req, res) => {
 const approveDriver = async (req, res) => {
   try {
     const { id } = req.params;
-    const driver = await Driver.findByIdAndUpdate(
-      id,
-      { isVerified: true, isActive: true, rejectionReason: null },
-      { new: true }
-    );
+    const driver = await Driver.findById(id).select('complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    res.status(200).json({ message: 'Driver approved', driver });
+    const missingDocuments = getMissingDriverApprovalDocuments(driver);
+    if (missingDocuments.length > 0) {
+      return res.status(400).json({
+        message: `Driver approval requires ${REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES.join(', ')} compliance documents`,
+        missingDocuments,
+      });
+    }
+
+    adminApproveDriver(driver);
+    await driver.save();
+
+    res.status(200).json({
+      message: 'Driver approved',
+      driver: serializeDriverForResponse(driver),
+    });
   } catch (error) {
     logger.error('Error approving driver:', error);
-    res.status(500).json({ message: 'Error approving driver', error: error.message });
+    const statusCode = error.message.includes('Vendor approval must be completed') ? 400 : 500;
+    res.status(statusCode).json({ message: 'Error approving driver', error: error.message });
   }
 };
 
@@ -135,20 +166,23 @@ const rejectDriver = async (req, res) => {
     if (typeof reason !== 'string' || !reason.trim()) {
       return res.status(400).json({ message: 'Rejection reason is required' });
     }
-    const driver = await Driver.findByIdAndUpdate(
-      id,
-      { isActive: false, rejectionReason: reason.trim() },
-      { new: true }
-    );
+    const driver = await Driver.findById(id);
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    res.status(200).json({ message: 'Driver rejected', driver });
+    rejectDriverApproval(driver, DRIVER_APPROVAL_ACTOR.ADMIN, reason.trim());
+    await driver.save();
+
+    res.status(200).json({
+      message: 'Driver rejected',
+      driver: serializeDriverForResponse(driver),
+    });
   } catch (error) {
     logger.error('Error rejecting driver:', error);
-    res.status(500).json({ message: 'Error rejecting driver', error: error.message });
+    const statusCode = error.message.includes('pending admin approval') ? 400 : 500;
+    res.status(statusCode).json({ message: 'Error rejecting driver', error: error.message });
   }
 };
 
@@ -189,20 +223,38 @@ const verifyDriver = async (req, res) => {
       return res.status(400).json({ message: 'isVerified must be true or false' });
     }
 
-    const driver = await Driver.findByIdAndUpdate(
-      id,
-      { isVerified: verifiedValue },
-      { new: true }
-    );
+    const driver = await Driver.findById(id).select('complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    res.status(200).json({ message: 'Driver verification updated', driver });
+    if (verifiedValue === true) {
+      const missingDocuments = getMissingDriverApprovalDocuments(driver);
+      if (missingDocuments.length > 0) {
+        return res.status(400).json({
+          message: `Driver verification requires ${REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES.join(', ')} compliance documents`,
+          missingDocuments,
+        });
+      }
+
+      adminApproveDriver(driver);
+      await driver.save();
+    } else {
+      setDriverPendingApproval(driver);
+      await driver.save();
+    }
+
+    res.status(200).json({
+      message: 'Driver verification updated',
+      driver: serializeDriverForResponse(driver),
+    });
   } catch (error) {
     logger.error('Error verifying driver:', error);
-    res.status(500).json({ message: 'Error verifying driver', error: error.message });
+    const statusCode = error.message.includes('pending admin approval') || error.message.includes('Vendor approval must be completed')
+      ? 400
+      : 500;
+    res.status(statusCode).json({ message: 'Error verifying driver', error: error.message });
   }
 };
 
