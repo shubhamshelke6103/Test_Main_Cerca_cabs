@@ -8,6 +8,7 @@ const {
   verifyDriver,
   getDriverDocuments,
   getPriorityDocument,
+  getFleetOnlineHoursReport,
 } = require('../../Controllers/Admin/drivers.controller');
 const { authenticateAdmin } = require('../../utils/adminAuth');
 const {
@@ -28,6 +29,7 @@ router.patch('/drivers/:id/block', blockDriver);
 router.patch('/drivers/:id/verify', verifyDriver);
 router.get('/drivers/:id/documents', getDriverDocuments);
 router.get('/drivers/:id/priority-document', getPriorityDocument);
+router.get('/drivers/online-hours/report', getFleetOnlineHoursReport);
 router.get('/drivers/:id/online-hours', getDriverOnlineHours);
 router.put('/drivers/:id/compliance-documents', updateDriverComplianceDocuments);
 // Approve / reject priority driver

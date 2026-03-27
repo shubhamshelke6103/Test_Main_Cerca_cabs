@@ -1,5 +1,5 @@
 const express = require('express');
-const { getAllUsers, getPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken } = require('../../Controllers/User/user.controller.js');
+const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken } = require('../../Controllers/User/user.controller.js');
 
 const router = express.Router();
 
@@ -7,6 +7,7 @@ const router = express.Router();
 // GET /users/validate-token - Validate JWT token (must be before /:id)
 router.get('/validate-token', validateToken);
 router.get('/privacy-policy', getPrivacyPolicy);
+router.post('/privacy-policy/accept', acceptPrivacyPolicy);
 
 // POST /users/login - Login user
 router.post('/login', loginUserByMobile);

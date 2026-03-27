@@ -1,5 +1,10 @@
 const logger = require('../../utils/logger');
 const { aggregateHeatmapDocs, buildTieredZones } = require('../../utils/heatmap.service');
+const {
+  HOTSPOT_SNAPSHOT_KEY,
+  buildHotspotSnapshot,
+  getLatestHotspotSnapshot,
+} = require('../../utils/hotspotSnapshot.service');
 
 const MAX_LOOKBACK_DAYS = 30;
 const MAX_ZONES = 300;
@@ -80,6 +85,39 @@ const getDriverHeatmap = async (req, res) => {
   }
 };
 
+const getDriverHotspotSnapshot = async (req, res) => {
+  try {
+    if (!DRIVER_HEATMAP_ENABLED) {
+      return res.status(503).json({ message: 'Driver heatmap is currently disabled' });
+    }
+    const status = HEATMAP_ALLOWED_STATUSES.has(req.query.status) ? req.query.status : 'completed';
+    let snapshot = await getLatestHotspotSnapshot(HOTSPOT_SNAPSHOT_KEY);
+
+    if (!snapshot) {
+      snapshot = await buildHotspotSnapshot({ status });
+      snapshot = snapshot.toObject ? snapshot.toObject() : snapshot;
+    }
+
+    return res.status(200).json({
+      zones: snapshot.zones || [],
+      summary: snapshot.summary || {},
+      meta: {
+        source: 'snapshot',
+        generatedAt: snapshot.generatedAt,
+        range: {
+          startDate: snapshot.rangeStart,
+          endDate: snapshot.rangeEnd,
+        },
+        gridSize: snapshot.gridSize,
+      },
+    });
+  } catch (error) {
+    logger.error('Error fetching driver hotspot snapshot:', error);
+    return res.status(500).json({ message: 'Error fetching driver hotspot snapshot', error: error.message });
+  }
+};
+
 module.exports = {
   getDriverHeatmap,
+  getDriverHotspotSnapshot,
 };

@@ -28,8 +28,16 @@ const {
     deleteDriverLocationShare,
     getSharedDriverLocation
 } = require('../../Controllers/Driver/driver.controller.js');
+const { authenticateDriver } = require('../../utils/driverAuth');
+const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.middleware');
 
 const router = express.Router();
+const requireOwnDriver = (req, res, next) => {
+    if (req.driverId !== req.params.id) {
+        return res.status(403).json({ message: 'You are not authorized to access this driver resource' });
+    }
+    return next();
+};
 
 // Configure multer for document uploads
 const storage = multer.diskStorage({
@@ -77,10 +85,10 @@ router.patch('/:id/online-status', updateDriverOnlineStatus);
 router.post('/:id/logout', logoutDriver);
 router.get('/:id/online-hours', getDriverOnlineHours);
 router.put('/:id/compliance-documents', updateDriverComplianceDocuments);
-router.post('/:id/live-location/share', createDriverLocationShare);
-router.get('/:id/live-location/shares', listDriverLocationShares);
-router.delete('/:id/live-location/share/:shareId', deleteDriverLocationShare);
-router.get('/live-location/shared/:shareToken', getSharedDriverLocation);
+router.post('/:id/live-location/share', authenticateDriver, requireOwnDriver, createDriverLocationShare);
+router.get('/:id/live-location/shares', authenticateDriver, requireOwnDriver, listDriverLocationShares);
+router.delete('/:id/live-location/share/:shareId', authenticateDriver, requireOwnDriver, deleteDriverLocationShare);
+router.get('/live-location/shared/:shareToken', sharedLiveLocationRateLimiter, getSharedDriverLocation);
 
 // Route to update driver vehicle information
 router.patch('/:id/vehicle', updateDriverVehicle);

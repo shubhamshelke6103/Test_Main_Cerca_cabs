@@ -4,6 +4,10 @@ const cron = require('node-cron')
 const Ride = require('../../Models/Driver/ride.model')
 const socketUtils = require('../../utils/socket')
 const { processComplianceAlerts } = require('../../utils/compliance.service')
+const {
+  HOTSPOT_INTERVAL_MINUTES,
+  buildHotspotSnapshot
+} = require('../../utils/hotspotSnapshot.service')
 
 const {
   startRide,
@@ -45,6 +49,21 @@ function initScheduledRideWorker () {
         await processComplianceAlerts()
       } catch (error) {
         logger.error('Error in compliance alert check:', error)
+      }
+    })
+
+    // Build hotspot snapshots every 20 minutes (configurable)
+    const hotspotCronExpression = `*/${HOTSPOT_INTERVAL_MINUTES} * * * *`
+    cron.schedule(hotspotCronExpression, async () => {
+      try {
+        logger.info('Running hotspot snapshot refresh')
+        const snapshot = await buildHotspotSnapshot()
+        io.emit('hotspotUpdated', {
+          generatedAt: snapshot.generatedAt,
+          zoneCount: Array.isArray(snapshot.zones) ? snapshot.zones.length : 0
+        })
+      } catch (error) {
+        logger.error('Error in hotspot snapshot refresh:', error)
       }
     })
 

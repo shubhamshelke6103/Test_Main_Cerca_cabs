@@ -4,6 +4,7 @@ const Ride = require('../../Models/Driver/ride.model');
 const Payout = require('../../Models/Driver/payout.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const logger = require('../../utils/logger');
+const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service');
 
 const parseBoolean = (value) => {
   if (value === undefined) return undefined;
@@ -273,6 +274,62 @@ const getPriorityDocument = async (req, res) => {
   }
 };
 
+const getFleetOnlineHoursReport = async (req, res) => {
+  try {
+    const { period = 'daily', startDate, endDate, vendorId } = req.query;
+    const now = new Date();
+    const rangeStart = startDate ? new Date(startDate) : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const rangeEnd = endDate ? new Date(endDate) : now;
+
+    const driverFilter = {};
+    if (vendorId) driverFilter.vendorId = vendorId;
+    const drivers = await Driver.find(driverFilter).select('_id name vendorId').lean();
+    const driverIds = drivers.map((driver) => driver._id);
+
+    if (driverIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        summary: [],
+        totalMinutes: 0,
+        totalSessions: 0,
+        drivers: [],
+      });
+    }
+
+    const report = await getFleetOnlineHoursSummary({
+      driverIds,
+      startDate: rangeStart,
+      endDate: rangeEnd,
+      groupBy: period,
+    });
+
+    const driverBreakdown = drivers.map((driver) => {
+      const item = report.driverBreakdown[String(driver._id)] || { totalMinutes: 0, sessionCount: 0 };
+      return {
+        id: driver._id,
+        name: driver.name,
+        vendorId: driver.vendorId || null,
+        totalMinutes: item.totalMinutes || 0,
+        sessionCount: item.sessionCount || 0,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      period,
+      startDate: rangeStart,
+      endDate: rangeEnd,
+      summary: report.summary,
+      totalMinutes: report.totalMinutes,
+      totalSessions: report.totalSessions,
+      drivers: driverBreakdown,
+    });
+  } catch (error) {
+    logger.error('Error fetching fleet online hours report:', error);
+    return res.status(500).json({ message: 'Error fetching fleet online hours report', error: error.message });
+  }
+};
+
 module.exports = {
   listDrivers,
   getDriverDetails,
@@ -282,5 +339,6 @@ module.exports = {
   verifyDriver,
   getDriverDocuments,
   getPriorityDocument,
+  getFleetOnlineHoursReport,
 };
 

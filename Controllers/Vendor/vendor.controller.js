@@ -5,6 +5,37 @@ const AdminEarnings = require('../../Models/Admin/adminEarnings.model')
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
+const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
+
+const buildDateRange = (period, startDate, endDate) => {
+  const now = new Date()
+  if (startDate || endDate) {
+    return {
+      start: startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1),
+      end: endDate ? new Date(endDate) : now,
+      groupBy: period || 'daily'
+    }
+  }
+  if (period === 'monthly') {
+    return {
+      start: new Date(now.getFullYear(), 0, 1),
+      end: now,
+      groupBy: 'monthly'
+    }
+  }
+  if (period === 'weekly') {
+    return {
+      start: new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000),
+      end: now,
+      groupBy: 'weekly'
+    }
+  }
+  return {
+    start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+    end: now,
+    groupBy: 'daily'
+  }
+}
 
 // =============================
 // 1. Register Vendor
@@ -526,6 +557,62 @@ exports.getVendorEarningsReport = async (req, res) => {
     })
   } catch (error) {
     res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorOnlineHoursReport = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { period, startDate, endDate } = req.query
+    const range = buildDateRange(period, startDate, endDate)
+
+    const drivers = await Driver.find({ vendorId }).select('_id name').lean()
+    const driverIds = drivers.map(d => d._id)
+    if (driverIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        summary: [],
+        totalMinutes: 0,
+        totalSessions: 0,
+        drivers: []
+      })
+    }
+
+    const report = await getFleetOnlineHoursSummary({
+      driverIds,
+      startDate: range.start,
+      endDate: range.end,
+      groupBy: range.groupBy
+    })
+
+    const driversWithHours = drivers.map(driver => {
+      const driverReport = report.driverBreakdown[String(driver._id)] || {
+        totalMinutes: 0,
+        sessionCount: 0
+      }
+      return {
+        id: driver._id,
+        name: driver.name,
+        totalMinutes: driverReport.totalMinutes || 0,
+        sessionCount: driverReport.sessionCount || 0
+      }
+    })
+
+    return res.status(200).json({
+      success: true,
+      period: range.groupBy,
+      startDate: range.start,
+      endDate: range.end,
+      summary: report.summary,
+      totalMinutes: report.totalMinutes,
+      totalSessions: report.totalSessions,
+      drivers: driversWithHours
+    })
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       message: error.message
     })

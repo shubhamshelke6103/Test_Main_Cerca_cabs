@@ -55,6 +55,7 @@ router.patch("/reject-driver", vendorController.rejectDriver);
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);
+router.get("/online-hours-report", vendorController.getVendorOnlineHoursReport);
 router.put("/compliance-documents", vendorController.updateVendorComplianceDocuments);
 router.put("/drivers/:driverId/compliance-documents", vendorController.updateVendorDriverComplianceDocuments);
 

@@ -4,6 +4,9 @@ const Driver = require('../Models/Driver/driver.model')
 const Ride = require('../Models/Driver/ride.model')
 
 const generateShareToken = () => crypto.randomBytes(24).toString('base64url')
+const MIN_SHARE_DURATION_MINUTES = 5
+const MAX_SHARE_DURATION_MINUTES = 24 * 60
+const ACTIVE_RIDE_STATUSES = new Set(['requested', 'accepted', 'arrived', 'in_progress', 'ongoing'])
 
 const createLiveLocationShare = async ({
   ownerId,
@@ -16,7 +19,11 @@ const createLiveLocationShare = async ({
   relation = null,
   durationMinutes = 120
 }) => {
-  const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000)
+  const safeDurationMinutes = Math.max(
+    MIN_SHARE_DURATION_MINUTES,
+    Math.min(MAX_SHARE_DURATION_MINUTES, Number(durationMinutes) || 120)
+  )
+  const expiresAt = new Date(Date.now() + safeDurationMinutes * 60 * 1000)
 
   return LiveLocationShare.create({
     owner: ownerId,
@@ -94,6 +101,13 @@ const getSharedLiveLocationPayload = async shareToken => {
 
     if (!ride) {
       throw new Error('Ride not found for shared location')
+    }
+    if (!ACTIVE_RIDE_STATUSES.has(ride.status)) {
+      await LiveLocationShare.updateOne(
+        { _id: share._id },
+        { $set: { isActive: false, expiresAt: new Date() } }
+      )
+      throw new Error('Ride is no longer active for shared live location')
     }
 
     payload = {

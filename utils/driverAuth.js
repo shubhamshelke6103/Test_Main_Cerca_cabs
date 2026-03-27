@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const Driver = require('../Models/Driver/driver.model');
+const LEGACY_JWT_SECRET =
+  "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%";
 
 const authenticateDriver = async (req, res, next) => {
   try {
@@ -9,7 +11,7 @@ const authenticateDriver = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || LEGACY_JWT_SECRET);
     const driver = await Driver.findById(decoded.id).select('_id isActive');
 
     if (!driver) {

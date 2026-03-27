@@ -12,6 +12,9 @@ const path = require('path');
 
 const PRIVACY_POLICY_VERSION = process.env.PRIVACY_POLICY_VERSION || '2026-03-23';
 const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL || '/privacy-policy';
+const JWT_SECRET =
+    process.env.JWT_SECRET ||
+    "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%";
 
 const parseBoolean = (value) => {
     if (typeof value === 'boolean') return value;
@@ -53,6 +56,36 @@ const getPrivacyPolicy = async (req, res) => {
         success: true,
         privacyPolicy: getPrivacyPolicyMetadata(),
     });
+};
+
+const acceptPrivacyPolicy = async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization || req.headers.Authorization || '';
+        if (!authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userId = decoded.id || decoded.userId;
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        const acceptance = buildPrivacyPolicyAcceptance(req.body);
+        if (acceptance.error) {
+            return res.status(400).json(acceptance.error);
+        }
+        Object.assign(user, acceptance);
+        await user.save();
+        return res.status(200).json({
+            success: true,
+            message: 'Privacy policy accepted successfully',
+            privacyPolicy: getPrivacyPolicyMetadata(),
+        });
+    } catch (error) {
+        logger.error('Error accepting privacy policy:', error);
+        return res.status(500).json({ message: 'Error accepting privacy policy', error: error.message });
+    }
 };
 
 /**
@@ -226,7 +259,7 @@ const validateToken = async (req, res) => {
         try {
             const decoded = jwt.verify(
                 token,
-                "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%"
+                JWT_SECRET
             );
             
             const userId = decoded.id || decoded.userId;
@@ -321,9 +354,21 @@ const loginUserByMobile = async (req, res) => {
             }
 
             // Generate a JWT token
+            if (!user.privacyPolicyAccepted) {
+                const acceptance = buildPrivacyPolicyAcceptance(req.body);
+                if (acceptance.error) {
+                    return res.status(428).json({
+                        ...acceptance.error,
+                        code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
+                    });
+                }
+                Object.assign(user, acceptance);
+                await user.save();
+            }
+
             const token = jwt.sign(
                 { id: user._id, phoneNumber: user.phoneNumber },
-                "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%", // Ensure you have a JWT_SECRET in your environment variables
+                JWT_SECRET,
                 { expiresIn: '7d' } // Token expiration time
             );
 
@@ -363,7 +408,7 @@ const loginUserByMobile = async (req, res) => {
                 // Generate JWT token for the newly created user
                 const token = jwt.sign(
                     { id: newUser._id, phoneNumber: newUser.phoneNumber },
-                    "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%",
+                    JWT_SECRET,
                     { expiresIn: '7d' }
                 );
 
@@ -455,6 +500,7 @@ const updateUserWallet = async (req, res) => {
 
 module.exports = {
   getPrivacyPolicy,
+  acceptPrivacyPolicy,
   getUserById,
   createUser,
   updateUser,

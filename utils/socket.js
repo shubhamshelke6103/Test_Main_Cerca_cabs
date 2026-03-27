@@ -55,6 +55,39 @@ const { notifyAdmins, notifyVendor } = require('./alerting.service')
 
 let io
 
+const maskName = value => {
+  if (!value) return null
+  const trimmed = String(value).trim()
+  if (trimmed.length <= 2) return `${trimmed[0] || ''}*`
+  return `${trimmed[0]}${'*'.repeat(Math.max(1, trimmed.length - 2))}${trimmed[trimmed.length - 1]}`
+}
+
+const maskPhone = value => {
+  if (!value) return null
+  const stringValue = String(value)
+  if (stringValue.length <= 4) return stringValue
+  return `${'*'.repeat(Math.max(0, stringValue.length - 4))}${stringValue.slice(-4)}`
+}
+
+const sanitizeSocketRatingPayload = rating => ({
+  _id: rating._id,
+  ride: rating.ride,
+  ratedByModel: rating.ratedByModel,
+  ratedToModel: rating.ratedToModel,
+  rating: rating.rating,
+  review: rating.review,
+  tags: rating.tags || [],
+  createdAt: rating.createdAt,
+  ratedBy: {
+    name: maskName(rating?.ratedBySnapshot?.name),
+    phone: maskPhone(rating?.ratedBySnapshot?.phone)
+  },
+  ratedTo: {
+    name: maskName(rating?.ratedToSnapshot?.name),
+    phone: maskPhone(rating?.ratedToSnapshot?.phone)
+  }
+})
+
 /**
  * Helper function to broadcast ride updates to shared ride rooms
  * @param {string} rideId - Ride ID
@@ -1997,6 +2030,26 @@ function initializeSocket (server) {
           return
         }
 
+        const isNotifiedDriver = (ride.notifiedDrivers || [])
+          .map(id => id.toString())
+          .includes(driverId.toString())
+        if (!isNotifiedDriver) {
+          logger.warn(
+            `rideRejected: Driver ${driverId} was not notified for ride ${rideId}, ignoring rejection`
+          )
+          return
+        }
+
+        const alreadyRejected = (ride.rejectedDrivers || [])
+          .map(id => id.toString())
+          .includes(driverId.toString())
+        if (alreadyRejected) {
+          logger.info(
+            `rideRejected: Driver ${driverId} already rejected ride ${rideId}, skipping duplicate`
+          )
+          return
+        }
+
         // Add driver to rejectedDrivers array (avoid duplicates)
         const updatedRide = await Ride.findByIdAndUpdate(
           rideId,
@@ -3146,7 +3199,8 @@ function initializeSocket (server) {
           `Rating submitted successfully - ratingId: ${rating._id}, value: ${rating.rating}`
         )
 
-        socket.emit('ratingSubmitted', { success: true, rating })
+        const safeRatingPayload = sanitizeSocketRatingPayload(rating)
+        socket.emit('ratingSubmitted', { success: true, rating: safeRatingPayload })
 
         // Notify the rated person
         const recipientSocketId =
@@ -3159,7 +3213,7 @@ function initializeSocket (server) {
               )?.socketId
 
         if (recipientSocketId) {
-          io.to(recipientSocketId).emit('ratingReceived', rating)
+          io.to(recipientSocketId).emit('ratingReceived', safeRatingPayload)
           logger.info(
             `Rating notification sent to ${data.ratedToModel}: ${data.ratedTo}`
           )

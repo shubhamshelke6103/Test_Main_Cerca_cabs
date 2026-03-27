@@ -149,6 +149,18 @@ const driverSchema = new mongoose.Schema({
         type: Date,
         default: null
       },
+      reverificationDueAt: {
+        type: Date,
+        default: null
+      },
+      alertSentBeforeReverificationAt: {
+        type: Date,
+        default: null
+      },
+      alertSentAfterReverificationAt: {
+        type: Date,
+        default: null
+      },
       notes: {
         type: String,
         trim: true,

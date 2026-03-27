@@ -5,6 +5,7 @@ const { createRateLimiter, createRedisStore } = require('./rateLimiter')
 
 // Create Redis store for shared ride rate limiter
 const sharedRideStore = createRedisStore('rl:sharedRide:', 60 * 1000) // 1 minute window
+const sharedLiveLocationStore = createRedisStore('rl:sharedLiveLocation:', 60 * 1000)
 
 // Rate limiter for public shared ride endpoint
 // 10 requests per minute per IP
@@ -27,6 +28,33 @@ const sharedRideRateLimiter = createRateLimiter(
   },
   sharedRideStore,
   'sharedRideRateLimiter'
+)
+
+// Rate limiter for public shared live-location endpoint
+// 20 requests per minute per IP
+const sharedLiveLocationRateLimiter = createRateLimiter(
+  {
+    windowMs: 60 * 1000,
+    max: 20,
+    message: 'Too many live location requests. Please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: req => req.ip,
+    handler: (req, res) => {
+      logger.warn(
+        `Rate limit exceeded for shared live location access from IP: ${req.ip}`
+      )
+      res.status(429).json({
+        success: false,
+        message: 'Too many live location requests. Please try again later.',
+        retryAfter: req.rateLimit?.resetTime
+          ? Math.ceil(req.rateLimit.resetTime / 1000)
+          : 60
+      })
+    }
+  },
+  sharedLiveLocationStore,
+  'sharedLiveLocationRateLimiter'
 )
 
 /**
@@ -148,6 +176,7 @@ function sanitizeRideData(ride) {
 module.exports = {
   validateShareTokenMiddleware,
   sanitizeRideData,
-  sharedRideRateLimiter
+  sharedRideRateLimiter,
+  sharedLiveLocationRateLimiter
 }
 
