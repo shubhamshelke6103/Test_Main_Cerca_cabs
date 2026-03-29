@@ -27,6 +27,7 @@ const {
     uploadPriorityDocument,
     getDriverOnlineHours,
     updateDriverComplianceDocuments,
+    resubmitDriverApproval,
     createDriverLocationShare,
     listDriverLocationShares,
     deleteDriverLocationShare,
@@ -124,6 +125,12 @@ router.patch('/:id/online-status', updateDriverOnlineStatus);
 router.post('/:id/logout', logoutDriver);
 router.get('/:id/online-hours', getDriverOnlineHours);
 router.put('/:id/compliance-documents', updateDriverComplianceDocuments);
+router.post(
+    '/:id/resubmit-approval',
+    authenticateDriver,
+    requireOwnDriver,
+    resubmitDriverApproval
+);
 router.post('/:id/live-location/share', authenticateDriver, requireOwnDriver, createDriverLocationShare);
 router.get('/:id/live-location/shares', authenticateDriver, requireOwnDriver, listDriverLocationShares);
 router.delete('/:id/live-location/share/:shareId', authenticateDriver, requireOwnDriver, deleteDriverLocationShare);

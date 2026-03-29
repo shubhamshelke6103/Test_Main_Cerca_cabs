@@ -28,6 +28,8 @@ const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPer
 const {
     buildInitialApprovalWorkflow,
     getDriverApprovalSummary,
+    setDriverPendingApproval,
+    DRIVER_APPROVAL_STATUS,
 } = require('../../utils/driverApproval.service.js');
 
 const buildDateRange = (period, startDate, endDate) => {
@@ -1358,6 +1360,57 @@ const updateDriverComplianceDocuments = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Driver resubmits after REJECTED — reset workflow to PENDING_VENDOR / PENDING_ADMIN
+ * @route   POST /drivers/:id/resubmit-approval (authenticated, own id only)
+ */
+const resubmitDriverApproval = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const summary = getDriverApprovalSummary(driver);
+        if (summary.status !== DRIVER_APPROVAL_STATUS.REJECTED) {
+            return res.status(400).json({
+                message: 'Resubmit is only available after your application was rejected',
+                approvalStatus: summary.status,
+            });
+        }
+
+        setDriverPendingApproval(driver);
+        await driver.save();
+
+        const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
+        const earningsResult = await AdminEarnings.aggregate([
+            { $match: { driverId: driver._id } },
+            { $group: { _id: null, totalEarnings: { $sum: '$driverEarning' } } },
+        ]);
+        const totalEarnings = earningsResult.length > 0 ? earningsResult[0].totalEarnings : 0;
+
+        const totalRides = await Ride.countDocuments({
+            driver: driver._id,
+            status: 'completed',
+        });
+
+        const driverObj = driver.toObject();
+        driverObj.totalEarnings = Math.round(totalEarnings * 100) / 100;
+        driverObj.completedRidesCount = totalRides;
+        delete driverObj.password;
+        driverObj.rejectionReason = driver.rejectionReason ?? null;
+        driverObj.vehicleStatus =
+            driver.pendingVehicleInfo?.approvalStatus ||
+            (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED');
+        Object.assign(driverObj, serializeDriverApprovalState(driver));
+
+        res.status(200).json(driverObj);
+    } catch (error) {
+        logger.error('Error resubmitting driver approval:', error);
+        res.status(500).json({ message: 'Error resubmitting for approval', error: error.message });
+    }
+};
+
 const createDriverLocationShare = async (req, res) => {
     try {
         const driver = await Driver.findById(req.params.id).select('name vendorId');
@@ -1506,6 +1559,7 @@ module.exports = {
     getDriverDocuments,
     getDriverOnlineHours,
     updateDriverComplianceDocuments,
+    resubmitDriverApproval,
     createDriverLocationShare,
     listDriverLocationShares,
     deleteDriverLocationShare,
