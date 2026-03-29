@@ -474,6 +474,26 @@ Do not send it as raw JSON.
 3. Approve with `PATCH /vendor/drivers/:driverId/vehicle/approve`
 4. Reject with `PATCH /vendor/drivers/:driverId/vehicle/reject`
 
+## Driver list filters (admin and vendor)
+
+List endpoints include `vehicleStatus` on each driver. For **paginated** filtering, use query parameters.
+
+### Admin: `GET /admin/drivers`
+
+Optional query:
+
+- `vehiclePending=true` — drivers with vehicle submission **under approval** routed to **admin** (`pendingVehicleInfo.approvalStatus=UNDER_APPROVAL` and `approvalRoutedTo=ADMIN`).
+- `vehicleStatus` — one of `UNDER_APPROVAL`, `REJECTED`, `APPROVED`, `NOT_ADDED`. For `UNDER_APPROVAL` and `REJECTED`, results are limited to submissions routed to **admin** (standalone-driver queue).
+
+`vehiclePending=true` is equivalent to `vehicleStatus=UNDER_APPROVAL` for the admin queue.
+
+### Vendor: `GET /vendor/drivers/:vendorId`
+
+Optional query:
+
+- `vehiclePending=true` — drivers under vendor vehicle approval (`UNDER_APPROVAL` and `approvalRoutedTo=VENDOR`).
+- `vehicleStatus` — same values as above; for `UNDER_APPROVAL` and `REJECTED`, results are limited to **vendor**-routed submissions.
+
 ## Quick Test Checklist
 
 - Submit vehicle for standalone driver with all 4 docs

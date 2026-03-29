@@ -20,12 +20,11 @@ const {
     DEFAULT_CORRIDOR_RADIUS_METERS,
     buildGoToRouteSnapshot,
     deactivateGoToState,
-    markGoToRouteStale,
     normalizeGeoPoint,
     normalizeLocationCoordinates,
     sanitizeGoToResponse,
-    shouldRefreshGoToRoute,
 } = require('../../utils/goToRoute.service.js');
+const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPersistence.js');
 const {
     buildInitialApprovalWorkflow,
     getDriverApprovalSummary,
@@ -683,48 +682,40 @@ const updateDriverLocation = async (req, res) => {
             return res.status(400).json({ message: 'Invalid coordinates. Must be an array of [longitude, latitude].' });
         }
 
-        const driver = await getDriverOr404(req.params.id, res);
-        if (!driver) return;
+        const longitude = parseFloat(coordinates[0]);
+        const latitude = parseFloat(coordinates[1]);
 
-        driver.location.coordinates = coordinates;
-
-        let goToRefreshed = false;
-        if (
-            driver.goTo?.isEnabled &&
-            driver.goTo?.homeLocation?.coordinates &&
-            shouldRefreshGoToRoute(driver.goTo, { coordinates })
-        ) {
-            try {
-                driver.goTo = await buildGoToRouteSnapshot({
-                    origin: { coordinates },
-                    destination: driver.goTo.homeLocation,
-                    homeAddress: driver.goTo.homeAddress,
-                    corridorRadiusMeters:
-                        driver.goTo.corridorRadiusMeters ||
-                        DEFAULT_CORRIDOR_RADIUS_METERS,
-                    activatedAt: driver.goTo.activatedAt || new Date(),
-                });
-                goToRefreshed = true;
-            } catch (routeError) {
-                driver.goTo = markGoToRouteStale(
-                    driver.goTo?.toObject?.() || driver.goTo || {},
-                    'ROUTE_REFRESH_FAILED'
-                );
-                logger.warn(
-                    `GO TO route refresh failed for driver ${driver._id}: ${routeError.message}`
-                );
-            }
+        if (Number.isNaN(longitude) || Number.isNaN(latitude)) {
+            return res.status(400).json({ message: 'Invalid coordinates. Longitude and latitude must be numbers.' });
         }
 
-        await driver.save();
+        if (
+            longitude < -180 ||
+            longitude > 180 ||
+            latitude < -90 ||
+            latitude > 90
+        ) {
+            return res.status(400).json({
+                message: 'Coordinates out of range. Longitude: -180 to 180, Latitude: -90 to 90',
+            });
+        }
+
+        const { driver, goToRouteRefreshed } = await persistDriverLocationWithGoTo(
+            req.params.id,
+            longitude,
+            latitude
+        );
 
         res.status(200).json({
             message: 'Driver location updated successfully',
             location: driver.location,
             goTo: sanitizeGoToResponse(driver.goTo),
-            goToRouteRefreshed: goToRefreshed,
+            goToRouteRefreshed,
         });
     } catch (error) {
+        if (error.message === 'Driver not found') {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
         logger.error('Error updating driver location:', error);
         res.status(500).json({ message: 'Error updating driver location', error });
     }

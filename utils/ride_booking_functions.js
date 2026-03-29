@@ -10,6 +10,7 @@ const {
   stopDriverOnlineSession
 } = require('./driverSession.service')
 const { isGoToRideEligible } = require('./goToRoute.service')
+const { persistDriverLocationWithGoTo } = require('./driverLocationPersistence')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
@@ -263,28 +264,18 @@ const updateDriverLocation = async (driverId, location) => {
       )
     }
 
-    // Log location update for debugging
     logger.info(
       `📍 Updating driver location - driverId: ${driverId}, coordinates: [${longitude}, ${latitude}]`
     )
 
-    const driver = await Driver.findByIdAndUpdate(
+    const { driver, goToRouteRefreshed } = await persistDriverLocationWithGoTo(
       driverId,
-      {
-        location: {
-          type: 'Point',
-          coordinates: [longitude, latitude]
-        }
-      },
-      { new: true }
+      longitude,
+      latitude
     )
 
-    if (!driver) {
-      throw new Error('Driver not found')
-    }
-
     logger.info(
-      `✅ Driver location updated successfully - driverId: ${driverId}, saved location: [${driver.location.coordinates[0]}, ${driver.location.coordinates[1]}]`
+      `✅ Driver location updated successfully - driverId: ${driverId}, saved location: [${driver.location.coordinates[0]}, ${driver.location.coordinates[1]}], goToRouteRefreshed: ${goToRouteRefreshed}`
     )
 
     return driver

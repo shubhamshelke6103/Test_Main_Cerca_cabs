@@ -200,9 +200,62 @@ exports.updateVendorProfile = async (req, res) => {
 // =============================
 // 4. Get All Drivers of Vendor
 // =============================
+const VENDOR_VEHICLE_STATUS_VALUES = ['UNDER_APPROVAL', 'REJECTED', 'APPROVED', 'NOT_ADDED']
+
+const parseBooleanQuery = (value) => {
+  if (value === undefined) return undefined
+  if (value === 'true' || value === true) return true
+  if (value === 'false' || value === false) return false
+  return undefined
+}
+
+const buildVendorDriverQuery = (vendorId, { vehiclePending, vehicleStatus }) => {
+  const query = { vendorId }
+  const pendingFlag = vehiclePending === true
+  const status = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : ''
+
+  if (pendingFlag || status === 'UNDER_APPROVAL') {
+    query['pendingVehicleInfo.approvalStatus'] = 'UNDER_APPROVAL'
+    query['pendingVehicleInfo.approvalRoutedTo'] = 'VENDOR'
+    return query
+  }
+  if (status === 'REJECTED') {
+    query['pendingVehicleInfo.approvalStatus'] = 'REJECTED'
+    query['pendingVehicleInfo.approvalRoutedTo'] = 'VENDOR'
+    return query
+  }
+  if (status === 'APPROVED') {
+    query.vehicleInfo = { $exists: true, $ne: null }
+    return query
+  }
+  if (status === 'NOT_ADDED') {
+    query.$and = [
+      { $or: [{ vehicleInfo: null }, { vehicleInfo: { $exists: false } }] },
+      {
+        $or: [
+          { pendingVehicleInfo: null },
+          { pendingVehicleInfo: { $exists: false } },
+        ],
+      },
+    ]
+  }
+  return query
+}
+
 exports.getVendorDrivers = async (req, res) => {
   try {
-    const drivers = await Driver.find({ vendorId: req.params.id })
+    const { vehiclePending, vehicleStatus } = req.query
+    const vs = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : ''
+    const vehiclePendingTrue = parseBooleanQuery(vehiclePending) === true
+    let mongoQuery = { vendorId: req.params.id }
+    if (vehiclePendingTrue || (vs && VENDOR_VEHICLE_STATUS_VALUES.includes(vs))) {
+      mongoQuery = buildVendorDriverQuery(req.params.id, {
+        vehiclePending: vehiclePendingTrue,
+        vehicleStatus: vs,
+      })
+    }
+
+    const drivers = await Driver.find(mongoQuery)
 
     res.json({
       total: drivers.length,

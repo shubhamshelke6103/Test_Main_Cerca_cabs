@@ -87,12 +87,37 @@ router.get('/:id/rides', getAllRidesOfDriver);
 // Route to get upcoming scheduled bookings for a driver
 router.get('/:id/upcoming-bookings', getUpcomingBookings);
 
-// Route to update a driver's location
-router.patch('/:id/location', updateDriverLocation);
-router.put('/:id/go-to/home', upsertDriverGoToHome);
-router.get('/:id/go-to', getDriverGoToStatus);
-router.post('/:id/go-to/activate', activateDriverGoTo);
-router.post('/:id/go-to/deactivate', deactivateDriverGoTo);
+// Route to update a driver's location (authenticated driver only)
+router.patch(
+    '/:id/location',
+    authenticateDriver,
+    requireOwnDriver,
+    updateDriverLocation
+);
+router.put(
+    '/:id/go-to/home',
+    authenticateDriver,
+    requireOwnDriver,
+    upsertDriverGoToHome
+);
+router.get(
+    '/:id/go-to',
+    authenticateDriver,
+    requireOwnDriver,
+    getDriverGoToStatus
+);
+router.post(
+    '/:id/go-to/activate',
+    authenticateDriver,
+    requireOwnDriver,
+    activateDriverGoTo
+);
+router.post(
+    '/:id/go-to/deactivate',
+    authenticateDriver,
+    requireOwnDriver,
+    deactivateDriverGoTo
+);
 
 // Route to update driver online/offline status
 router.patch('/:id/online-status', updateDriverOnlineStatus);

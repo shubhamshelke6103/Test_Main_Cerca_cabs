@@ -33,9 +33,57 @@ const serializeDriverForResponse = (driver) => ({
   approvalWorkflow: getDriverApprovalSummary(driver),
 });
 
+const VEHICLE_STATUS_VALUES = ['UNDER_APPROVAL', 'REJECTED', 'APPROVED', 'NOT_ADDED'];
+
+const applyAdminVehicleListFilter = (query, { vehiclePending, vehicleStatus }) => {
+  const pendingFlag = vehiclePending === true;
+  const status = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : '';
+
+  if (pendingFlag || status === 'UNDER_APPROVAL') {
+    query['pendingVehicleInfo.approvalStatus'] = 'UNDER_APPROVAL';
+    query['pendingVehicleInfo.approvalRoutedTo'] = 'ADMIN';
+    return;
+  }
+
+  if (status === 'REJECTED') {
+    query['pendingVehicleInfo.approvalStatus'] = 'REJECTED';
+    query['pendingVehicleInfo.approvalRoutedTo'] = 'ADMIN';
+    return;
+  }
+
+  if (status === 'APPROVED') {
+    query.vehicleInfo = { $exists: true, $ne: null };
+    return;
+  }
+
+  if (status === 'NOT_ADDED') {
+    query.$and = query.$and || [];
+    query.$and.push({
+      $or: [{ vehicleInfo: null }, { vehicleInfo: { $exists: false } }],
+    });
+    query.$and.push({
+      $or: [
+        { pendingVehicleInfo: null },
+        { pendingVehicleInfo: { $exists: false } },
+      ],
+    });
+  }
+};
+
 const listDrivers = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, isActive, isVerified, isOnline, includeVendor, priorityPending } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      search,
+      isActive,
+      isVerified,
+      isOnline,
+      includeVendor,
+      priorityPending,
+      vehiclePending,
+      vehicleStatus,
+    } = req.query;
     const query = {};
     // by default hide drivers that belong to a vendor (only show standalone drivers)
     if (!parseBoolean(includeVendor)) {
@@ -50,6 +98,12 @@ const listDrivers = async (req, res) => {
 
     const onlineValue = parseBoolean(isOnline);
     if (onlineValue !== undefined) query.isOnline = onlineValue;
+
+    const vs = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : '';
+    const vehiclePendingTrue = parseBoolean(vehiclePending) === true;
+    if (vehiclePendingTrue || (vs && VEHICLE_STATUS_VALUES.includes(vs))) {
+      applyAdminVehicleListFilter(query, { vehiclePending: vehiclePendingTrue, vehicleStatus: vs });
+    }
 
     if (parseBoolean(priorityPending)) {
       query.priorityDocument = { $exists: true, $ne: null, $ne: '' };
