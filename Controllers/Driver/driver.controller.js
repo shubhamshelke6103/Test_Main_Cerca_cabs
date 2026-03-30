@@ -16,6 +16,7 @@ const {
     getDriverOnlineHoursSummary,
 } = require('../../utils/driverSession.service.js');
 const { syncComplianceStatuses } = require('../../utils/compliance.service.js');
+const { deleteDriverDocuments } = require('../../utils/driverDocument.service.js');
 const {
     DEFAULT_CORRIDOR_RADIUS_METERS,
     buildGoToRouteSnapshot,
@@ -262,7 +263,16 @@ const addDriverDocuments = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        driver.documents.push(...documentPaths);
+        const approvalSummary = getDriverApprovalSummary(driver);
+        const shouldReplaceExistingDocuments = approvalSummary.status === DRIVER_APPROVAL_STATUS.REJECTED;
+
+        if (shouldReplaceExistingDocuments) {
+            deleteDriverDocuments(driver.documents || []);
+            driver.documents = documentPaths;
+        } else {
+            driver.documents.push(...documentPaths);
+        }
+
         driver.rejectionReason = null;
         await driver.save();
 
@@ -444,13 +454,7 @@ const updateDriverDocuments = async (req, res) => {
         }
 
         // Delete previous files
-        const fs = require('fs');
-        driver.documents.forEach((filePath) => {
-            const fullPath = filePath.replace(`${req.protocol}://${req.get('host')}/`, '');
-            if (fs.existsSync(fullPath)) {
-                fs.unlinkSync(fullPath);
-            }
-        });
+        deleteDriverDocuments(driver.documents || []);
 
         // Generate complete URLs for the new documents
         const documentPaths = req.files.map((file) => {
@@ -460,6 +464,7 @@ const updateDriverDocuments = async (req, res) => {
 
         // Update the driver's documents array
         driver.documents = documentPaths;
+        driver.rejectionReason = null;
         await driver.save();
 
         logger.info(`Driver documents updated successfully: ${driver.email}`);

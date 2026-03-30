@@ -6,7 +6,13 @@
   "scripts": {
     "start": "nodemon index.js",
     "start:4000": "cross-env PORT=4000 nodemon index.js",
-    "start:4001": "cross-env PORT=4001 nodemon index.js"
+    "start:4001": "cross-env PORT=4001 nodemon index.js",
+    "perf:smoke:health": "k6 run tests/perf/smoke/basic-health.js",
+    "perf:smoke:public": "k6 run tests/perf/smoke/public-settings.js",
+    "perf:load:vendor": "k6 run tests/perf/load/vendor-earnings-report.js",
+    "perf:load:driver-hotspot": "k6 run tests/perf/load/driver-hotspot-snapshot.js",
+    "perf:load:admin-dashboard": "k6 run tests/perf/load/admin-dashboard.js",
+    "perf:soak:vendor": "k6 run tests/perf/soak/vendor-earnings-report-soak.js"
   },
   "author": "",
   "license": "ISC",

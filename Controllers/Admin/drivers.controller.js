@@ -4,6 +4,7 @@ const Ride = require('../../Models/Driver/ride.model');
 const Payout = require('../../Models/Driver/payout.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const logger = require('../../utils/logger');
+const { deleteDriverDocuments } = require('../../utils/driverDocument.service');
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service');
 const {
   REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
@@ -226,6 +227,8 @@ const rejectDriver = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
+    deleteDriverDocuments(driver.documents || []);
+    driver.documents = [];
     rejectDriverApproval(driver, DRIVER_APPROVAL_ACTOR.ADMIN, reason.trim());
     await driver.save();
 
