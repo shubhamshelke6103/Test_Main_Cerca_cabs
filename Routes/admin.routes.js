@@ -1,10 +1,12 @@
 const express =  require('express');
+const { authLimiter } = require('../middleware/rateLimiter');
 const {
     createAdmin,
     createSubAdmin,
     getAllSubAdmins,
     deleteSubAdmin,
     adminLogin,
+    changeAdminPassword,
     getAdminEarnings,
 } = require('../Controllers/admin.controller.js');
 const {
@@ -57,6 +59,7 @@ router.use(authenticateAdmin);
 router.post('/', requireRole(['ADMIN']), createSubAdmin);
 router.get('/', requireRole(['ADMIN']), getAllSubAdmins);
 router.delete('/:id', requireRole(['ADMIN']), deleteSubAdmin);
+router.post('/change-password', authLimiter, changeAdminPassword);
 
 // Routes for settings
 router.post('/settings', addSettings);

@@ -203,6 +203,62 @@ const adminLogin = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Change password for authenticated admin
+ * @route   POST /admin/change-password
+ * @access  Private (Admin)
+ */
+const changeAdminPassword = async (req, res) => {
+    const { newPassword, confirmNewPassword } = req.body;
+
+    try {
+        if (!newPassword || !confirmNewPassword) {
+            return res.status(400).json({
+                message: 'newPassword and confirmNewPassword are required'
+            });
+        }
+
+        if (newPassword !== confirmNewPassword) {
+            return res.status(400).json({
+                message: 'New password and confirm new password do not match'
+            });
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                message: 'New password must be at least 8 characters long'
+            });
+        }
+
+        const admin = await Admin.findById(req.adminId).select('+password');
+
+        if (!admin) {
+            return res.status(404).json({ message: 'Admin not found' });
+        }
+
+        const isSamePassword = await bcrypt.compare(newPassword, admin.password);
+        if (isSamePassword) {
+            return res.status(400).json({
+                message: 'New password must be different from current password'
+            });
+        }
+
+        admin.password = await bcrypt.hash(newPassword, 10);
+        await admin.save();
+
+        logger.info(`Admin changed password successfully: ${admin.email}`);
+        return res.status(200).json({
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        logger.error('Error changing admin password:', error);
+        return res.status(500).json({
+            message: 'An error occurred while changing password',
+            error: error.message
+        });
+    }
+};
+
 
 /**
  * @desc    Get admin earnings analytics
@@ -328,5 +384,6 @@ module.exports = {
     getAllSubAdmins,
     deleteSubAdmin,
     adminLogin,
+    changeAdminPassword,
     getAdminEarnings,
 };
