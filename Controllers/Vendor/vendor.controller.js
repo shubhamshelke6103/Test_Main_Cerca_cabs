@@ -3,7 +3,9 @@ const Driver = require('../../Models/Driver/driver.model')
 const Ride = require('../../Models/Driver/ride.model')
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model')
 const bcrypt = require('bcryptjs')
+const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
+const { dispatchExternalAlert } = require('../../utils/alerting.service')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
 const {
@@ -59,6 +61,14 @@ const buildDateRange = (period, startDate, endDate) => {
     groupBy: 'daily'
   }
 }
+
+const VENDOR_RESET_OTP_EXPIRY_MINUTES = 10
+
+const generateVendorResetOtp = () =>
+  crypto.randomInt(100000, 1000000).toString()
+
+const hashResetOtp = otp =>
+  crypto.createHash('sha256').update(String(otp)).digest('hex')
 
 // =============================
 // 1. Register Vendor
@@ -158,6 +168,133 @@ exports.loginVendor = async (req, res) => {
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
+  }
+}
+
+// =============================
+// Vendor Forgot Password
+// =============================
+exports.forgotVendorPassword = async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase()
+
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' })
+    }
+
+    const vendor = await Vendor.findOne({ email })
+
+    if (!vendor || !vendor.isActive) {
+      return res.status(200).json({
+        message:
+          'If a vendor account exists with this email, an OTP has been sent.'
+      })
+    }
+
+    const otp = generateVendorResetOtp()
+    vendor.passwordResetOtpHash = hashResetOtp(otp)
+    vendor.passwordResetExpiresAt = new Date(
+      Date.now() + VENDOR_RESET_OTP_EXPIRY_MINUTES * 60 * 1000
+    )
+    vendor.passwordResetRequestedAt = new Date()
+    vendor.passwordResetAttempts = 0
+    await vendor.save()
+
+    await dispatchExternalAlert({
+      channel: 'email',
+      to: vendor.email,
+      subject: 'Vendor password reset OTP',
+      message: `Your vendor password reset OTP is ${otp}. It expires in ${VENDOR_RESET_OTP_EXPIRY_MINUTES} minutes.`,
+      metadata: {
+        vendorId: vendor._id.toString(),
+        purpose: 'vendor_password_reset'
+      }
+    })
+
+    return res.status(200).json({
+      message:
+        'If a vendor account exists with this email, an OTP has been sent.'
+    })
+  } catch (error) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
+// =============================
+// Vendor Reset Password
+// =============================
+exports.resetVendorPassword = async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase()
+    const otp = String(req.body.otp || '').trim()
+    const newPassword = String(req.body.newPassword || '')
+    const confirmNewPassword = String(req.body.confirmNewPassword || '')
+
+    if (!email || !otp || !newPassword || !confirmNewPassword) {
+      return res.status(400).json({
+        message:
+          'email, otp, newPassword and confirmNewPassword are required'
+      })
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      return res.status(400).json({
+        message: 'New password and confirm new password do not match'
+      })
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: 'New password must be at least 8 characters long'
+      })
+    }
+
+    const vendor = await Vendor.findOne({ email })
+
+    if (!vendor) {
+      return res.status(404).json({ message: 'Vendor not found' })
+    }
+
+    if (
+      !vendor.passwordResetOtpHash ||
+      !vendor.passwordResetExpiresAt ||
+      vendor.passwordResetExpiresAt < new Date()
+    ) {
+      return res.status(400).json({
+        message: 'OTP is invalid or expired'
+      })
+    }
+
+    const isOtpValid =
+      vendor.passwordResetOtpHash === hashResetOtp(otp)
+
+    if (!isOtpValid) {
+      vendor.passwordResetAttempts = (vendor.passwordResetAttempts || 0) + 1
+      await vendor.save()
+      return res.status(400).json({
+        message: 'OTP is invalid or expired'
+      })
+    }
+
+    const isSamePassword = await bcrypt.compare(newPassword, vendor.password)
+    if (isSamePassword) {
+      return res.status(400).json({
+        message: 'New password must be different from current password'
+      })
+    }
+
+    vendor.password = await bcrypt.hash(newPassword, 10)
+    vendor.passwordResetOtpHash = null
+    vendor.passwordResetExpiresAt = null
+    vendor.passwordResetRequestedAt = null
+    vendor.passwordResetAttempts = 0
+    await vendor.save()
+
+    return res.status(200).json({
+      message: 'Password reset successful'
+    })
+  } catch (error) {
+    return res.status(500).json({ message: error.message })
   }
 }
 

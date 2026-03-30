@@ -245,6 +245,7 @@ const notifyVendor = async (vendorId, { title, message, type, data }) => {
 }
 
 module.exports = {
+  dispatchExternalAlert,
   notifyAdmins,
   notifyVendor
 }

@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const vendorController = require("../../Controllers/Vendor/vendor.controller");
 const { authenticateVendor } = require("../../utils/vendorAuth");
+const { authLimiter } = require("../../middleware/rateLimiter");
 
 const vendorDocsDir = path.join(__dirname, "../../uploads/vendorDocuments");
 if (!fs.existsSync(vendorDocsDir)) {
@@ -20,6 +21,8 @@ const vendorUpload = multer({
 // Public routes
 router.post("/register", vendorController.registerVendor);
 router.post("/login", vendorController.loginVendor);
+router.post("/forgot-password", authLimiter, vendorController.forgotVendorPassword);
+router.post("/reset-password", authLimiter, vendorController.resetVendorPassword);
 // Post-registration Aadhaar upload (no login yet); body must include vendorId
 router.post("/register/upload-document", vendorUpload.single("document"), vendorController.uploadVendorDocumentPostRegister);
 

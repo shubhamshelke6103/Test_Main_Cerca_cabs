@@ -30,6 +30,22 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  passwordResetOtpHash: {
+    type: String,
+    default: null
+  },
+  passwordResetExpiresAt: {
+    type: Date,
+    default: null
+  },
+  passwordResetRequestedAt: {
+    type: Date,
+    default: null
+  },
+  passwordResetAttempts: {
+    type: Number,
+    default: 0
+  },
 
   address: {
     type: String,
