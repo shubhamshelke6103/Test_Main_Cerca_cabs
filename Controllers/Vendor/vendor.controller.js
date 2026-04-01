@@ -1318,6 +1318,45 @@ exports.getVendorEarningsReport = async (req, res) => {
   }
 }
 
+exports.getVendorDriverWiseEarnings = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { startDate, endDate } = req.query
+
+    const report = await getVendorEarningsReportData({
+      vendorId,
+      startDate,
+      endDate
+    })
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        vendor: {
+          id: report.vendor?._id || null,
+          businessName: report.vendor?.businessName || null
+        },
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+          paymentStatus: 'completed'
+        },
+        summary: {
+          totalDriverEarnings: report.summary.totalDriverEarnings,
+          totalVendorCommission: report.summary.totalVendorCommission,
+          rideCount: report.summary.rideCount
+        },
+        driverWiseEarnings: report.driverWiseEarnings
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
 exports.getVendorAvailableBalance = async (req, res) => {
   try {
     const vendorId = req.user.id
