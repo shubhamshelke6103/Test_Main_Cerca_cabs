@@ -63,6 +63,14 @@ const pendingVehicleSchema = new mongoose.Schema(
     rejectionReason: {
       type: String,
       default: null
+    },
+    allowDocumentResubmit: {
+      type: Boolean,
+      default: false
+    },
+    vendorPreApprovedAt: {
+      type: Date,
+      default: null
     }
   },
   { _id: false }
@@ -420,6 +428,12 @@ const driverSchema = new mongoose.Schema({
   ref: "Vendor",
   default: null
 },
+
+  assignedFleetVehicleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FleetVehicle',
+    default: null
+  },
 
   rides: [
     {

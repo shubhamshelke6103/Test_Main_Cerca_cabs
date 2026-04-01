@@ -117,6 +117,17 @@ const vendorSchema = new mongoose.Schema({
     default: null
   },
 
+  allowDocumentResubmit: {
+    type: Boolean,
+    default: false
+  },
+
+  vendorReviewStatus: {
+    type: String,
+    enum: ["PENDING", "REJECTED"],
+    default: "PENDING"
+  },
+
   documents: {
     type: [String], // GST, business license, etc
     default: []

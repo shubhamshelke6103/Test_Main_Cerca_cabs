@@ -145,7 +145,7 @@ const createRide = async (req, res) => {
 
     if (!service) {
       return res.status(400).json({ message: 'Invalid service selected' })
-    }
+    }1
 
 
     // ============================

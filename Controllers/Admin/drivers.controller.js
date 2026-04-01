@@ -32,6 +32,7 @@ const serializeDriverForResponse = (driver) => ({
   vehicleStatus: resolveVehicleStatus(driver),
   approvalStatus: getDriverApprovalSummary(driver).status,
   approvalWorkflow: getDriverApprovalSummary(driver),
+  missingDocuments: getMissingDriverApprovalDocuments(driver),
 });
 
 const VEHICLE_STATUS_VALUES = ['UNDER_APPROVAL', 'REJECTED', 'APPROVED', 'NOT_ADDED'];

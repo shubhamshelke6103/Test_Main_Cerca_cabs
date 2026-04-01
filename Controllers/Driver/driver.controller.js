@@ -29,6 +29,7 @@ const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPer
 const {
     buildInitialApprovalWorkflow,
     getDriverApprovalSummary,
+    getMissingDriverApprovalDocuments,
     setDriverPendingApproval,
     DRIVER_APPROVAL_STATUS,
 } = require('../../utils/driverApproval.service.js');
@@ -147,6 +148,7 @@ const serializeVehicleState = (driver) => ({
 const serializeDriverApprovalState = (driver) => ({
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
+    missingDocuments: getMissingDriverApprovalDocuments(driver),
 });
 
 const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
@@ -181,7 +183,7 @@ const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
     return driver;
 };
 
-const rejectPendingVehicleForDriver = async (driver, reason) => {
+const rejectPendingVehicleForDriver = async (driver, reason, allowDocumentResubmit = false) => {
     if (!driver.pendingVehicleInfo) {
         throw new Error('No pending vehicle found');
     }
@@ -192,6 +194,7 @@ const rejectPendingVehicleForDriver = async (driver, reason) => {
         rejectedAt: new Date(),
         approvedAt: null,
         rejectionReason: reason,
+        allowDocumentResubmit: Boolean(allowDocumentResubmit),
     };
 
     await driver.save();
@@ -926,6 +929,23 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
+        const existingPending = driver.pendingVehicleInfo;
+        if (existingPending) {
+            if (existingPending.approvalStatus === 'UNDER_APPROVAL') {
+                return res.status(400).json({
+                    message: 'A vehicle submission is already pending approval',
+                });
+            }
+            if (
+                existingPending.approvalStatus === 'REJECTED' &&
+                !existingPending.allowDocumentResubmit
+            ) {
+                return res.status(400).json({
+                    message: 'Vehicle was rejected. Contact your vendor or support if you need to resubmit.',
+                });
+            }
+        }
+
         driver.pendingVehicleInfo = {
             make,
             model,
@@ -940,6 +960,8 @@ const updateDriverVehicle = async (req, res) => {
             approvedAt: null,
             rejectedAt: null,
             rejectionReason: null,
+            allowDocumentResubmit: false,
+            vendorPreApprovedAt: null,
         };
 
         await driver.save();
@@ -1005,7 +1027,8 @@ const rejectDriverVehicle = async (req, res) => {
             return res.status(400).json({ message: 'Rejection reason is required' });
         }
 
-        await rejectPendingVehicleForDriver(driver, reason.trim());
+        const allowDocumentResubmit = Boolean(req.body?.allowDocumentResubmit);
+        await rejectPendingVehicleForDriver(driver, reason.trim(), allowDocumentResubmit);
 
         return res.status(200).json({
             message: 'Driver vehicle rejected successfully',

@@ -82,6 +82,8 @@ exports.verifyVendor = async (req, res) => {
 
     vendor.isVerified = true;
     vendor.rejectionReason = null;
+    vendor.allowDocumentResubmit = false;
+    vendor.vendorReviewStatus = "PENDING";
 
     await vendor.save();
 
@@ -104,7 +106,7 @@ exports.verifyVendor = async (req, res) => {
 // ======================================
 exports.rejectVendor = async (req, res) => {
   try {
-    const { vendorId, reason } = req.body;
+    const { vendorId, reason: rawReason, allowDocumentResubmit } = req.body;
 
     if (!vendorId) {
       return res.status(400).json({
@@ -112,6 +114,7 @@ exports.rejectVendor = async (req, res) => {
       });
     }
 
+    const reason = String(rawReason || "").trim();
     if (!reason) {
       return res.status(400).json({
         message: "Rejection reason is required"
@@ -128,6 +131,8 @@ exports.rejectVendor = async (req, res) => {
 
     vendor.isVerified = false;
     vendor.rejectionReason = reason;
+    vendor.allowDocumentResubmit = Boolean(allowDocumentResubmit);
+    vendor.vendorReviewStatus = "REJECTED";
 
     await vendor.save();
 

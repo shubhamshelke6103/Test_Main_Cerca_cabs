@@ -4,6 +4,7 @@
   "description": "A Taxi Booking App Backend",
   "main": "index.js",
   "scripts": {
+    "test": "node --test tests/**/*.test.js",
     "start": "nodemon index.js",
     "start:4000": "cross-env PORT=4000 nodemon index.js",
     "start:4001": "cross-env PORT=4001 nodemon index.js",

@@ -1,5 +1,6 @@
 const Driver = require('../Models/Driver/driver.model')
 const DriverOnlineSession = require('../Models/Driver/driverOnlineSession.model')
+const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
 
 const roundMinutes = milliseconds =>
   Math.max(0, Math.round(milliseconds / (60 * 1000)))
@@ -31,6 +32,29 @@ const startDriverOnlineSession = async (driverId, source = 'manual_toggle') => {
   const driver = await Driver.findById(driverId)
   if (!driver) {
     throw new Error('Driver not found')
+  }
+
+  if (driver.vendorId) {
+    if (!driver.isVerified) {
+      throw new Error('Driver account is not approved yet')
+    }
+    const hasLegacyVehicle =
+      driver.vehicleInfo &&
+      (driver.vehicleInfo.licensePlate || driver.vehicleInfo.make)
+    if (driver.assignedFleetVehicleId) {
+      const fv = await FleetVehicle.findById(driver.assignedFleetVehicleId).lean()
+      if (
+        !fv ||
+        fv.approvalStatus !== 'APPROVED' ||
+        String(fv.vendorId) !== String(driver.vendorId)
+      ) {
+        throw new Error('Assigned fleet vehicle is missing or not approved for your vendor')
+      }
+    } else if (!hasLegacyVehicle) {
+      throw new Error(
+        'Assign an approved fleet vehicle from your vendor (or complete vehicle onboarding) before going online'
+      )
+    }
   }
 
   if (driver.currentOnlineSessionStartedAt) {

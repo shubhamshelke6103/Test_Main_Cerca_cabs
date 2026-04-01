@@ -4,6 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const vendorController = require("../../Controllers/Vendor/vendor.controller");
+const fleetVehicleController = require("../../Controllers/Vendor/fleetVehicle.controller");
 const { authenticateVendor } = require("../../utils/vendorAuth");
 const { authLimiter } = require("../../middleware/rateLimiter");
 
@@ -18,6 +19,23 @@ const vendorUpload = multer({
   }),
 });
 
+const fleetVehicleDocsDir = path.join(__dirname, "../../uploads/fleetVehicleDocuments");
+if (!fs.existsSync(fleetVehicleDocsDir)) {
+  fs.mkdirSync(fleetVehicleDocsDir, { recursive: true });
+}
+const fleetVehicleUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, fleetVehicleDocsDir),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  }),
+});
+const fleetVehicleFileFields = fleetVehicleUpload.fields([
+  { name: "vehicleRc", maxCount: 1 },
+  { name: "vehicleInsurance", maxCount: 1 },
+  { name: "vehiclePermit", maxCount: 1 },
+  { name: "vehiclePuc", maxCount: 1 },
+]);
+
 // Public routes
 router.post("/register", vendorController.registerVendor);
 router.post("/login", vendorController.loginVendor);
@@ -25,6 +43,7 @@ router.post("/forgot-password", authLimiter, vendorController.forgotVendorPasswo
 router.post("/reset-password", authLimiter, vendorController.resetVendorPassword);
 // Post-registration Aadhaar upload (no login yet); body must include vendorId
 router.post("/register/upload-document", vendorUpload.single("document"), vendorController.uploadVendorDocumentPostRegister);
+router.post("/register/reupload-document", vendorUpload.single("document"), vendorController.uploadVendorDocumentPostRegister);
 
 // All routes below require vendor JWT
 router.use(authenticateVendor);
@@ -57,6 +76,20 @@ router.patch("/verify-driver", vendorController.verifyDriver);
 router.patch("/reject-driver", vendorController.rejectDriver);
 router.patch("/drivers/:driverId/vehicle/approve", vendorController.approveDriverVehicle);
 router.patch("/drivers/:driverId/vehicle/reject", vendorController.rejectDriverVehicle);
+router.patch("/drivers/:driverId/fleet-vehicle", vendorController.assignDriverFleetVehicle);
+
+router.post(
+  "/fleet-vehicles",
+  fleetVehicleFileFields,
+  fleetVehicleController.createFleetVehicle
+);
+router.get("/fleet-vehicles", fleetVehicleController.listFleetVehicles);
+router.get("/fleet-vehicles/:id", fleetVehicleController.getFleetVehicle);
+router.post(
+  "/fleet-vehicles/:id/resubmit",
+  fleetVehicleFileFields,
+  fleetVehicleController.resubmitFleetVehicle
+);
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);

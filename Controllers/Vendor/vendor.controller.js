@@ -1,5 +1,6 @@
 const Vendor = require('../../Models/vendor/vendor.models')
 const Driver = require('../../Models/Driver/driver.model')
+const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
 const Ride = require('../../Models/Driver/ride.model')
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model')
 const bcrypt = require('bcryptjs')
@@ -29,7 +30,8 @@ const serializeDriverForResponse = driver => ({
   ...driver.toObject(),
   vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
   approvalStatus: getDriverApprovalSummary(driver).status,
-  approvalWorkflow: getDriverApprovalSummary(driver)
+  approvalWorkflow: getDriverApprovalSummary(driver),
+  missingDocuments: getMissingDriverApprovalDocuments(driver)
 })
 
 const buildDateRange = (period, startDate, endDate) => {
@@ -103,7 +105,8 @@ exports.registerVendor = async (req, res) => {
       address,
       documents: req.body.documents || [],
       isVerified: false, // default pending
-      isActive: true // default active
+      isActive: true, // default active
+      vendorReviewStatus: 'PENDING'
     })
 
     res.status(201).json({
@@ -134,18 +137,36 @@ exports.loginVendor = async (req, res) => {
         .json({ message: 'Vendor account not found. Please register first.' })
     }
 
-    if (!vendor.isVerified) {
-      return res.status(403).json({ message: 'Vendor not verified by admin' })
-    }
-
-    if (!vendor.isActive) {
-      return res.status(403).json({ message: 'Vendor account is inactive' })
-    }
-
     const isMatch = await bcrypt.compare(password, vendor.password)
 
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' })
+    }
+
+    if (!vendor.isActive) {
+      return res.status(403).json({
+        message: 'Vendor account is inactive',
+        code: 'VENDOR_INACTIVE'
+      })
+    }
+
+    if (!vendor.isVerified) {
+      const reason = (vendor.rejectionReason || '').toString().trim()
+      const isRejected =
+        vendor.vendorReviewStatus === 'REJECTED' || reason.length > 0
+      const code = isRejected
+        ? 'VENDOR_REJECTED'
+        : 'VENDOR_PENDING_VERIFICATION'
+      const message = isRejected
+        ? 'Vendor application was not approved'
+        : 'Vendor not verified by admin'
+      return res.status(403).json({
+        message,
+        code,
+        rejectionReason: isRejected ? vendor.rejectionReason : null,
+        vendorId: vendor._id.toString(),
+        allowDocumentResubmit: Boolean(vendor.allowDocumentResubmit)
+      })
     }
 
     const accessToken = jwt.sign(
@@ -353,16 +374,17 @@ const buildVendorDriverQuery = (vendorId, { vehiclePending, vehicleStatus }) => 
 
   if (pendingFlag || status === 'UNDER_APPROVAL') {
     query['pendingVehicleInfo.approvalStatus'] = 'UNDER_APPROVAL'
-    query['pendingVehicleInfo.approvalRoutedTo'] = 'VENDOR'
     return query
   }
   if (status === 'REJECTED') {
     query['pendingVehicleInfo.approvalStatus'] = 'REJECTED'
-    query['pendingVehicleInfo.approvalRoutedTo'] = 'VENDOR'
     return query
   }
   if (status === 'APPROVED') {
-    query.vehicleInfo = { $exists: true, $ne: null }
+    query.$or = [
+      { vehicleInfo: { $exists: true, $ne: null } },
+      { assignedFleetVehicleId: { $exists: true, $ne: null } }
+    ]
     return query
   }
   if (status === 'NOT_ADDED') {
@@ -392,7 +414,10 @@ exports.getVendorDrivers = async (req, res) => {
       })
     }
 
-    const drivers = await Driver.find(mongoQuery)
+    const drivers = await Driver.find(mongoQuery).populate(
+      'assignedFleetVehicleId',
+      'licensePlate make model year approvalStatus'
+    )
 
     res.json({
       total: drivers.length,
@@ -411,7 +436,12 @@ exports.getVendorDriverById = async (req, res) => {
     const vendorId = req.user.id
     const { driverId } = req.params
 
-    const driver = await Driver.findOne({ _id: driverId, vendorId }).select('-password')
+    const driver = await Driver.findOne({ _id: driverId, vendorId })
+      .select('-password')
+      .populate(
+        'assignedFleetVehicleId',
+        'make model year color licensePlate vehicleType approvalStatus rejectionReason allowDocumentResubmit'
+      )
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found or not under your vendor account' })
     }
@@ -613,20 +643,22 @@ exports.approveDriverVehicle = async (req, res) => {
       })
     }
 
-    driver.vehicleInfo = {
-      make: driver.pendingVehicleInfo.make,
-      model: driver.pendingVehicleInfo.model,
-      year: driver.pendingVehicleInfo.year,
-      color: driver.pendingVehicleInfo.color,
-      licensePlate: driver.pendingVehicleInfo.licensePlate,
-      vehicleType: driver.pendingVehicleInfo.vehicleType
+    driver.pendingVehicleInfo = {
+      ...driver.pendingVehicleInfo.toObject(),
+      approvalRoutedTo: 'ADMIN',
+      approvalStatus: 'UNDER_APPROVAL',
+      vendorPreApprovedAt: new Date()
     }
-    driver.pendingVehicleInfo = null
     await driver.save()
+
+    logger.info('Vendor forwarded driver vehicle to admin', {
+      vendorId: req.user.id,
+      driverId: driver._id.toString()
+    })
 
     return res.status(200).json({
       success: true,
-      message: 'Driver vehicle approved successfully',
+      message: 'Vehicle forwarded to Cerca admin for final approval',
       ...serializeVehicleState(driver)
     })
   } catch (error) {
@@ -634,6 +666,76 @@ exports.approveDriverVehicle = async (req, res) => {
       success: false,
       message: error.message
     })
+  }
+}
+
+exports.assignDriverFleetVehicle = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { driverId } = req.params
+    const rawId = req.body?.fleetVehicleId
+
+    const driver = await Driver.findOne({
+      _id: driverId,
+      vendorId
+    })
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found or not under your vendor account'
+      })
+    }
+
+    if (!driver.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver must be approved by admin before assigning a fleet vehicle'
+      })
+    }
+
+    if (rawId === null || rawId === undefined || rawId === '') {
+      driver.assignedFleetVehicleId = null
+      await driver.save()
+      logger.info('Fleet vehicle unassigned from driver', {
+        vendorId,
+        driverId: driver._id.toString()
+      })
+      return res.json({
+        success: true,
+        message: 'Fleet vehicle unassigned',
+        driver: serializeDriverForResponse(driver)
+      })
+    }
+
+    const fv = await FleetVehicle.findOne({
+      _id: rawId,
+      vendorId
+    })
+
+    if (!fv || fv.approvalStatus !== 'APPROVED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Fleet vehicle not found or not approved'
+      })
+    }
+
+    driver.assignedFleetVehicleId = fv._id
+    await driver.save()
+
+    logger.info('Fleet vehicle assigned to driver', {
+      vendorId,
+      driverId: driver._id.toString(),
+      fleetVehicleId: fv._id.toString()
+    })
+
+    return res.json({
+      success: true,
+      message: 'Fleet vehicle assigned to driver',
+      driver: serializeDriverForResponse(driver)
+    })
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message })
   }
 }
 
@@ -1388,7 +1490,7 @@ exports.deleteVendorBankAccount = async (req, res) => {
 
 // =============================
 // Upload vendor document (Aadhaar) – post-registration (public)
-// Only allowed when vendor has no documents yet.
+// First upload when no documents; re-upload when allowDocumentResubmit and not verified.
 // =============================
 exports.uploadVendorDocumentPostRegister = async (req, res) => {
   try {
@@ -1404,19 +1506,45 @@ exports.uploadVendorDocumentPostRegister = async (req, res) => {
     if (!vendor) {
       return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
-    if (vendor.documents && vendor.documents.length > 0) {
-      return res.status(400).json({ success: false, message: 'Vendor already has documents uploaded' })
+    if (vendor.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vendor is already verified. Log in to manage documents.'
+      })
+    }
+
+    const hasDocs = Array.isArray(vendor.documents) && vendor.documents.length > 0
+    const canFirstUpload = !hasDocs
+    const canResubmit = hasDocs && vendor.allowDocumentResubmit === true
+
+    if (!canFirstUpload && !canResubmit) {
+      return res.status(400).json({
+        success: false,
+        message: hasDocs
+          ? 'Document re-upload is not enabled for this account. Contact Cerca if you were asked to resubmit.'
+          : 'Vendor already has documents uploaded'
+      })
     }
 
     const baseUrl = `${req.protocol}://${req.get('host')}`
     const documentUrl = `${baseUrl}/uploads/vendorDocuments/${req.file.filename}`
-    vendor.documents = vendor.documents || []
-    vendor.documents.push(documentUrl)
+
+    if (canResubmit) {
+      vendor.documents = [documentUrl]
+      vendor.rejectionReason = null
+      vendor.allowDocumentResubmit = false
+      vendor.vendorReviewStatus = 'PENDING'
+    } else {
+      vendor.documents = vendor.documents || []
+      vendor.documents.push(documentUrl)
+    }
     await vendor.save()
 
     return res.status(200).json({
       success: true,
-      message: 'Document submitted for verification.',
+      message: canResubmit
+        ? 'Document resubmitted for verification.'
+        : 'Document submitted for verification.',
       documents: vendor.documents
     })
   } catch (error) {

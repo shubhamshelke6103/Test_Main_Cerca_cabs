@@ -15,10 +15,12 @@ When a driver submits vehicle details, the following 4 documents are mandatory:
 
 After submission:
 
-- If the driver belongs to a vendor, the approval goes to that vendor.
-- If the driver is standalone, the approval goes to Admin.
-- Until approval, the driver should see the vehicle status as `UNDER_APPROVAL`.
-- After approval, the vehicle becomes the driver's active `vehicleInfo` and the status becomes `APPROVED`.
+- If the driver belongs to a vendor, the submission is first routed to the **vendor** (`approvalRoutedTo: VENDOR`). When the vendor approves in the vendor panel, the submission is **forwarded to admin** (`approvalRoutedTo: ADMIN`, still `UNDER_APPROVAL`); the vendor does **not** copy it into `vehicleInfo`.
+- If the driver is standalone, the approval goes to Admin directly (`approvalRoutedTo: ADMIN`).
+- Until final admin approval, the driver should see the vehicle status as `UNDER_APPROVAL` while pending.
+- After **admin** approval, the vehicle becomes the driver's active `vehicleInfo` and the status becomes `APPROVED`.
+
+**Vendor fleet (separate from per-driver vehicle):** vendors can register multiple **fleet vehicles** approved by admin; drivers get `assignedFleetVehicleId`. See [FLEET_VEHICLE_API.md](./FLEET_VEHICLE_API.md). Vendor-linked drivers may go online using that assignment or legacy `vehicleInfo` per server rules.
 
 ## Vehicle Status Values
 
