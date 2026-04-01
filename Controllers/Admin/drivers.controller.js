@@ -37,6 +37,13 @@ const serializeDriverForResponse = (driver) => ({
 
 const VEHICLE_STATUS_VALUES = ['UNDER_APPROVAL', 'REJECTED', 'APPROVED', 'NOT_ADDED'];
 
+const APPROVAL_STATUS_QUERY_VALUES = [
+  'PENDING_VENDOR',
+  'PENDING_ADMIN',
+  'APPROVED',
+  'REJECTED',
+];
+
 const applyAdminVehicleListFilter = (query, { vehiclePending, vehicleStatus }) => {
   const pendingFlag = vehiclePending === true;
   const status = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : '';
@@ -85,11 +92,28 @@ const listDrivers = async (req, res) => {
       priorityPending,
       vehiclePending,
       vehicleStatus,
+      approvalStatus,
     } = req.query;
     const query = {};
-    // by default hide drivers that belong to a vendor (only show standalone drivers)
-    if (!parseBoolean(includeVendor)) {
-      query.vendorId = null; // vendors drivers have this field set when assigned
+
+    const approvalStatusFilter =
+      typeof approvalStatus === 'string' ? approvalStatus.trim().toUpperCase() : '';
+
+    const includeVendorBool = parseBoolean(includeVendor) === true;
+    const approvalNeedsVendorScope =
+      approvalStatusFilter === 'PENDING_ADMIN' || approvalStatusFilter === 'PENDING_VENDOR';
+
+    // Vendor-linked drivers are omitted unless includeVendor=true, or when filtering by
+    // vendor workflow queues (those documents always have vendorId set).
+    if (!includeVendorBool && !approvalNeedsVendorScope) {
+      query.vendorId = null;
+    }
+
+    if (
+      approvalStatusFilter &&
+      APPROVAL_STATUS_QUERY_VALUES.includes(approvalStatusFilter)
+    ) {
+      query['approvalWorkflow.status'] = approvalStatusFilter;
     }
 
     const activeValue = parseBoolean(isActive);
