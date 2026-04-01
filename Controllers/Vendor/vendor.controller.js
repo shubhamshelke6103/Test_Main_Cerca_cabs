@@ -22,6 +22,11 @@ const {
   getDriverApprovalSummary,
   DRIVER_APPROVAL_ACTOR
 } = require('../../utils/driverApproval.service')
+const {
+  validateBankFields,
+  pickBankUpdate,
+  assertVendorIdMatchesUser
+} = require('../../utils/vendorBank.util')
 const VendorPayout = mongoose.model('VendorPayout')
 
 const roundCurrency = value => Math.round((Number(value) || 0) * 100) / 100
