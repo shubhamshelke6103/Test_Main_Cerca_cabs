@@ -4,6 +4,8 @@ const {
   refundPayment,
   listPayouts,
   processPayout,
+  listVendorPayouts,
+  processVendorPayout,
 } = require('../../Controllers/Admin/payments.controller');
 const { authenticateAdmin } = require('../../utils/adminAuth');
 
@@ -14,6 +16,8 @@ router.get('/payments', listPayments);
 router.post('/payments/refund', refundPayment);
 router.get('/payments/payouts', listPayouts);
 router.patch('/payments/payouts/:id/process', processPayout);
+router.get('/payments/vendor-payouts', listVendorPayouts);
+router.patch('/payments/vendor-payouts/:id/process', processVendorPayout);
 
 module.exports = router;
 

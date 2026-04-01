@@ -1975,47 +1975,58 @@ exports.updateVendorDriverComplianceDocuments = async (req, res) => {
   }
 }
 
+function resolveBankVendorId(req) {
+  if (req._bankSelfRoute) return String(req.user.id)
+  const { vendorId } = req.params
+  if (!assertVendorIdMatchesUser(vendorId, req.user.id)) {
+    return null
+  }
+  return String(vendorId)
+}
+
+// JWT-scoped bank routes (preferred): /vendor/bank-account
+exports.getVendorBankAccountSelf = async (req, res) => {
+  req._bankSelfRoute = true
+  return exports.getVendorBankAccount(req, res)
+}
+exports.addVendorBankAccountSelf = async (req, res) => {
+  req._bankSelfRoute = true
+  return exports.addVendorBankAccount(req, res)
+}
+exports.updateVendorBankAccountSelf = async (req, res) => {
+  req._bankSelfRoute = true
+  return exports.updateVendorBankAccount(req, res)
+}
+exports.deleteVendorBankAccountSelf = async (req, res) => {
+  req._bankSelfRoute = true
+  return exports.deleteVendorBankAccount(req, res)
+}
+
 // Add Vendor Bank Account Details
 exports.addVendorBankAccount = async (req, res) => {
   try {
-    const { vendorId } = req.params
-    const {
-      accountNumber,
-      ifscCode,
-      accountHolderName,
-      bankName,
-      accountType
-    } = req.body
-
-    if (!vendorId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'vendorId is required' })
+    const vendorId = resolveBankVendorId(req)
+    if (vendorId == null) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
     }
 
-    if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'All bank account fields (accountNumber, ifscCode, accountHolderName, bankName) are required'
-      })
+    const validated = validateBankFields({
+      accountNumber: req.body.accountNumber,
+      ifscCode: req.body.ifscCode,
+      accountHolderName: req.body.accountHolderName,
+      bankName: req.body.bankName,
+      accountType: req.body.accountType
+    })
+    if (!validated.ok) {
+      return res.status(400).json({ success: false, message: validated.message })
     }
 
     const vendor = await Vendor.findById(vendorId)
     if (!vendor) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Vendor not found' })
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
 
-    vendor.bankAccount = {
-      accountNumber,
-      ifscCode,
-      accountHolderName,
-      bankName,
-      accountType: accountType || vendor.bankAccount?.accountType || 'CURRENT'
-    }
-
+    vendor.bankAccount = validated.value
     await vendor.save()
 
     return res.status(201).json({
@@ -2031,24 +2042,27 @@ exports.addVendorBankAccount = async (req, res) => {
 // Get Vendor Bank Account Details
 exports.getVendorBankAccount = async (req, res) => {
   try {
-    const { vendorId } = req.params
-
-    if (!vendorId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'vendorId is required' })
+    const vendorId = resolveBankVendorId(req)
+    if (vendorId == null) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
     }
 
     const vendor = await Vendor.findById(vendorId).select('bankAccount')
     if (!vendor) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Vendor not found' })
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
+
+    const ba = vendor.bankAccount
+    const hasBank =
+      ba &&
+      ba.accountNumber &&
+      ba.ifscCode &&
+      ba.accountHolderName &&
+      ba.bankName
 
     return res.status(200).json({
       success: true,
-      data: { bankAccount: vendor.bankAccount || null }
+      data: { bankAccount: hasBank ? ba : null }
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
@@ -2058,27 +2072,31 @@ exports.getVendorBankAccount = async (req, res) => {
 // Update Vendor Bank Account Details
 exports.updateVendorBankAccount = async (req, res) => {
   try {
-    const { vendorId } = req.params
-    const update = req.body
-
-    if (!vendorId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'vendorId is required' })
+    const vendorId = resolveBankVendorId(req)
+    if (vendorId == null) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
     }
 
     const vendor = await Vendor.findById(vendorId)
     if (!vendor) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Vendor not found' })
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
 
-    vendor.bankAccount = {
-      ...vendor.bankAccount,
-      ...update
+    const partial = pickBankUpdate(req.body)
+    const merged = {
+      accountNumber: partial.accountNumber ?? vendor.bankAccount?.accountNumber,
+      ifscCode: partial.ifscCode ?? vendor.bankAccount?.ifscCode,
+      accountHolderName: partial.accountHolderName ?? vendor.bankAccount?.accountHolderName,
+      bankName: partial.bankName ?? vendor.bankAccount?.bankName,
+      accountType: partial.accountType ?? vendor.bankAccount?.accountType ?? 'CURRENT'
     }
 
+    const validated = validateBankFields(merged)
+    if (!validated.ok) {
+      return res.status(400).json({ success: false, message: validated.message })
+    }
+
+    vendor.bankAccount = validated.value
     await vendor.save()
 
     return res.status(200).json({
@@ -2094,22 +2112,17 @@ exports.updateVendorBankAccount = async (req, res) => {
 // Delete Vendor Bank Account Details
 exports.deleteVendorBankAccount = async (req, res) => {
   try {
-    const { vendorId } = req.params
-
-    if (!vendorId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'vendorId is required' })
+    const vendorId = resolveBankVendorId(req)
+    if (vendorId == null) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
     }
 
     const vendor = await Vendor.findById(vendorId)
     if (!vendor) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Vendor not found' })
+      return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
 
-    vendor.bankAccount = {}
+    vendor.set('bankAccount', undefined)
     await vendor.save()
 
     return res.status(200).json({

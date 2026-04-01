@@ -4,6 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const vendorController = require("../../Controllers/Vendor/vendor.controller");
+const vendorPayoutController = require("../../Controllers/Vendor/vendorPayout.controller");
 const fleetVehicleController = require("../../Controllers/Vendor/fleetVehicle.controller");
 const { authenticateVendor } = require("../../utils/vendorAuth");
 const { authLimiter } = require("../../middleware/rateLimiter");
@@ -103,7 +104,17 @@ router.get("/online-hours-report", vendorController.getVendorOnlineHoursReport);
 router.put("/compliance-documents", vendorController.updateVendorComplianceDocuments);
 router.put("/drivers/:driverId/compliance-documents", vendorController.updateVendorDriverComplianceDocuments);
 
-// Bank account CRUD
+// Bank account CRUD (JWT-scoped; preferred)
+router.get("/bank-account", vendorController.getVendorBankAccountSelf);
+router.post("/bank-account", vendorController.addVendorBankAccountSelf);
+router.put("/bank-account", vendorController.updateVendorBankAccountSelf);
+router.delete("/bank-account", vendorController.deleteVendorBankAccountSelf);
+
+router.get("/payout/available-balance", vendorPayoutController.getVendorPayoutAvailableBalance);
+router.get("/payout/history", vendorPayoutController.getVendorPayoutHistory);
+router.post("/payout/request", vendorPayoutController.requestVendorPayout);
+
+// Legacy paths — vendorId must match authenticated vendor
 router.post('/:vendorId/bank-account', vendorController.addVendorBankAccount);
 router.get('/:vendorId/bank-account', vendorController.getVendorBankAccount);
 router.put('/:vendorId/bank-account', vendorController.updateVendorBankAccount);
