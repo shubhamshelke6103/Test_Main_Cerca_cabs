@@ -361,6 +361,32 @@ const serializeVehicleState = (driver) => ({
   vehicleStatus: resolveDriverVehicleStatus(driver)
 })
 
+const buildDriverVehicleInfoFromFleetVehicle = fleetVehicle => {
+  if (!fleetVehicle) return null
+
+  return {
+    make: fleetVehicle.make,
+    model: fleetVehicle.model,
+    year: fleetVehicle.year,
+    color: fleetVehicle.color,
+    licensePlate: fleetVehicle.licensePlate,
+    vehicleType: fleetVehicle.vehicleType
+  }
+}
+
+const matchesVehicleSnapshot = (vehicleInfo, fleetVehicle) => {
+  if (!vehicleInfo || !fleetVehicle) return false
+
+  return (
+    vehicleInfo.make === fleetVehicle.make &&
+    vehicleInfo.model === fleetVehicle.model &&
+    Number(vehicleInfo.year) === Number(fleetVehicle.year) &&
+    vehicleInfo.color === fleetVehicle.color &&
+    vehicleInfo.licensePlate === fleetVehicle.licensePlate &&
+    vehicleInfo.vehicleType === fleetVehicle.vehicleType
+  )
+}
+
 const serializeDriverForResponse = (driver, req) => {
   const serializedDriver = driver.toObject()
 
@@ -1035,6 +1061,18 @@ exports.assignDriverFleetVehicle = async (req, res) => {
     }
 
     if (rawId === null || rawId === undefined || rawId === '') {
+      let currentlyAssignedFleetVehicle = null
+      if (driver.assignedFleetVehicleId) {
+        currentlyAssignedFleetVehicle = await FleetVehicle.findOne({
+          _id: driver.assignedFleetVehicleId,
+          vendorId
+        }).lean()
+      }
+
+      if (matchesVehicleSnapshot(driver.vehicleInfo, currentlyAssignedFleetVehicle)) {
+        driver.vehicleInfo = null
+      }
+
       driver.assignedFleetVehicleId = null
       await driver.save()
       logger.info('Fleet vehicle unassigned from driver', {
@@ -1061,6 +1099,7 @@ exports.assignDriverFleetVehicle = async (req, res) => {
     }
 
     driver.assignedFleetVehicleId = fv._id
+    driver.vehicleInfo = buildDriverVehicleInfoFromFleetVehicle(fv)
     await driver.save()
 
     logger.info('Fleet vehicle assigned to driver', {
