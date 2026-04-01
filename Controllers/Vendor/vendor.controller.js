@@ -62,10 +62,15 @@ const normalizeVehicleDocuments = (vehicleInfo, req) => {
   }
 }
 
+const resolveDriverVehicleStatus = driver => (
+  driver.pendingVehicleInfo?.approvalStatus ||
+  (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
+)
+
 const serializeVehicleState = (driver) => ({
-  approvedVehicle: driver.vehicleInfo || null,
+  approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
   pendingVehicle: driver.pendingVehicleInfo || null,
-  vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
+  vehicleStatus: resolveDriverVehicleStatus(driver)
 })
 
 const serializeDriverForResponse = (driver, req) => {
@@ -74,7 +79,7 @@ const serializeDriverForResponse = (driver, req) => {
   return {
     ...serializedDriver,
     pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
-    vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
+    vehicleStatus: resolveDriverVehicleStatus(driver),
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
     missingDocuments: getMissingDriverApprovalDocuments(driver)

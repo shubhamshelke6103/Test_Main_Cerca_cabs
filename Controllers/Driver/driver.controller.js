@@ -139,10 +139,15 @@ const collectVehicleDocuments = (req) => {
     };
 };
 
+const resolveVehicleStatus = (driver) => (
+    driver.pendingVehicleInfo?.approvalStatus ||
+    (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
+);
+
 const serializeVehicleState = (driver) => ({
-    approvedVehicle: driver.vehicleInfo || null,
+    approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
     pendingVehicle: driver.pendingVehicleInfo || null,
-    vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
+    vehicleStatus: resolveVehicleStatus(driver),
 });
 
 const serializeDriverApprovalState = (driver) => ({
@@ -398,8 +403,7 @@ const getDriverById = async (req, res) => {
         driverObj.completedRidesCount = totalRides;
         delete driverObj.password;
         driverObj.rejectionReason = driver.rejectionReason ?? null;
-        driverObj.vehicleStatus =
-            driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED');
+        driverObj.vehicleStatus = resolveVehicleStatus(driver);
         Object.assign(driverObj, serializeDriverApprovalState(driver));
 
         res.status(200).json(driverObj);
@@ -1454,9 +1458,7 @@ const resubmitDriverApproval = async (req, res) => {
         driverObj.completedRidesCount = totalRides;
         delete driverObj.password;
         driverObj.rejectionReason = driver.rejectionReason ?? null;
-        driverObj.vehicleStatus =
-            driver.pendingVehicleInfo?.approvalStatus ||
-            (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED');
+        driverObj.vehicleStatus = resolveVehicleStatus(driver);
         Object.assign(driverObj, serializeDriverApprovalState(driver));
 
         res.status(200).json(driverObj);

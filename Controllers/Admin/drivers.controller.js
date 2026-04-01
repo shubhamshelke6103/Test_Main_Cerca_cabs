@@ -65,7 +65,8 @@ const parseBoolean = (value) => {
 };
 
 const resolveVehicleStatus = (driver) => (
-  driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
+  driver.pendingVehicleInfo?.approvalStatus ||
+  (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
 );
 
 const serializeDriverForResponse = (driver, req) => {
@@ -107,7 +108,10 @@ const applyAdminVehicleListFilter = (query, { vehiclePending, vehicleStatus }) =
   }
 
   if (status === 'APPROVED') {
-    query.vehicleInfo = { $exists: true, $ne: null };
+    query.$or = [
+      { vehicleInfo: { $exists: true, $ne: null } },
+      { assignedFleetVehicleId: { $exists: true, $ne: null } },
+    ];
     return;
   }
 
