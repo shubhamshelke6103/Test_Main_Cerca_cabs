@@ -93,6 +93,10 @@ router.post(
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);
+router.get("/payout/available-balance", vendorController.getVendorAvailableBalance);
+router.post("/payout/request", vendorController.requestVendorPayout);
+router.get("/payout/history", vendorController.getVendorPayoutHistory);
+router.get("/payout/:payoutId", vendorController.getVendorPayoutById);
 router.get("/online-hours-report", vendorController.getVendorOnlineHoursReport);
 router.put("/compliance-documents", vendorController.updateVendorComplianceDocuments);
 router.put("/drivers/:driverId/compliance-documents", vendorController.updateVendorDriverComplianceDocuments);

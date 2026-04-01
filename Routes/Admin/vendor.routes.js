@@ -8,8 +8,11 @@ const { authenticateAdmin } = require('../../utils/adminAuth');
 // All routes protected for admin only
 router.get("/", authenticateAdmin, adminVendorController.getAllVendors);
 
-router.get("/:id", authenticateAdmin, adminVendorController.getVendorById);
+router.get("/payouts", authenticateAdmin, adminVendorController.listVendorPayouts);
+router.patch("/payouts/:id", authenticateAdmin, adminVendorController.processVendorPayout);
+
 router.get("/:id/documents", authenticateAdmin, adminVendorController.getVendorDocuments);
+router.get("/:id", authenticateAdmin, adminVendorController.getVendorById);
 
 router.patch("/verify", authenticateAdmin, adminVendorController.verifyVendor);
 

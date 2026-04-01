@@ -1,8 +1,9 @@
 const Vendor = require('../../Models/vendor/vendor.models')
 const Driver = require('../../Models/Driver/driver.model')
 const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
+const VendorPayout = require('../../Models/vendor/vendorPayout.model')
 const Ride = require('../../Models/Driver/ride.model')
-const AdminEarnings = require('../../Models/Admin/adminEarnings.model')
+const Settings = require('../../Models/Admin/settings.modal')
 const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
@@ -20,6 +21,11 @@ const {
   getDriverApprovalSummary,
   DRIVER_APPROVAL_ACTOR
 } = require('../../utils/driverApproval.service')
+const {
+  roundCurrency,
+  syncVendorFinancialFields,
+  getVendorEarningsReportData
+} = require('../../utils/vendorEarnings.service')
 
 const normalizeStoredDocumentUrl = (req, url) => {
   const rawUrl = String(url || '').trim()
@@ -863,9 +869,9 @@ exports.getDashboardStats = async (req, res) => {
       })
     }
 
-    // fetch vendor meta data
+    const snapshot = await syncVendorFinancialFields(vendorId)
     const vendor = await Vendor.findById(vendorId)
-      .select('businessName walletBalance totalEarnings totalDrivers')
+      .select('businessName walletBalance totalEarnings totalDrivers totalRides')
       .lean()
 
     if (!vendor) {
@@ -891,9 +897,10 @@ exports.getDashboardStats = async (req, res) => {
       vendor: {
         id: vendor._id,
         businessName: vendor.businessName,
-        walletBalance: vendor.walletBalance || 0,
-        totalEarnings: vendor.totalEarnings || 0,
-        totalDrivers: vendor.totalDrivers || 0
+        walletBalance: roundCurrency(vendor.walletBalance || 0),
+        totalEarnings: roundCurrency(vendor.totalEarnings || 0),
+        totalDrivers: vendor.totalDrivers || 0,
+        totalRides: vendor.totalRides || 0
       },
       metrics: {
         totalDrivers,
@@ -901,7 +908,12 @@ exports.getDashboardStats = async (req, res) => {
         activeDrivers,
         verifiedDrivers,
         totalDriverEarnings: Math.round(totalDriverEarnings * 100) / 100,
-        totalRideRejections: drivers.reduce((sum, driver) => sum + (driver.rideRejectionCount || 0), 0)
+        totalRideRejections: drivers.reduce((sum, driver) => sum + (driver.rideRejectionCount || 0), 0),
+        availableBalance: snapshot.availableBalance || 0,
+        paidOutAmount: snapshot.paidOutAmount || 0,
+        pendingPayoutAmount: snapshot.pendingPayoutAmount || 0,
+        processingPayoutAmount: snapshot.processingPayoutAmount || 0,
+        eligibleEarningsCount: snapshot.eligibleEarningsCount || 0
       },
       drivers
     })
@@ -918,137 +930,312 @@ exports.getVendorEarningsReport = async (req, res) => {
     const vendorId = req.user.id
     const { startDate, endDate } = req.query
 
-    const drivers = await Driver.find({ vendorId }).select('name phone email').lean()
-    const driverIds = drivers.map(driver => driver._id)
-
-    if (driverIds.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          summary: {
-            totalGrossRevenue: 0,
-            totalDriverEarnings: 0,
-            totalVendorCommission: 0,
-            totalPlatformFee: 0,
-            rideCount: 0
-          },
-          driverWiseEarnings: [],
-          rideWiseRevenue: []
-        }
-      })
-    }
-
-    const earningsFilter = { driverId: { $in: driverIds } }
-    if (startDate || endDate) {
-      earningsFilter.rideDate = {}
-      if (startDate) earningsFilter.rideDate.$gte = new Date(startDate)
-      if (endDate) earningsFilter.rideDate.$lte = new Date(endDate)
-    }
-
-    const vendor = await Vendor.findById(vendorId).select('commissionType commissionValue businessName').lean()
-    const earnings = await AdminEarnings.find(earningsFilter)
-      .populate('rideId', 'pickupAddress dropoffAddress fare createdAt paymentMethod')
-      .populate('driverId', 'name phone email')
-      .sort({ rideDate: -1 })
-      .lean()
-
-    const commissionFromDriverEarning = driverEarning => {
-      if (!vendor) return 0
-      if (vendor.commissionType === 'FIXED') {
-        return Math.min(vendor.commissionValue || 0, driverEarning || 0)
-      }
-      return Math.round(((driverEarning || 0) * ((vendor.commissionValue || 0) / 100)) * 100) / 100
-    }
-
-    const rideWiseRevenue = earnings.map(entry => {
-      const vendorCommission = commissionFromDriverEarning(entry.driverEarning)
-      return {
-        earningId: entry._id,
-        rideId: entry.rideId?._id || null,
-        rideDate: entry.rideDate,
-        driver: entry.driverId ? {
-          id: entry.driverId._id,
-          name: entry.driverId.name,
-          phone: entry.driverId.phone
-        } : null,
-        pickupAddress: entry.rideId?.pickupAddress || null,
-        dropoffAddress: entry.rideId?.dropoffAddress || null,
-        grossRevenue: Math.round((entry.grossFare || 0) * 100) / 100,
-        platformFee: Math.round((entry.platformFee || 0) * 100) / 100,
-        driverEarning: Math.round((entry.driverEarning || 0) * 100) / 100,
-        vendorCommission: Math.round(vendorCommission * 100) / 100,
-        vendorProfit: Math.round(vendorCommission * 100) / 100,
-        paymentStatus: entry.paymentStatus
-      }
-    })
-
-    const driverWiseMap = new Map()
-    for (const row of rideWiseRevenue) {
-      if (!row.driver?.id) continue
-      const key = row.driver.id.toString()
-      if (!driverWiseMap.has(key)) {
-        driverWiseMap.set(key, {
-          driverId: row.driver.id,
-          name: row.driver.name,
-          phone: row.driver.phone,
-          rideCount: 0,
-          grossRevenue: 0,
-          driverEarning: 0,
-          vendorCommission: 0
-        })
-      }
-
-      const current = driverWiseMap.get(key)
-      current.rideCount += 1
-      current.grossRevenue += row.grossRevenue || 0
-      current.driverEarning += row.driverEarning || 0
-      current.vendorCommission += row.vendorCommission || 0
-    }
-
-    const driverWiseEarnings = Array.from(driverWiseMap.values()).map(item => ({
-      ...item,
-      grossRevenue: Math.round(item.grossRevenue * 100) / 100,
-      driverEarning: Math.round(item.driverEarning * 100) / 100,
-      vendorCommission: Math.round(item.vendorCommission * 100) / 100
-    }))
-
-    const summary = rideWiseRevenue.reduce((acc, row) => {
-      acc.totalGrossRevenue += row.grossRevenue || 0
-      acc.totalDriverEarnings += row.driverEarning || 0
-      acc.totalVendorCommission += row.vendorCommission || 0
-      acc.totalPlatformFee += row.platformFee || 0
-      acc.rideCount += 1
-      return acc
-    }, {
-      totalGrossRevenue: 0,
-      totalDriverEarnings: 0,
-      totalVendorCommission: 0,
-      totalPlatformFee: 0,
-      rideCount: 0
+    const report = await getVendorEarningsReportData({
+      vendorId,
+      startDate,
+      endDate
     })
 
     res.status(200).json({
       success: true,
       data: {
         vendor: {
-          id: vendor?._id,
-          businessName: vendor?.businessName || null,
-          commissionType: vendor?.commissionType || null,
-          commissionValue: vendor?.commissionValue || 0
+          id: report.vendor?._id,
+          businessName: report.vendor?.businessName || null,
+          commissionType: report.vendor?.commissionType || null,
+          commissionValue: report.vendor?.commissionValue || 0
         },
-        summary: {
-          totalGrossRevenue: Math.round(summary.totalGrossRevenue * 100) / 100,
-          totalDriverEarnings: Math.round(summary.totalDriverEarnings * 100) / 100,
-          totalVendorCommission: Math.round(summary.totalVendorCommission * 100) / 100,
-          totalPlatformFee: Math.round(summary.totalPlatformFee * 100) / 100,
-          rideCount: summary.rideCount
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+          paymentStatus: 'completed'
         },
-        driverWiseEarnings,
-        rideWiseRevenue
+        summary: report.summary,
+        driverWiseEarnings: report.driverWiseEarnings,
+        rideWiseRevenue: report.rideWiseRevenue
       }
     })
   } catch (error) {
     res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorAvailableBalance = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const settings = await Settings.findOne().select('payoutConfigurations').lean()
+    const snapshot = await syncVendorFinancialFields(vendorId)
+
+    if (!snapshot.vendor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor not found'
+      })
+    }
+
+    const minPayoutThreshold =
+      settings?.payoutConfigurations?.minPayoutThreshold || 500
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        availableBalance: snapshot.availableBalance,
+        totalLifetimeEarnings: snapshot.totalCompletedCommission,
+        paidOutAmount: snapshot.paidOutAmount,
+        pendingPayoutAmount: snapshot.pendingPayoutAmount,
+        processingPayoutAmount: snapshot.processingPayoutAmount,
+        minPayoutThreshold,
+        canRequestPayout: snapshot.availableBalance >= minPayoutThreshold,
+        eligibleEarningsCount: snapshot.eligibleEarningsCount,
+        completedEarningsCount: snapshot.completedEarningsCount
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.requestVendorPayout = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { amount, notes } = req.body
+
+    if (!amount || Number(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payout amount'
+      })
+    }
+
+    const vendor = await Vendor.findById(vendorId).select('businessName bankAccount')
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor not found'
+      })
+    }
+
+    if (
+      !vendor.bankAccount?.accountNumber ||
+      !vendor.bankAccount?.ifscCode ||
+      !vendor.bankAccount?.accountHolderName ||
+      !vendor.bankAccount?.bankName
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Vendor bank account details are required before requesting payout'
+      })
+    }
+
+    const settings = await Settings.findOne().select('payoutConfigurations').lean()
+    const minPayoutThreshold =
+      settings?.payoutConfigurations?.minPayoutThreshold || 500
+
+    const snapshot = await syncVendorFinancialFields(vendorId)
+    const requestedAmount = roundCurrency(amount)
+
+    if (requestedAmount > snapshot.availableBalance) {
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient balance for payout',
+        data: {
+          requested: requestedAmount,
+          available: snapshot.availableBalance
+        }
+      })
+    }
+
+    if (requestedAmount < minPayoutThreshold) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum payout amount is ₹${minPayoutThreshold}`
+      })
+    }
+
+    const existingPayout = await VendorPayout.findOne({
+      vendor: vendorId,
+      status: { $in: ['PENDING', 'PROCESSING'] }
+    })
+    if (existingPayout) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You already have a pending payout request. Please wait for it to be processed.'
+      })
+    }
+
+    let remainingAmount = requestedAmount
+    const selectedEarnings = []
+    const selectedEarningsDetails = []
+
+    for (const row of snapshot.eligibleCommissionRows) {
+      if (remainingAmount <= 0) break
+
+      selectedEarnings.push(row.earningId)
+      selectedEarningsDetails.push({
+        earningId: row.earningId,
+        rideId: row.rideId || null,
+        driverId: row.driverId || null,
+        driverEarning: row.driverEarning,
+        vendorCommission: row.vendorCommission,
+        rideDate: row.rideDate
+      })
+      remainingAmount = roundCurrency(remainingAmount - row.vendorCommission)
+    }
+
+    const selectedTotal = roundCurrency(
+      selectedEarningsDetails.reduce(
+        (sum, row) => sum + (row.vendorCommission || 0),
+        0
+      )
+    )
+
+    if (selectedTotal < requestedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Selected earnings do not cover the requested payout amount',
+        data: {
+          requested: requestedAmount,
+          selectedTotal
+        }
+      })
+    }
+
+    const payout = await VendorPayout.create({
+      vendor: vendorId,
+      amount: requestedAmount,
+      bankAccount: vendor.bankAccount,
+      status: 'PENDING',
+      relatedEarnings: selectedEarnings,
+      transactionReference: `VENDOR-PAYOUT-${Date.now()}-${vendorId
+        .toString()
+        .slice(-6)}`,
+      notes,
+      metadata: {
+        vendorName: vendor.businessName || null,
+        selectedEarnings: selectedEarningsDetails,
+        requestedAgainstAvailableBalance: snapshot.availableBalance
+      }
+    })
+
+    await syncVendorFinancialFields(vendorId)
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'Vendor payout request submitted successfully. It will be processed within 1-3 business days.',
+      data: {
+        payout: {
+          id: payout._id,
+          amount: payout.amount,
+          status: payout.status,
+          transactionReference: payout.transactionReference,
+          requestedAt: payout.requestedAt
+        },
+        earningsBreakdown: {
+          selectedEarnings: selectedEarningsDetails,
+          totalSelected: selectedTotal
+        }
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorPayoutHistory = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { page = 1, limit = 20, status } = req.query
+    const query = { vendor: vendorId }
+    if (status) query.status = status
+
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10)
+
+    const [payouts, totalPayouts, allPayouts] = await Promise.all([
+      VendorPayout.find(query)
+        .populate('processedBy', 'fullName email')
+        .sort({ requestedAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit, 10)),
+      VendorPayout.countDocuments(query),
+      VendorPayout.find({ vendor: vendorId }).lean()
+    ])
+
+    const totalPayoutAmount = roundCurrency(
+      allPayouts
+        .filter(payout => payout.status === 'COMPLETED')
+        .reduce((sum, payout) => sum + (payout.amount || 0), 0)
+    )
+    const pendingPayouts = allPayouts.filter(
+      payout => payout.status === 'PENDING' || payout.status === 'PROCESSING'
+    )
+    const pendingAmount = roundCurrency(
+      pendingPayouts.reduce((sum, payout) => sum + (payout.amount || 0), 0)
+    )
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        payouts,
+        pagination: {
+          currentPage: parseInt(page, 10),
+          totalPages: Math.ceil(totalPayouts / parseInt(limit, 10)),
+          totalPayouts,
+          limit: parseInt(limit, 10)
+        },
+        statistics: {
+          totalPayoutAmount,
+          totalPayouts: allPayouts.filter(payout => payout.status === 'COMPLETED')
+            .length,
+          pendingAmount,
+          pendingCount: pendingPayouts.length
+        }
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorPayoutById = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+    const { payoutId } = req.params
+
+    const payout = await VendorPayout.findOne({
+      _id: payoutId,
+      vendor: vendorId
+    })
+      .populate('processedBy', 'fullName email')
+      .populate('relatedEarnings')
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor payout not found'
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { payout }
+    })
+  } catch (error) {
+    return res.status(500).json({
       success: false,
       message: error.message
     })
