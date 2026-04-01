@@ -1,7 +1,46 @@
 const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
 const logger = require('../../utils/logger')
 
-const serialize = v => (v && v.toObject ? v.toObject() : v)
+const normalizeStoredDocumentUrl = (req, url) => {
+  const rawUrl = String(url || '').trim()
+  if (!rawUrl) return rawUrl
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl
+  }
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`
+  const normalizedPath = rawUrl.replace(/\\/g, '/')
+  const uploadsIndex = normalizedPath.lastIndexOf('/uploads/')
+
+  if (uploadsIndex >= 0) {
+    return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`
+  }
+
+  if (normalizedPath.startsWith('uploads/')) {
+    return `${baseUrl}/${normalizedPath}`
+  }
+
+  if (normalizedPath.startsWith('/uploads/')) {
+    return `${baseUrl}${normalizedPath}`
+  }
+
+  return normalizedPath
+}
+
+const serialize = (req, v) => {
+  const record = v && v.toObject ? v.toObject() : v
+  if (!record) return record
+
+  if (Array.isArray(record.documents)) {
+    record.documents = record.documents.map(doc => ({
+      ...doc,
+      documentUrl: normalizeStoredDocumentUrl(req, doc.documentUrl)
+    }))
+  }
+
+  return record
+}
 
 exports.listFleetVehicles = async (req, res) => {
   try {
@@ -19,7 +58,10 @@ exports.listFleetVehicles = async (req, res) => {
       .sort({ updatedAt: -1 })
       .lean()
 
-    return res.json({ success: true, fleetVehicles: list })
+    return res.json({
+      success: true,
+      fleetVehicles: list.map(vehicle => serialize(req, vehicle))
+    })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }
@@ -54,7 +96,7 @@ exports.approveFleetVehicle = async (req, res) => {
     return res.json({
       success: true,
       message: 'Fleet vehicle approved',
-      fleetVehicle: serialize(fv)
+      fleetVehicle: serialize(req, fv)
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
@@ -101,7 +143,7 @@ exports.rejectFleetVehicle = async (req, res) => {
     return res.json({
       success: true,
       message: 'Fleet vehicle rejected',
-      fleetVehicle: serialize(fv)
+      fleetVehicle: serialize(req, fv)
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
@@ -118,7 +160,7 @@ exports.getFleetVehicleAdmin = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Fleet vehicle not found' })
     }
 
-    return res.json({ success: true, fleetVehicle: fv })
+    return res.json({ success: true, fleetVehicle: serialize(req, fv) })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }

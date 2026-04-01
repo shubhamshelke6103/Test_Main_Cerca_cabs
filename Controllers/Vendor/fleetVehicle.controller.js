@@ -13,6 +13,33 @@ const buildUploadedFileUrl = (req, file) => {
   return `${baseUrl}/${normalizedPath}`
 }
 
+const normalizeStoredDocumentUrl = (req, url) => {
+  const rawUrl = String(url || '').trim()
+  if (!rawUrl) return rawUrl
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl
+  }
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`
+  const normalizedPath = rawUrl.replace(/\\/g, '/')
+  const uploadsIndex = normalizedPath.lastIndexOf('/uploads/')
+
+  if (uploadsIndex >= 0) {
+    return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`
+  }
+
+  if (normalizedPath.startsWith('uploads/')) {
+    return `${baseUrl}/${normalizedPath}`
+  }
+
+  if (normalizedPath.startsWith('/uploads/')) {
+    return `${baseUrl}${normalizedPath}`
+  }
+
+  return normalizedPath
+}
+
 const collectVehicleDocumentsFromReq = req => {
   const uploadedFields = req.files || {}
   const missingFields = VEHICLE_DOCUMENT_FIELDS.filter(
@@ -31,9 +58,15 @@ const collectVehicleDocumentsFromReq = req => {
   return { missingFields: [], documents }
 }
 
-const serializeFleetVehicle = v => {
+const serializeFleetVehicle = (req, v) => {
   if (!v) return null
   const o = v.toObject ? v.toObject() : v
+  if (Array.isArray(o.documents)) {
+    o.documents = o.documents.map(doc => ({
+      ...doc,
+      documentUrl: normalizeStoredDocumentUrl(req, doc.documentUrl)
+    }))
+  }
   return o
 }
 
@@ -78,7 +111,7 @@ exports.createFleetVehicle = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Fleet vehicle submitted for admin approval',
-      fleetVehicle: serializeFleetVehicle(fv)
+      fleetVehicle: serializeFleetVehicle(req, fv)
     })
   } catch (error) {
     if (error.code === 11000) {
@@ -95,7 +128,10 @@ exports.listFleetVehicles = async (req, res) => {
   try {
     const vendorId = req.user.id
     const list = await FleetVehicle.find({ vendorId }).sort({ updatedAt: -1 }).lean()
-    return res.json({ success: true, fleetVehicles: list })
+    return res.json({
+      success: true,
+      fleetVehicles: list.map(vehicle => serializeFleetVehicle(req, vehicle))
+    })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }
@@ -113,7 +149,7 @@ exports.getFleetVehicle = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Fleet vehicle not found' })
     }
 
-    return res.json({ success: true, fleetVehicle: fv })
+    return res.json({ success: true, fleetVehicle: serializeFleetVehicle(req, fv) })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }
@@ -159,7 +195,7 @@ exports.resubmitFleetVehicle = async (req, res) => {
     return res.json({
       success: true,
       message: 'Fleet vehicle resubmitted for admin approval',
-      fleetVehicle: serializeFleetVehicle(fv)
+      fleetVehicle: serializeFleetVehicle(req, fv)
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
