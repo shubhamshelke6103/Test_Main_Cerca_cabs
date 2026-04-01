@@ -1247,6 +1247,39 @@ exports.getDashboardStats = async (req, res) => {
   }
 }
 
+exports.getVendorTotalRides = async (req, res) => {
+  try {
+    const vendorId = req.user.id
+
+    await syncVendorFinancialFields(vendorId)
+
+    const vendor = await Vendor.findById(vendorId)
+      .select('businessName totalRides')
+      .lean()
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor not found'
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        vendorId: vendor._id,
+        businessName: vendor.businessName || null,
+        totalRides: vendor.totalRides || 0
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
 exports.getVendorEarningsReport = async (req, res) => {
   try {
     const vendorId = req.user.id

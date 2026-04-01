@@ -92,6 +92,7 @@ router.post(
 );
 
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
+router.get("/total-rides", vendorController.getVendorTotalRides);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);
 router.get("/payout/available-balance", vendorController.getVendorAvailableBalance);
 router.post("/payout/request", vendorController.requestVendorPayout);
