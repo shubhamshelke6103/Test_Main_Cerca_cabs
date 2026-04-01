@@ -16,6 +16,47 @@ const {
   setDriverPendingApproval,
 } = require('../../utils/driverApproval.service');
 
+const normalizeStoredDocumentUrl = (req, url) => {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) return rawUrl;
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const normalizedPath = rawUrl.replace(/\\/g, '/');
+  const uploadsIndex = normalizedPath.lastIndexOf('/uploads/');
+
+  if (uploadsIndex >= 0) {
+    return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`;
+  }
+
+  if (normalizedPath.startsWith('uploads/')) {
+    return `${baseUrl}/${normalizedPath}`;
+  }
+
+  if (normalizedPath.startsWith('/uploads/')) {
+    return `${baseUrl}${normalizedPath}`;
+  }
+
+  return normalizedPath;
+};
+
+const normalizeVehicleDocuments = (vehicleInfo, req) => {
+  if (!vehicleInfo || !Array.isArray(vehicleInfo.documents)) {
+    return vehicleInfo || null;
+  }
+
+  return {
+    ...vehicleInfo,
+    documents: vehicleInfo.documents.map((doc) => ({
+      ...doc,
+      documentUrl: normalizeStoredDocumentUrl(req, doc.documentUrl),
+    })),
+  };
+};
+
 const parseBoolean = (value) => {
   if (value === undefined) return undefined;
   if (value === 'true' || value === true) return true;
@@ -27,13 +68,18 @@ const resolveVehicleStatus = (driver) => (
   driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
 );
 
-const serializeDriverForResponse = (driver) => ({
-  ...driver.toObject(),
-  vehicleStatus: resolveVehicleStatus(driver),
-  approvalStatus: getDriverApprovalSummary(driver).status,
-  approvalWorkflow: getDriverApprovalSummary(driver),
-  missingDocuments: getMissingDriverApprovalDocuments(driver),
-});
+const serializeDriverForResponse = (driver, req) => {
+  const serializedDriver = driver.toObject();
+
+  return {
+    ...serializedDriver,
+    pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
+    vehicleStatus: resolveVehicleStatus(driver),
+    approvalStatus: getDriverApprovalSummary(driver).status,
+    approvalWorkflow: getDriverApprovalSummary(driver),
+    missingDocuments: getMissingDriverApprovalDocuments(driver),
+  };
+};
 
 const VEHICLE_STATUS_VALUES = ['UNDER_APPROVAL', 'REJECTED', 'APPROVED', 'NOT_ADDED'];
 
@@ -164,7 +210,7 @@ const listDrivers = async (req, res) => {
     }, {});
 
     const driversWithEarnings = drivers.map((driver) => ({
-      ...serializeDriverForResponse(driver),
+      ...serializeDriverForResponse(driver, req),
       totalEarnings: Math.round((earningsMap[driver._id.toString()] || 0) * 100) / 100,
     }));
 
@@ -198,7 +244,7 @@ const getDriverDetails = async (req, res) => {
     ]);
 
     res.status(200).json({
-      driver: serializeDriverForResponse(driver),
+      driver: serializeDriverForResponse(driver, req),
       rides,
       payouts,
     });
@@ -230,7 +276,7 @@ const approveDriver = async (req, res) => {
 
     res.status(200).json({
       message: 'Driver approved',
-      driver: serializeDriverForResponse(driver),
+      driver: serializeDriverForResponse(driver, req),
     });
   } catch (error) {
     logger.error('Error approving driver:', error);
@@ -259,7 +305,7 @@ const rejectDriver = async (req, res) => {
 
     res.status(200).json({
       message: 'Driver rejected',
-      driver: serializeDriverForResponse(driver),
+      driver: serializeDriverForResponse(driver, req),
     });
   } catch (error) {
     logger.error('Error rejecting driver:', error);
@@ -329,7 +375,7 @@ const verifyDriver = async (req, res) => {
 
     res.status(200).json({
       message: 'Driver verification updated',
-      driver: serializeDriverForResponse(driver),
+      driver: serializeDriverForResponse(driver, req),
     });
   } catch (error) {
     logger.error('Error verifying driver:', error);

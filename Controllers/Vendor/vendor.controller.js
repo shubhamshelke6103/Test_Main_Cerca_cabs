@@ -21,19 +21,65 @@ const {
   DRIVER_APPROVAL_ACTOR
 } = require('../../utils/driverApproval.service')
 
+const normalizeStoredDocumentUrl = (req, url) => {
+  const rawUrl = String(url || '').trim()
+  if (!rawUrl) return rawUrl
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl
+  }
+
+  const baseUrl = `${req.protocol}://${req.get('host')}`
+  const normalizedPath = rawUrl.replace(/\\/g, '/')
+  const uploadsIndex = normalizedPath.lastIndexOf('/uploads/')
+
+  if (uploadsIndex >= 0) {
+    return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`
+  }
+
+  if (normalizedPath.startsWith('uploads/')) {
+    return `${baseUrl}/${normalizedPath}`
+  }
+
+  if (normalizedPath.startsWith('/uploads/')) {
+    return `${baseUrl}${normalizedPath}`
+  }
+
+  return normalizedPath
+}
+
+const normalizeVehicleDocuments = (vehicleInfo, req) => {
+  if (!vehicleInfo || !Array.isArray(vehicleInfo.documents)) {
+    return vehicleInfo || null
+  }
+
+  return {
+    ...vehicleInfo,
+    documents: vehicleInfo.documents.map(doc => ({
+      ...doc,
+      documentUrl: normalizeStoredDocumentUrl(req, doc.documentUrl)
+    }))
+  }
+}
+
 const serializeVehicleState = (driver) => ({
   approvedVehicle: driver.vehicleInfo || null,
   pendingVehicle: driver.pendingVehicleInfo || null,
   vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED')
 })
 
-const serializeDriverForResponse = driver => ({
-  ...driver.toObject(),
-  vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
-  approvalStatus: getDriverApprovalSummary(driver).status,
-  approvalWorkflow: getDriverApprovalSummary(driver),
-  missingDocuments: getMissingDriverApprovalDocuments(driver)
-})
+const serializeDriverForResponse = (driver, req) => {
+  const serializedDriver = driver.toObject()
+
+  return {
+    ...serializedDriver,
+    pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
+    vehicleStatus: driver.pendingVehicleInfo?.approvalStatus || (driver.vehicleInfo ? 'APPROVED' : 'NOT_ADDED'),
+    approvalStatus: getDriverApprovalSummary(driver).status,
+    approvalWorkflow: getDriverApprovalSummary(driver),
+    missingDocuments: getMissingDriverApprovalDocuments(driver)
+  }
+}
 
 const buildDateRange = (period, startDate, endDate) => {
   const now = new Date()
@@ -422,7 +468,7 @@ exports.getVendorDrivers = async (req, res) => {
 
     res.json({
       total: drivers.length,
-      drivers: drivers.map(driver => serializeDriverForResponse(driver))
+      drivers: drivers.map(driver => serializeDriverForResponse(driver, req))
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -447,7 +493,7 @@ exports.getVendorDriverById = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found or not under your vendor account' })
     }
 
-    res.json(serializeDriverForResponse(driver))
+    res.json(serializeDriverForResponse(driver, req))
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -557,7 +603,7 @@ exports.verifyDriver = async (req, res) => {
     res.json({
       success: true,
       message: 'Driver verified by vendor and forwarded to admin for final approval',
-      driver: serializeDriverForResponse(driver)
+      driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
     const statusCode = error.message.includes('pending vendor approval') ? 400 : 500
@@ -605,7 +651,7 @@ exports.rejectDriver = async (req, res) => {
     res.json({
       success: true,
       message: 'Driver rejected successfully',
-      driver: serializeDriverForResponse(driver)
+      driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
     const statusCode = error.message.includes('pending vendor approval') ? 400 : 500
@@ -705,7 +751,7 @@ exports.assignDriverFleetVehicle = async (req, res) => {
       return res.json({
         success: true,
         message: 'Fleet vehicle unassigned',
-        driver: serializeDriverForResponse(driver)
+        driver: serializeDriverForResponse(driver, req)
       })
     }
 
@@ -733,7 +779,7 @@ exports.assignDriverFleetVehicle = async (req, res) => {
     return res.json({
       success: true,
       message: 'Fleet vehicle assigned to driver',
-      driver: serializeDriverForResponse(driver)
+      driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
@@ -1106,7 +1152,7 @@ exports.addDriver = async (req, res) => {
 
     res
       .status(201)
-      .json({ success: true, message: 'Driver created under vendor', driver: serializeDriverForResponse(driver) })
+      .json({ success: true, message: 'Driver created under vendor', driver: serializeDriverForResponse(driver, req) })
   } catch (error) {
     res.status(500).json({ success: false, message: error.message })
   }
