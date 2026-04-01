@@ -1737,7 +1737,12 @@ async function clearUserSocket (userId, socketId) {
 }
 
 async function setDriverSocket (driverId, socketId) {
-  const driver = await startDriverOnlineSession(driverId, 'socket_connect')
+  // Only bind socket — do not start an online session here. Ride availability (`isOnline`)
+  // is controlled by PATCH /drivers/:id/online-status and driverToggleStatus.
+  const driver = await Driver.findById(driverId)
+  if (!driver) {
+    throw new Error('Driver not found')
+  }
   driver.socketId = socketId
   driver.lastSeen = new Date()
   await driver.save()

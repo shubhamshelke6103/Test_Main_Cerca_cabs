@@ -942,22 +942,15 @@ function initializeSocket (server) {
         // SET NEW SOCKET
         // ============================
 
-        // Persist socket in DB (source of truth across servers)
+        // Persist socket in DB (does not force isOnline — matches Mongo ride-availability flag)
         const driver = await setDriverSocket(driverId, socket.id)
-
-        // Ensure driver is marked online (MongoDB = persistence)
-        await Driver.findByIdAndUpdate(driverId, {
-          isOnline: true,
-          socketId: socket.id,
-          lastSeen: new Date()
-        })
 
         // ============================
         // REDIS PRESENCE (REALTIME SOURCE)
         // ============================
         await redis.hset(`driver:${driverId}`, {
           socketId: socket.id,
-          isOnline: 1,
+          isOnline: driver?.isOnline ? 1 : 0,
           isActive: driver?.isActive ? 1 : 0,
           lastSeen: Date.now()
         })
@@ -1059,13 +1052,13 @@ function initializeSocket (server) {
         if (finalDriver) {
           io.to('admin').emit('driverConnected', {
             driverId: finalDriver._id,
-            isOnline: true
+            isOnline: !!finalDriver.isOnline
           })
         }
 
         socket.emit('driverStatusUpdate', {
           driverId,
-          isOnline: true,
+          isOnline: !!finalDriver?.isOnline,
           isActive: finalDriver?.isActive || false,
           isBusy: finalDriver?.isBusy || false
         })
