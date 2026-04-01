@@ -1,6 +1,100 @@
+const mongoose = require("mongoose");
 const Vendor = require("../../Models/vendor/vendor.models");
-const VendorPayout = require("../../Models/vendor/vendorPayout.model");
-const { syncVendorFinancialFields } = require("../../utils/vendorEarnings.service");
+const VendorPayout = mongoose.model("VendorPayout");
+const Driver = require("../../Models/Driver/driver.model");
+const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
+
+const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const calculateVendorCommission = (vendor, driverEarning) => {
+  const normalizedDriverEarning = Number(driverEarning) || 0;
+  if (!vendor || normalizedDriverEarning <= 0) return 0;
+
+  if (vendor.commissionType === "FIXED") {
+    return roundCurrency(
+      Math.min(Number(vendor.commissionValue) || 0, normalizedDriverEarning)
+    );
+  }
+
+  return roundCurrency(
+    normalizedDriverEarning * ((Number(vendor.commissionValue) || 0) / 100)
+  );
+};
+
+const syncVendorFinancialFields = async (vendorId) => {
+  const vendor = await Vendor.findById(vendorId)
+    .select("commissionType commissionValue")
+    .lean();
+
+  if (!vendor) {
+    return null;
+  }
+
+  const drivers = await Driver.find({ vendorId }).select("_id").lean();
+  const driverIds = drivers.map((driver) => driver._id);
+
+  if (driverIds.length === 0) {
+    await Vendor.findByIdAndUpdate(vendorId, {
+      $set: {
+        walletBalance: 0,
+        totalEarnings: 0,
+        totalRides: 0,
+      },
+    });
+    return true;
+  }
+
+  const [completedEarnings, payouts] = await Promise.all([
+    AdminEarnings.find({
+      driverId: { $in: driverIds },
+      paymentStatus: "completed",
+    })
+      .select("driverEarning")
+      .lean(),
+    VendorPayout.find({
+      vendor: vendorId,
+      status: { $in: ["PENDING", "PROCESSING", "COMPLETED"] },
+    })
+      .select("amount relatedEarnings")
+      .lean(),
+  ]);
+
+  const reservedEarningIds = new Set();
+  payouts.forEach((payout) => {
+    if (!Array.isArray(payout.relatedEarnings)) return;
+    payout.relatedEarnings.forEach((earningId) => {
+      if (earningId) reservedEarningIds.add(earningId.toString());
+    });
+  });
+
+  const totalCompletedCommission = roundCurrency(
+    completedEarnings.reduce(
+      (sum, earning) =>
+        sum + calculateVendorCommission(vendor, earning.driverEarning),
+      0
+    )
+  );
+
+  const availableBalance = roundCurrency(
+    completedEarnings.reduce((sum, earning) => {
+      const earningId = earning._id ? earning._id.toString() : null;
+      if (!earningId || reservedEarningIds.has(earningId)) {
+        return sum;
+      }
+      return sum + calculateVendorCommission(vendor, earning.driverEarning);
+    }, 0)
+  );
+
+  await Vendor.findByIdAndUpdate(vendorId, {
+    $set: {
+      walletBalance: availableBalance,
+      totalEarnings: totalCompletedCommission,
+      totalRides: completedEarnings.length,
+    },
+  });
+
+  return true;
+};
 
 // ======================================
 // Get All Vendors
