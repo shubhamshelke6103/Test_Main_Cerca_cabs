@@ -1,6 +1,6 @@
 const mongoose = require('mongoose')
 
-const { Schema, model } = mongoose
+const { Schema } = mongoose
 
 const vendorPayoutSchema = new Schema(
   {
@@ -62,4 +62,5 @@ const vendorPayoutSchema = new Schema(
 vendorPayoutSchema.index({ vendor: 1, status: 1, requestedAt: -1 })
 vendorPayoutSchema.index({ status: 1, requestedAt: -1 })
 
-module.exports = model('VendorPayout', vendorPayoutSchema)
+// Avoid OverwriteModelError when this file is required more than once (e.g. nodemon / tests).
+module.exports = mongoose.models.VendorPayout || mongoose.model('VendorPayout', vendorPayoutSchema)
