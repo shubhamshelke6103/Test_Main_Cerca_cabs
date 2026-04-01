@@ -9,17 +9,12 @@ const VEHICLE_DOCUMENT_FIELDS = [
 
 const buildUploadedFileUrl = (req, file) => {
   const baseUrl = `${req.protocol}://${req.get('host')}`
-  const normalizedPath = String(file.path || '').replace(/\\/g, '/')
-  return `${baseUrl}/${normalizedPath}`
+  return `${baseUrl}/uploads/fleetVehicleDocuments/${file.filename}`
 }
 
 const normalizeStoredDocumentUrl = (req, url) => {
   const rawUrl = String(url || '').trim()
   if (!rawUrl) return rawUrl
-
-  if (/^https?:\/\//i.test(rawUrl)) {
-    return rawUrl
-  }
 
   const baseUrl = `${req.protocol}://${req.get('host')}`
   const normalizedPath = rawUrl.replace(/\\/g, '/')
@@ -27,6 +22,10 @@ const normalizeStoredDocumentUrl = (req, url) => {
 
   if (uploadsIndex >= 0) {
     return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`
+  }
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl
   }
 
   if (normalizedPath.startsWith('uploads/')) {

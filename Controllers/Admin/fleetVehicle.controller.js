@@ -5,16 +5,16 @@ const normalizeStoredDocumentUrl = (req, url) => {
   const rawUrl = String(url || '').trim()
   if (!rawUrl) return rawUrl
 
-  if (/^https?:\/\//i.test(rawUrl)) {
-    return rawUrl
-  }
-
   const baseUrl = `${req.protocol}://${req.get('host')}`
   const normalizedPath = rawUrl.replace(/\\/g, '/')
   const uploadsIndex = normalizedPath.lastIndexOf('/uploads/')
 
   if (uploadsIndex >= 0) {
     return `${baseUrl}${normalizedPath.slice(uploadsIndex)}`
+  }
+
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl
   }
 
   if (normalizedPath.startsWith('uploads/')) {
