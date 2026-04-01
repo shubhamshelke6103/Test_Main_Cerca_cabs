@@ -120,8 +120,13 @@ router.post(
     deactivateDriverGoTo
 );
 
-// Route to update driver online/offline status
-router.patch('/:id/online-status', updateDriverOnlineStatus);
+// Route to update driver online/offline status (driver JWT only)
+router.patch(
+    '/:id/online-status',
+    authenticateDriver,
+    requireOwnDriver,
+    updateDriverOnlineStatus
+);
 router.post('/:id/logout', logoutDriver);
 router.get('/:id/online-hours', getDriverOnlineHours);
 router.put('/:id/compliance-documents', updateDriverComplianceDocuments);

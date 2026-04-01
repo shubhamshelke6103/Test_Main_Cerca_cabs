@@ -52,6 +52,10 @@ const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
 const LiveLocationShare = require('../Models/Shared/liveLocationShare.model')
 const { notifyAdmins, notifyVendor } = require('./alerting.service')
+const {
+  startDriverOnlineSession,
+  stopDriverOnlineSession
+} = require('./driverSession.service')
 
 let io
 
@@ -1078,10 +1082,19 @@ function initializeSocket (server) {
     // ============================
     socket.on('driverToggleStatus', async data => {
       try {
+        const { driverId, isOnline: isOnlineRaw, isActive: legacyActive } =
+          data || {}
+        // Prefer isOnline; legacy app sent isActive meaning "accepting rides" (never persist to Driver.isActive)
+        const isOnline =
+          typeof isOnlineRaw === 'boolean'
+            ? isOnlineRaw
+            : typeof legacyActive === 'boolean'
+              ? legacyActive
+              : undefined
+
         logger.info(
-          `driverToggleStatus event - driverId: ${data?.driverId}, isActive: ${data?.isActive}`
+          `driverToggleStatus event - driverId: ${driverId}, isOnline: ${isOnline}`
         )
-        const { driverId, isActive } = data || {}
 
         if (!driverId) {
           logger.warn('driverToggleStatus: driverId is missing')
@@ -1089,20 +1102,28 @@ function initializeSocket (server) {
           return
         }
 
-        if (typeof isActive !== 'boolean') {
-          logger.warn('driverToggleStatus: isActive must be boolean')
+        if (typeof isOnline !== 'boolean') {
+          logger.warn(
+            'driverToggleStatus: isOnline (or legacy isActive) must be boolean'
+          )
           socket.emit('errorEvent', {
-            message: 'isActive must be a boolean value'
+            message: 'isOnline must be a boolean value'
           })
           return
         }
 
-        // Update driver's isActive status (toggle)
-        const driver = await Driver.findByIdAndUpdate(
-          driverId,
-          { isActive },
-          { new: true }
-        )
+        let driver
+        try {
+          driver = isOnline
+            ? await startDriverOnlineSession(driverId, 'socket_toggle')
+            : await stopDriverOnlineSession(driverId, 'socket_toggle')
+        } catch (sessionErr) {
+          logger.error('driverToggleStatus session error:', sessionErr)
+          socket.emit('errorEvent', {
+            message: sessionErr.message || 'Failed to update driver status'
+          })
+          return
+        }
 
         if (!driver) {
           logger.error(`driverToggleStatus: Driver not found - ${driverId}`)
@@ -1111,16 +1132,15 @@ function initializeSocket (server) {
         }
 
         logger.info(
-          `Driver toggle status updated - driverId: ${driverId}, isActive: ${isActive}, isOnline: ${driver.isOnline}`
+          `Driver toggle status updated - driverId: ${driverId}, isOnline: ${driver.isOnline}, isActive: ${driver.isActive}`
         )
 
-        // Send confirmation back to driver
         socket.emit('driverStatusUpdate', {
           driverId,
           isOnline: driver.isOnline,
           isActive: driver.isActive,
           isBusy: driver.isBusy,
-          message: isActive
+          message: isOnline
             ? 'You are now accepting ride requests'
             : 'You are now offline for ride requests'
         })
