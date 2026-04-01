@@ -49,6 +49,10 @@ Approval state progression:
 - `PENDING_ADMIN`
 - `APPROVED` or `REJECTED`
 
+**Vendor-created driver login email:** When the vendor creates a driver without an email, the API stores `email` as `{phone}@vendor.local` (see vendor `addDriver`). The driver app must sign in with that address or the explicit email the vendor entered—otherwise `POST /drivers/login` returns 404 *Driver not found*.
+
+**Login response hints:** `POST /drivers/login` (200) includes `approvalStatus` and `missingDocuments` (read-only) so clients can show status before `GET /drivers/:id` completes. Full profile still comes from `GET /drivers/:id`.
+
 ## Required Driver Documents For Approval
 
 Before approval can succeed, the driver must have these compliance documents:

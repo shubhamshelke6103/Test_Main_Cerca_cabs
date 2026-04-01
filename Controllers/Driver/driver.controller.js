@@ -295,13 +295,22 @@ const loginDriver = async (req, res) => {
     const { email, password } = req.body;
 
     try {
+        if (password == null || typeof password !== 'string') {
+            return res.status(400).json({ message: 'Password is required' });
+        }
+
         const driver = await Driver.findOne({ email });
 
         if (!driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        // Check password
+        if (typeof driver.password !== 'string' || !driver.password) {
+            logger.warn(`Driver login rejected: missing password hash on record for ${driver.email}`);
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Check password (guarded above so bcrypt does not throw on bad hash field)
         const isMatch = await bcrypt.compare(password, driver.password);
 
         if (!isMatch) {
@@ -315,13 +324,31 @@ const loginDriver = async (req, res) => {
             { expiresIn: '7d' }
         );
 
-        await startDriverOnlineSession(driver._id, 'login');
+        // Do not start an online session on login — fleet/vehicle eligibility is enforced when the driver
+        // actually goes online (PATCH /drivers/:id/online-status). Starting a session here caused 500s for
+        // vendor drivers who had not yet been assigned an approved fleet vehicle.
+        await Driver.findByIdAndUpdate(driver._id, { $set: { lastSeen: new Date() } });
+
+        const approvalSummary = getDriverApprovalSummary(driver);
+        const missingDocuments = getMissingDriverApprovalDocuments(driver);
 
         logger.info(`Driver logged in: ${driver.email}`);
-        res.status(200).json({ message: 'Login successful', token, id:driver._id });
+        res.status(200).json({
+            message: 'Login successful',
+            token,
+            id: driver._id,
+            approvalStatus: approvalSummary.status,
+            missingDocuments,
+        });
     } catch (error) {
-        logger.error('Error during driver login:', error);
-        res.status(500).json({ message: 'An error occurred during login', error });
+        logger.error('Error during driver login:', {
+            message: error?.message,
+            stack: error?.stack,
+        });
+        res.status(500).json({
+            message: 'An error occurred during login',
+            error: error?.message || String(error),
+        });
     }
 };
 
