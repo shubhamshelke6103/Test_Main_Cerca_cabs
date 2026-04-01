@@ -53,6 +53,22 @@ Excluded from vendor earnings:
 - `VendorPayout`
 - `Settings`
 
+### Implementation Files In This Project
+
+The current implementation lives in these existing project files:
+
+- `Models/vendor/vendor.models.js`
+- `Controllers/Vendor/vendor.controller.js`
+- `Controllers/Admin/vendor.controller.js`
+- `Routes/Vendor/vendor.routes.js`
+- `Routes/Admin/vendor.routes.js`
+
+Important:
+
+- `VendorPayout` is registered from `Models/vendor/vendor.models.js`
+- vendor earnings calculation helpers are currently inside `Controllers/Vendor/vendor.controller.js`
+- admin-side vendor payout sync logic is currently inside `Controllers/Admin/vendor.controller.js`
+
 ### Important Fields
 
 #### Vendor
@@ -117,6 +133,24 @@ If a payout becomes `FAILED` or `CANCELLED`, those earnings become available aga
 4. System selects eligible completed earnings and links them in `relatedEarnings`.
 5. Admin processes the payout.
 6. Vendor balance is recalculated automatically.
+
+### Vendor Dashboard Behavior
+
+The vendor dashboard now syncs vendor financial fields before returning data.
+
+That means these vendor fields are refreshed from completed earnings:
+
+- `walletBalance`
+- `totalEarnings`
+- `totalRides`
+
+The dashboard also returns extra payout-related metrics:
+
+- `availableBalance`
+- `paidOutAmount`
+- `pendingPayoutAmount`
+- `processingPayoutAmount`
+- `eligibleEarningsCount`
 
 ## Vendor APIs
 
@@ -268,6 +302,16 @@ This is the part that lets a vendor see earnings for each driver under that vend
 }
 ```
 
+### Meaning
+
+- `availableBalance`: completed vendor commission still available to withdraw
+- `totalLifetimeEarnings`: all completed vendor commission till date
+- `paidOutAmount`: already completed vendor payouts
+- `pendingPayoutAmount`: payout requests waiting with admin
+- `processingPayoutAmount`: payout requests under processing
+- `eligibleEarningsCount`: completed earning rows still free for payout
+- `completedEarningsCount`: all completed vendor earning rows
+
 ---
 
 ## 4. Request Vendor Payout
@@ -321,6 +365,8 @@ Vendor bank account must already be present on the vendor record.
 - The payout amount must be less than or equal to `availableBalance`.
 - Minimum threshold comes from `Settings.payoutConfigurations.minPayoutThreshold`.
 - Only one vendor payout can remain in `PENDING` or `PROCESSING` at a time.
+- The system links selected completed earning rows in `relatedEarnings`.
+- If a payout is marked `FAILED` or `CANCELLED`, those linked earnings become available again.
 
 ---
 
@@ -455,6 +501,7 @@ Before this implementation:
 
 - completed-only vendor earnings report
 - vendor-visible driver-wise earnings
+- vendor dashboard sync from actual completed earnings
 - vendor available balance API
 - vendor payout request API
 - vendor payout history API
