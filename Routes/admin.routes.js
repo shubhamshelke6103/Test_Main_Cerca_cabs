@@ -35,6 +35,7 @@ const {
     findIncorrectEarningsRecords,
     validateTotals,
 } = require('../Controllers/Admin/earningsVerification.controller.js');
+const { listVehicleInventory } = require('../Controllers/Admin/fleetVehicle.controller');
 
 const { authenticateAdmin, requireRole } = require('../utils/adminAuth');
 
@@ -70,6 +71,7 @@ router.patch('/settings/force-update', toggleForceUpdate);
 
 // Route for admin earnings analytics
 router.get('/earnings', getAdminEarnings);
+router.get('/vehicles', listVehicleInventory);
 
 // Routes for driver earnings management
 router.get('/drivers/earnings', listDriverEarnings);
