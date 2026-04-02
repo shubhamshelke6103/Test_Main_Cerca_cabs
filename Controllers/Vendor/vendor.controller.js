@@ -393,11 +393,28 @@ const matchesVehicleSnapshot = (vehicleInfo, fleetVehicle) => {
   )
 }
 
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const getDriverVendorSummary = driver => {
+  const vendor = driver?.vendorId
+  if (!vendor || typeof vendor !== 'object') {
+    return null
+  }
+
+  return {
+    id: vendor._id || null,
+    businessName: vendor.businessName || null
+  }
+}
+
 const serializeDriverForResponse = (driver, req) => {
   const serializedDriver = driver.toObject()
+  const vendorSummary = getDriverVendorSummary(serializedDriver)
 
   return {
     ...serializedDriver,
+    vendor: vendorSummary,
+    registrationType: serializedDriver.vendorId ? 'VENDOR_ASSIGNED' : 'SELF_REGISTERED',
     pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
     vehicleStatus: resolveDriverVehicleStatus(driver),
     approvalStatus: getDriverApprovalSummary(driver).status,
@@ -740,7 +757,10 @@ const parseBooleanQuery = (value) => {
 }
 
 const buildVendorDriverQuery = (vendorId, { vehiclePending, vehicleStatus }) => {
-  const query = { vendorId }
+  const query = {}
+  if (vendorId) {
+    query.vendorId = vendorId
+  }
   const pendingFlag = vehiclePending === true
   const status = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : ''
 
@@ -773,23 +793,86 @@ const buildVendorDriverQuery = (vendorId, { vehiclePending, vehicleStatus }) => 
   return query
 }
 
+const buildAccessibleVendorDriverQuery = ({
+  authenticatedVendorId,
+  selfRegisteredOnly,
+  targetVendorIds,
+  vehiclePending,
+  vehicleStatus
+}) => {
+  let baseQuery = {}
+
+  if (selfRegisteredOnly) {
+    baseQuery.vendorId = null
+  } else if (Array.isArray(targetVendorIds)) {
+    if (targetVendorIds.length === 0) {
+      baseQuery._id = null
+    } else {
+      baseQuery.vendorId = { $in: targetVendorIds }
+    }
+  } else {
+    baseQuery.$or = [{ vendorId: authenticatedVendorId }, { vendorId: null }]
+  }
+
+  const hasVehicleFilter =
+    vehiclePending === true ||
+    (vehicleStatus && VENDOR_VEHICLE_STATUS_VALUES.includes(vehicleStatus))
+
+  if (!hasVehicleFilter) {
+    return baseQuery
+  }
+
+  const vehicleQuery = buildVendorDriverQuery(null, {
+    vehiclePending,
+    vehicleStatus
+  })
+
+  if (Object.keys(baseQuery).length === 0) {
+    return vehicleQuery
+  }
+
+  if (Object.keys(vehicleQuery).length === 0) {
+    return baseQuery
+  }
+
+  return {
+    $and: [baseQuery, vehicleQuery]
+  }
+}
+
 exports.getVendorDrivers = async (req, res) => {
   try {
-    const { vehiclePending, vehicleStatus } = req.query
+    const { vehiclePending, vehicleStatus, vendorName, selfRegistered } = req.query
+    const authenticatedVendorId = req.user?.id
+    const normalizedVendorName =
+      typeof vendorName === 'string' ? vendorName.trim() : ''
     const vs = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : ''
     const vehiclePendingTrue = parseBooleanQuery(vehiclePending) === true
-    let mongoQuery = { vendorId: req.params.id }
-    if (vehiclePendingTrue || (vs && VENDOR_VEHICLE_STATUS_VALUES.includes(vs))) {
-      mongoQuery = buildVendorDriverQuery(req.params.id, {
-        vehiclePending: vehiclePendingTrue,
-        vehicleStatus: vs,
+    const selfRegisteredOnly = parseBooleanQuery(selfRegistered) === true
+    let targetVendorIds
+
+    if (normalizedVendorName && !selfRegisteredOnly) {
+      const matchingVendors = await Vendor.find({
+        businessName: { $regex: escapeRegex(normalizedVendorName), $options: 'i' }
       })
+        .select('_id')
+        .lean()
+
+      targetVendorIds = matchingVendors.map(vendor => vendor._id)
     }
+
+    const mongoQuery = buildAccessibleVendorDriverQuery({
+      authenticatedVendorId,
+      selfRegisteredOnly,
+      targetVendorIds,
+      vehiclePending: vehiclePendingTrue,
+      vehicleStatus: vs
+    })
 
     const drivers = await Driver.find(mongoQuery).populate(
       'assignedFleetVehicleId',
       'licensePlate make model year approvalStatus'
-    )
+    ).populate('vendorId', 'businessName')
 
     res.json({
       total: drivers.length,
@@ -801,21 +884,21 @@ exports.getVendorDrivers = async (req, res) => {
 }
 
 // =============================
-// Get single driver (vendor-scoped; for detail view)
+// Get single driver (vendor can view any driver)
 // =============================
 exports.getVendorDriverById = async (req, res) => {
   try {
-    const vendorId = req.user.id
     const { driverId } = req.params
 
-    const driver = await Driver.findOne({ _id: driverId, vendorId })
+    const driver = await Driver.findById(driverId)
       .select('-password')
+      .populate('vendorId', 'businessName')
       .populate(
         'assignedFleetVehicleId',
         'make model year color licensePlate vehicleType approvalStatus rejectionReason allowDocumentResubmit'
       )
     if (!driver) {
-      return res.status(404).json({ message: 'Driver not found or not under your vendor account' })
+      return res.status(404).json({ message: 'Driver not found' })
     }
 
     res.json(serializeDriverForResponse(driver, req))
@@ -1844,18 +1927,10 @@ exports.unblockDriver = async (req, res) => {
 }
 
 // Vendor Drivers Locations
-// Get Single Driver Location (Vendor Only)
+// Get Single Driver Location (vendor can view any driver)
 exports.getDriverLocationById = async (req, res) => {
   try {
-    const vendorId = req.user?.id || req.body.vendorId
     const { driverId } = req.params
-
-    if (!vendorId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Vendor ID is required'
-      })
-    }
 
     if (!driverId) {
       return res.status(400).json({
@@ -1864,16 +1939,14 @@ exports.getDriverLocationById = async (req, res) => {
       })
     }
 
-    // Check driver belongs to this vendor
-    const driver = await Driver.findOne({
-      _id: driverId,
-      vendorId: vendorId
-    }).select('name phone isOnline location')
+    const driver = await Driver.findById(driverId).select(
+      'name phone isOnline location'
+    )
 
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver not found under this vendor'
+        message: 'Driver not found'
       })
     }
 
@@ -1897,17 +1970,10 @@ exports.getDriverLocationById = async (req, res) => {
   }
 }
 
-// Get driver documents (vendor only)
+// Get driver documents (vendor can view any driver)
 exports.getDriverDocuments = async (req, res) => {
   try {
-    const vendorId = req.user?.id || req.body.vendorId
     const { driverId } = req.params
-
-    if (!vendorId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Vendor ID is required' })
-    }
 
     if (!driverId) {
       return res
@@ -1915,13 +1981,11 @@ exports.getDriverDocuments = async (req, res) => {
         .json({ success: false, message: 'Driver ID is required' })
     }
 
-    const driver = await Driver.findOne({ _id: driverId, vendorId }).select(
-      'documents'
-    )
+    const driver = await Driver.findById(driverId).select('documents')
     if (!driver) {
       return res
         .status(404)
-        .json({ success: false, message: 'Driver not found under this vendor' })
+        .json({ success: false, message: 'Driver not found' })
     }
 
     return res
