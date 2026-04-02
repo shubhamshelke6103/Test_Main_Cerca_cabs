@@ -77,6 +77,7 @@ router.patch("/verify-driver", vendorController.verifyDriver);
 router.patch("/reject-driver", vendorController.rejectDriver);
 router.patch("/drivers/:driverId/vehicle/approve", vendorController.approveDriverVehicle);
 router.patch("/drivers/:driverId/vehicle/reject", vendorController.rejectDriverVehicle);
+router.delete("/drivers/:driverId/vehicle", vendorController.deleteVendorDriverVehicle);
 router.patch("/drivers/:driverId/fleet-vehicle", vendorController.assignDriverFleetVehicle);
 
 router.post(

@@ -19,6 +19,7 @@ const {
     updateDriverOnlineStatus,
     logoutDriver,
     updateDriverVehicle,
+    deleteDriverVehicle,
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
@@ -143,6 +144,12 @@ router.get('/live-location/shared/:shareToken', sharedLiveLocationRateLimiter, g
 
 // Route to update driver vehicle information
 router.patch('/:id/vehicle', vehicleDocumentUpload, updateDriverVehicle);
+router.delete(
+    '/:id/vehicle',
+    authenticateDriver,
+    requireOwnDriver,
+    deleteDriverVehicle
+);
 
 // Route to update driver busy status
 router.patch('/:id/busy-status', updateDriverBusyStatus);

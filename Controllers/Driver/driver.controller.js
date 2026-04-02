@@ -150,6 +150,24 @@ const serializeVehicleState = (driver) => ({
     vehicleStatus: resolveVehicleStatus(driver),
 });
 
+const hasDriverVehicleState = (driver) => (
+    Boolean(driver?.vehicleInfo || driver?.pendingVehicleInfo || driver?.assignedFleetVehicleId)
+);
+
+const clearDriverVehicleState = (driver) => {
+    const removed = {
+        approvedVehicle: Boolean(driver.vehicleInfo),
+        pendingVehicle: Boolean(driver.pendingVehicleInfo),
+        assignedFleetVehicle: Boolean(driver.assignedFleetVehicleId),
+    };
+
+    driver.vehicleInfo = null;
+    driver.pendingVehicleInfo = null;
+    driver.assignedFleetVehicleId = null;
+
+    return removed;
+};
+
 const serializeDriverApprovalState = (driver) => ({
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
@@ -1009,6 +1027,39 @@ const updateDriverVehicle = async (req, res) => {
     }
 };
 
+const deleteDriverVehicle = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (driver.vendorId) {
+            return res.status(403).json({
+                message: 'Only the vendor can remove the vehicle for a vendor-registered driver',
+            });
+        }
+
+        if (!hasDriverVehicleState(driver)) {
+            return res.status(400).json({ message: 'No vehicle found for this driver' });
+        }
+
+        const removed = clearDriverVehicleState(driver);
+        await driver.save();
+
+        logger.info(`Driver removed own vehicle: ${driver.email}`);
+        return res.status(200).json({
+            message: 'Driver vehicle removed successfully',
+            removed,
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error deleting driver vehicle:', error);
+        return res.status(500).json({ message: 'Error deleting driver vehicle', error: error.message });
+    }
+};
+
 const approveDriverVehicle = async (req, res) => {
     try {
         const driver = await Driver.findById(req.params.id);
@@ -1603,6 +1654,7 @@ module.exports = {
     updateDriverOnlineStatus,
     logoutDriver,
     updateDriverVehicle,
+    deleteDriverVehicle,
     approveDriverVehicle,
     rejectDriverVehicle,
     getDriverEarnings,

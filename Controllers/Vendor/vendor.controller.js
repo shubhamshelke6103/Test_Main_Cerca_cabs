@@ -367,6 +367,62 @@ const serializeVehicleState = (driver) => ({
   vehicleStatus: resolveDriverVehicleStatus(driver)
 })
 
+const hasDriverVehicleState = driver =>
+  Boolean(driver?.vehicleInfo || driver?.pendingVehicleInfo || driver?.assignedFleetVehicleId)
+
+const toObjectIdString = value => (value ? String(value) : null)
+
+const clearDriverVehicleState = driver => {
+  const removed = {
+    approvedVehicle: Boolean(driver.vehicleInfo),
+    pendingVehicle: Boolean(driver.pendingVehicleInfo),
+    assignedFleetVehicle: Boolean(driver.assignedFleetVehicleId)
+  }
+
+  driver.vehicleInfo = null
+  driver.pendingVehicleInfo = null
+  driver.assignedFleetVehicleId = null
+
+  return removed
+}
+
+const getDriverVehicleOwnershipContext = async driver => {
+  const driverVendorId = toObjectIdString(driver?.vendorId)
+  let fleetVehicleVendorId = null
+
+  if (driver?.assignedFleetVehicleId) {
+    const assignedFleetVehicle = await FleetVehicle.findById(driver.assignedFleetVehicleId)
+      .select('vendorId')
+      .lean()
+    fleetVehicleVendorId = toObjectIdString(assignedFleetVehicle?.vendorId)
+  }
+
+  return {
+    driverVendorId,
+    fleetVehicleVendorId,
+    owningVendorId: fleetVehicleVendorId || driverVendorId,
+    hasVehicleState: hasDriverVehicleState(driver)
+  }
+}
+
+const buildVehicleRemovalRequiredMessage = ({
+  hasVehicleState,
+  owningVendorId,
+  requestingVendorId
+}) => {
+  if (!hasVehicleState) return null
+
+  if (!owningVendorId) {
+    return 'Please ask the driver to remove their self-registered vehicle first.'
+  }
+
+  if (owningVendorId !== requestingVendorId) {
+    return 'Please remove your vehicle from the previous vendor first.'
+  }
+
+  return "Please remove the driver's existing vehicle first."
+}
+
 const buildDriverVehicleInfoFromFleetVehicle = fleetVehicle => {
   if (!fleetVehicle) return null
 
@@ -912,11 +968,32 @@ exports.getVendorDriverById = async (req, res) => {
 // =============================
 exports.assignDriverToVendor = async (req, res) => {
   try {
-    const { driverId, vendorId } = req.body
+    const { driverId, vendorId: requestedVendorId } = req.body
+    const vendorId = req.user.id
+
+    if (requestedVendorId && String(requestedVendorId) !== String(vendorId)) {
+      return res.status(403).json({ message: 'You can assign drivers only to your own vendor account' })
+    }
 
     const driver = await Driver.findById(driverId)
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' })
+    }
+
+    const {
+      driverVendorId,
+      owningVendorId,
+      hasVehicleState
+    } = await getDriverVehicleOwnershipContext(driver)
+
+    const vehicleRemovalMessage = buildVehicleRemovalRequiredMessage({
+      hasVehicleState,
+      owningVendorId,
+      requestingVendorId: String(vendorId)
+    })
+
+    if (vehicleRemovalMessage) {
+      return res.status(400).json({ message: vehicleRemovalMessage })
     }
 
     driver.vendorId = vendorId
@@ -925,9 +1002,17 @@ exports.assignDriverToVendor = async (req, res) => {
     }
     await driver.save()
 
-    await Vendor.findByIdAndUpdate(vendorId, {
-      $inc: { totalDrivers: 1 }
-    })
+    if (driverVendorId && driverVendorId !== String(vendorId)) {
+      await Vendor.findByIdAndUpdate(driverVendorId, {
+        $inc: { totalDrivers: -1 }
+      })
+    }
+
+    if (driverVendorId !== String(vendorId)) {
+      await Vendor.findByIdAndUpdate(vendorId, {
+        $inc: { totalDrivers: 1 }
+      })
+    }
 
     res.json({
       message: 'Driver assigned to vendor successfully',
@@ -952,6 +1037,12 @@ exports.removeDriverFromVendor = async (req, res) => {
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' })
+    }
+
+    if (hasDriverVehicleState(driver)) {
+      return res.status(400).json({
+        message: 'Please remove the driver vehicle first before removing this driver from the vendor'
+      })
     }
 
     driver.vendorId = null
@@ -1130,15 +1221,12 @@ exports.assignDriverFleetVehicle = async (req, res) => {
     const { driverId } = req.params
     const rawId = req.body?.fleetVehicleId
 
-    const driver = await Driver.findOne({
-      _id: driverId,
-      vendorId
-    })
+    const driver = await Driver.findById(driverId)
 
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: 'Driver not found or not under your vendor account'
+        message: 'Driver not found'
       })
     }
 
@@ -1149,7 +1237,20 @@ exports.assignDriverFleetVehicle = async (req, res) => {
       })
     }
 
+    const previousVendorId = toObjectIdString(driver.vendorId)
+    const {
+      owningVendorId,
+      hasVehicleState
+    } = await getDriverVehicleOwnershipContext(driver)
+
     if (rawId === null || rawId === undefined || rawId === '') {
+      if (owningVendorId !== String(vendorId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the original vendor can remove this vehicle assignment'
+        })
+      }
+
       let currentlyAssignedFleetVehicle = null
       if (driver.assignedFleetVehicleId) {
         currentlyAssignedFleetVehicle = await FleetVehicle.findOne({
@@ -1175,6 +1276,19 @@ exports.assignDriverFleetVehicle = async (req, res) => {
       })
     }
 
+    const vehicleRemovalMessage = buildVehicleRemovalRequiredMessage({
+      hasVehicleState,
+      owningVendorId,
+      requestingVendorId: String(vendorId)
+    })
+
+    if (vehicleRemovalMessage) {
+      return res.status(400).json({
+        success: false,
+        message: vehicleRemovalMessage
+      })
+    }
+
     const fv = await FleetVehicle.findOne({
       _id: rawId,
       vendorId
@@ -1187,6 +1301,19 @@ exports.assignDriverFleetVehicle = async (req, res) => {
       })
     }
 
+    if (previousVendorId && previousVendorId !== String(vendorId)) {
+      await Vendor.findByIdAndUpdate(previousVendorId, {
+        $inc: { totalDrivers: -1 }
+      })
+    }
+
+    if (previousVendorId !== String(vendorId)) {
+      await Vendor.findByIdAndUpdate(vendorId, {
+        $inc: { totalDrivers: 1 }
+      })
+    }
+
+    driver.vendorId = vendorId
     driver.assignedFleetVehicleId = fv._id
     driver.vehicleInfo = buildDriverVehicleInfoFromFleetVehicle(fv)
     await driver.save()
@@ -1204,6 +1331,73 @@ exports.assignDriverFleetVehicle = async (req, res) => {
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+exports.deleteVendorDriverVehicle = async (req, res) => {
+  try {
+    const vendorId = String(req.user.id)
+    const { driverId } = req.params
+
+    const driver = await Driver.findById(driverId)
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      })
+    }
+
+    const {
+      owningVendorId,
+      hasVehicleState
+    } = await getDriverVehicleOwnershipContext(driver)
+
+    if (!hasVehicleState) {
+      return res.status(400).json({
+        success: false,
+        message: 'No vehicle found for this driver'
+      })
+    }
+
+    if (!owningVendorId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Self-registered drivers must remove their own vehicle'
+      })
+    }
+
+    if (owningVendorId !== vendorId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the original vendor can remove this vehicle'
+      })
+    }
+
+    const removed = clearDriverVehicleState(driver)
+    await driver.save()
+
+    logger.info('Vendor removed driver vehicle', {
+      vendorId,
+      driverId: driver._id.toString(),
+      removed
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Driver vehicle removed successfully',
+      removed,
+      driver: {
+        driverId: driver._id,
+        vendorId: driver.vendorId,
+        ...serializeVehicleState(driver)
+      }
+    })
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    })
   }
 }
 
