@@ -109,10 +109,87 @@ const VEHICLE_DOCUMENT_FIELDS = [
     { field: 'vehiclePuc', type: 'PUC' },
 ];
 
+const DOCUMENT_TYPE_LABELS = {
+    AADHAAR_CARD: 'Aadhaar Card',
+    PAN_CARD: 'PAN Card',
+    DRIVING_LICENSE: 'Driving License',
+    VEHICLE_RC: 'Vehicle RC',
+    RC: 'Vehicle RC',
+    INSURANCE: 'Insurance',
+    PERMIT: 'Permit',
+    PUC: 'PUC',
+    GST_CERTIFICATE: 'GST Certificate',
+    BUSINESS_LICENSE: 'Business License',
+    PASSPORT: 'Passport',
+    VOTER_ID: 'Voter ID',
+};
+
 const buildUploadedFileUrl = (req, file) => {
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const normalizedPath = String(file.path || '').replace(/\\/g, '/');
     return `${baseUrl}/${normalizedPath}`;
+};
+
+const normalizeDocumentTypeKey = (value) => String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+
+const inferDocumentTypeFromName = (value) => {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized.includes('aadhaar') || normalized.includes('aadhar')) return 'AADHAAR_CARD';
+    if (normalized.includes('pan')) return 'PAN_CARD';
+    if (normalized.includes('license') || normalized.includes('licence') || normalized.includes('dl')) return 'DRIVING_LICENSE';
+    if (normalized.includes('gst')) return 'GST_CERTIFICATE';
+    if (normalized.includes('business')) return 'BUSINESS_LICENSE';
+    if (normalized.includes('passport')) return 'PASSPORT';
+    if (normalized.includes('voter')) return 'VOTER_ID';
+    return null;
+};
+
+const getDocumentDisplayName = (documentType, url, fallbackIndex = 0) => {
+    const normalizedType = normalizeDocumentTypeKey(documentType);
+    if (normalizedType && DOCUMENT_TYPE_LABELS[normalizedType]) {
+        return DOCUMENT_TYPE_LABELS[normalizedType];
+    }
+
+    const inferredType = inferDocumentTypeFromName(documentType || url);
+    if (inferredType && DOCUMENT_TYPE_LABELS[inferredType]) {
+        return DOCUMENT_TYPE_LABELS[inferredType];
+    }
+
+    return `Document ${fallbackIndex + 1}`;
+};
+
+const buildUploadedDocumentEntry = (req, file, explicitType = null) => {
+    const inferredType = explicitType || inferDocumentTypeFromName(file?.originalname) || 'DOCUMENT';
+    return {
+        documentType: normalizeDocumentTypeKey(inferredType),
+        documentUrl: buildUploadedFileUrl(req, file),
+    };
+};
+
+const normalizeStoredDocumentEntry = (req, document, index = 0) => {
+    const rawDocument = typeof document === 'string'
+        ? { documentType: inferDocumentTypeFromName(document), documentUrl: document }
+        : document || {};
+    const rawUrl = String(rawDocument.documentUrl || rawDocument.url || '').trim();
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    let documentUrl = rawUrl;
+
+    if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+        const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+        documentUrl = `${baseUrl}${path}`;
+    }
+
+    const documentType = normalizeDocumentTypeKey(rawDocument.documentType || inferDocumentTypeFromName(rawUrl));
+
+    return {
+        documentType: documentType || null,
+        documentName: getDocumentDisplayName(documentType, rawUrl, index),
+        documentUrl,
+    };
 };
 
 const collectVehicleDocuments = (req) => {
@@ -144,25 +221,142 @@ const resolveVehicleStatus = (driver) => (
     (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
 );
 
+const toPlainVehicleRecord = (vehicleRecord) => (
+    vehicleRecord?.toObject ? vehicleRecord.toObject() : vehicleRecord
+);
+
+const getOwnedVehicleRecords = (driver) => (
+    Array.isArray(driver?.vehicles) ? driver.vehicles : []
+);
+
+const getLatestOwnedVehicleRecord = (driver, predicate) => {
+    const vehicles = getOwnedVehicleRecords(driver);
+    for (let index = vehicles.length - 1; index >= 0; index -= 1) {
+        if (predicate(vehicles[index])) {
+            return vehicles[index];
+        }
+    }
+    return null;
+};
+
+const getPendingOwnedVehicleRecord = (driver) => {
+    const sourceVehicleId = driver?.pendingVehicleInfo?.sourceVehicleId
+        ? String(driver.pendingVehicleInfo.sourceVehicleId)
+        : null;
+
+    if (sourceVehicleId) {
+        const matchingVehicle = getOwnedVehicleRecords(driver).find(
+            vehicle => String(vehicle._id) === sourceVehicleId
+        );
+        if (matchingVehicle) {
+            return matchingVehicle;
+        }
+    }
+
+    return getLatestOwnedVehicleRecord(
+        driver,
+        vehicle => vehicle.approvalStatus === 'UNDER_APPROVAL' || vehicle.approvalStatus === 'REJECTED'
+    );
+};
+
+const getActiveOwnedVehicleRecord = (driver) => {
+    const activeVehicle = getLatestOwnedVehicleRecord(
+        driver,
+        vehicle => vehicle.approvalStatus === 'APPROVED' && vehicle.isActive
+    );
+
+    if (activeVehicle) {
+        return activeVehicle;
+    }
+
+    return getLatestOwnedVehicleRecord(
+        driver,
+        vehicle => vehicle.approvalStatus === 'APPROVED'
+    );
+};
+
+const buildLegacyVehicleInfoFromRecord = (vehicleRecord) => {
+    if (!vehicleRecord) return null;
+
+    return {
+        make: vehicleRecord.make,
+        model: vehicleRecord.model,
+        year: vehicleRecord.year,
+        color: vehicleRecord.color,
+        licensePlate: vehicleRecord.licensePlate,
+        vehicleType: vehicleRecord.vehicleType,
+    };
+};
+
+const buildLegacyPendingVehicleFromRecord = (vehicleRecord) => {
+    if (!vehicleRecord) return null;
+
+    return {
+        ...toPlainVehicleRecord(vehicleRecord),
+        sourceVehicleId: vehicleRecord._id,
+    };
+};
+
+const syncLegacyVehicleState = (driver) => {
+    const activeVehicle = getActiveOwnedVehicleRecord(driver);
+    const pendingVehicle = getPendingOwnedVehicleRecord(driver);
+
+    if (!driver.assignedFleetVehicleId) {
+        driver.vehicleInfo = buildLegacyVehicleInfoFromRecord(activeVehicle);
+    }
+    driver.pendingVehicleInfo = buildLegacyPendingVehicleFromRecord(pendingVehicle);
+
+    return driver;
+};
+
+const serializeOwnedVehicles = (driver) => (
+    getOwnedVehicleRecords(driver).map(vehicle => toPlainVehicleRecord(vehicle))
+);
+
 const serializeVehicleState = (driver) => ({
     approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
     pendingVehicle: driver.pendingVehicleInfo || null,
     vehicleStatus: resolveVehicleStatus(driver),
+    vehicles: serializeOwnedVehicles(driver),
 });
 
 const hasDriverVehicleState = (driver) => (
-    Boolean(driver?.vehicleInfo || driver?.pendingVehicleInfo || driver?.assignedFleetVehicleId)
+    Boolean(
+        driver?.vehicleInfo ||
+        driver?.pendingVehicleInfo ||
+        driver?.assignedFleetVehicleId ||
+        (Array.isArray(driver?.vehicles) && driver.vehicles.length > 0)
+    )
 );
 
 const clearDriverVehicleState = (driver) => {
+    const vehicles = getOwnedVehicleRecords(driver);
+    const pendingVehicle = getPendingOwnedVehicleRecord(driver);
+    const activeVehicle = getActiveOwnedVehicleRecord(driver);
+    const targetVehicle = pendingVehicle || activeVehicle;
     const removed = {
-        approvedVehicle: Boolean(driver.vehicleInfo),
-        pendingVehicle: Boolean(driver.pendingVehicleInfo),
+        approvedVehicle: Boolean(activeVehicle || driver.vehicleInfo),
+        pendingVehicle: Boolean(pendingVehicle || driver.pendingVehicleInfo),
         assignedFleetVehicle: Boolean(driver.assignedFleetVehicleId),
     };
 
-    driver.vehicleInfo = null;
-    driver.pendingVehicleInfo = null;
+    if (targetVehicle) {
+        driver.vehicles = vehicles.filter(
+            vehicle => String(vehicle._id) !== String(targetVehicle._id)
+        );
+    }
+
+    const fallbackApprovedVehicle = getLatestOwnedVehicleRecord(
+        driver,
+        vehicle => vehicle.approvalStatus === 'APPROVED'
+    );
+    getOwnedVehicleRecords(driver).forEach((vehicle) => {
+        vehicle.isActive =
+            Boolean(fallbackApprovedVehicle) &&
+            String(vehicle._id) === String(fallbackApprovedVehicle._id);
+    });
+
+    syncLegacyVehicleState(driver);
     driver.assignedFleetVehicleId = null;
 
     return removed;
@@ -175,51 +369,58 @@ const serializeDriverApprovalState = (driver) => ({
 });
 
 const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
-    if (!driver.pendingVehicleInfo) {
+    const pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
+    if (!pendingVehicleRecord) {
         throw new Error('No pending vehicle found');
     }
 
     const approvedVehicle = {
-        make: driver.pendingVehicleInfo.make,
-        model: driver.pendingVehicleInfo.model,
-        year: driver.pendingVehicleInfo.year,
-        color: driver.pendingVehicleInfo.color,
-        licensePlate: driver.pendingVehicleInfo.licensePlate,
-        vehicleType: driver.pendingVehicleInfo.vehicleType,
+        make: pendingVehicleRecord.make,
+        model: pendingVehicleRecord.model,
+        year: pendingVehicleRecord.year,
+        color: pendingVehicleRecord.color,
+        licensePlate: pendingVehicleRecord.licensePlate,
+        vehicleType: pendingVehicleRecord.vehicleType,
     };
 
-    driver.vehicleInfo = approvedVehicle;
-    driver.pendingVehicleInfo = {
-        ...driver.pendingVehicleInfo.toObject(),
-        approvalStatus: 'APPROVED',
-        approvedAt: new Date(),
-        rejectedAt: null,
-        rejectionReason: null,
-        approvedBy,
-    };
+    getOwnedVehicleRecords(driver).forEach((vehicle) => {
+        if (vehicle.approvalStatus === 'APPROVED') {
+            vehicle.isActive = false;
+        }
+    });
 
-    await driver.save();
+    pendingVehicleRecord.approvalStatus = 'APPROVED';
+    pendingVehicleRecord.approvedAt = new Date();
+    pendingVehicleRecord.rejectedAt = null;
+    pendingVehicleRecord.rejectionReason = null;
+    pendingVehicleRecord.allowDocumentResubmit = false;
+    pendingVehicleRecord.approvedBy = approvedBy;
+    pendingVehicleRecord.isActive = true;
 
+    if (!driver.assignedFleetVehicleId) {
+        driver.vehicleInfo = approvedVehicle;
+    }
     driver.pendingVehicleInfo = null;
+    syncLegacyVehicleState(driver);
     await driver.save();
 
     return driver;
 };
 
 const rejectPendingVehicleForDriver = async (driver, reason, allowDocumentResubmit = false) => {
-    if (!driver.pendingVehicleInfo) {
+    const pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
+    if (!pendingVehicleRecord) {
         throw new Error('No pending vehicle found');
     }
 
-    driver.pendingVehicleInfo = {
-        ...driver.pendingVehicleInfo.toObject(),
-        approvalStatus: 'REJECTED',
-        rejectedAt: new Date(),
-        approvedAt: null,
-        rejectionReason: reason,
-        allowDocumentResubmit: Boolean(allowDocumentResubmit),
-    };
+    pendingVehicleRecord.approvalStatus = 'REJECTED';
+    pendingVehicleRecord.rejectedAt = new Date();
+    pendingVehicleRecord.approvedAt = null;
+    pendingVehicleRecord.rejectionReason = reason;
+    pendingVehicleRecord.allowDocumentResubmit = Boolean(allowDocumentResubmit);
+    pendingVehicleRecord.isActive = false;
 
+    syncLegacyVehicleState(driver);
     await driver.save();
     return driver;
 };
@@ -277,10 +478,15 @@ const addDriverDocuments = async (req, res) => {
         }
 
         // Generate complete URLs for the uploaded documents
-        const documentPaths = req.files.map((file) => {
-            const baseUrl = `${req.protocol}://${req.get('host')}`;
-            return `${baseUrl}/${file.path}`;
-        });
+        const requestedDocumentTypes = Array.isArray(req.body?.documentTypes)
+            ? req.body.documentTypes
+            : typeof req.body?.documentTypes === 'string'
+                ? req.body.documentTypes.split(',').map((item) => item.trim()).filter(Boolean)
+                : [];
+
+        const documentEntries = req.files.map((file, index) =>
+            buildUploadedDocumentEntry(req, file, requestedDocumentTypes[index] || req.body?.documentType)
+        );
 
         // Find the driver and update the documents array
         const driver = await Driver.findById(driverId);
@@ -294,16 +500,21 @@ const addDriverDocuments = async (req, res) => {
 
         if (shouldReplaceExistingDocuments) {
             deleteDriverDocuments(driver.documents || []);
-            driver.documents = documentPaths;
+            driver.documents = documentEntries;
         } else {
-            driver.documents.push(...documentPaths);
+            driver.documents.push(...documentEntries);
         }
 
         driver.rejectionReason = null;
         await driver.save();
 
         logger.info(`Documents added to driver: ${driver.email}`);
-        res.status(200).json({ message: 'Documents added successfully', documents: driver.documents });
+        res.status(200).json({
+            message: 'Documents added successfully',
+            documents: (driver.documents || []).map((document, index) =>
+                normalizeStoredDocumentEntry(req, document, index)
+            )
+        });
     } catch (error) {
         logger.error('Error adding documents to driver:', error);
         res.status(500).json({ message: 'Error adding documents to driver', error });
@@ -509,18 +720,28 @@ const updateDriverDocuments = async (req, res) => {
         deleteDriverDocuments(driver.documents || []);
 
         // Generate complete URLs for the new documents
-        const documentPaths = req.files.map((file) => {
-            const baseUrl = `${req.protocol}://${req.get('host')}`;
-            return `${baseUrl}/${file.path}`;
-        });
+        const requestedDocumentTypes = Array.isArray(req.body?.documentTypes)
+            ? req.body.documentTypes
+            : typeof req.body?.documentTypes === 'string'
+                ? req.body.documentTypes.split(',').map((item) => item.trim()).filter(Boolean)
+                : [];
+
+        const documentEntries = req.files.map((file, index) =>
+            buildUploadedDocumentEntry(req, file, requestedDocumentTypes[index] || req.body?.documentType)
+        );
 
         // Update the driver's documents array
-        driver.documents = documentPaths;
+        driver.documents = documentEntries;
         driver.rejectionReason = null;
         await driver.save();
 
         logger.info(`Driver documents updated successfully: ${driver.email}`);
-        res.status(200).json({ message: 'Driver documents updated successfully', documents: driver.documents });
+        res.status(200).json({
+            message: 'Driver documents updated successfully',
+            documents: (driver.documents || []).map((document, index) =>
+                normalizeStoredDocumentEntry(req, document, index)
+            )
+        });
     } catch (error) {
         logger.error('Error updating driver documents:', error);
         res.status(500).json({ message: 'Error updating driver documents', error });
@@ -978,24 +1199,18 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        const existingPending = driver.pendingVehicleInfo;
+        const existingPending = getLatestOwnedVehicleRecord(
+            driver,
+            vehicle => vehicle.approvalStatus === 'UNDER_APPROVAL'
+        );
         if (existingPending) {
-            if (existingPending.approvalStatus === 'UNDER_APPROVAL') {
-                return res.status(400).json({
-                    message: 'A vehicle submission is already pending approval',
-                });
-            }
-            if (
-                existingPending.approvalStatus === 'REJECTED' &&
-                !existingPending.allowDocumentResubmit
-            ) {
-                return res.status(400).json({
-                    message: 'Vehicle was rejected. Contact your vendor or support if you need to resubmit.',
-                });
-            }
+            return res.status(400).json({
+                message: 'A vehicle submission is already pending approval',
+            });
         }
 
-        driver.pendingVehicleInfo = {
+        driver.vehicles = getOwnedVehicleRecords(driver);
+        driver.vehicles.push({
             make,
             model,
             year: Number(year),
@@ -1011,6 +1226,14 @@ const updateDriverVehicle = async (req, res) => {
             rejectionReason: null,
             allowDocumentResubmit: false,
             vendorPreApprovedAt: null,
+            approvedBy: null,
+            isActive: false,
+        });
+
+        const createdVehicle = driver.vehicles[driver.vehicles.length - 1];
+        driver.pendingVehicleInfo = {
+            ...toPlainVehicleRecord(createdVehicle),
+            sourceVehicleId: createdVehicle._id,
         };
 
         await driver.save();
@@ -1399,7 +1622,11 @@ const getDriverDocuments = async (req, res) => {
         if (!driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
-        res.status(200).json({ documents: driver.documents || [] });
+        res.status(200).json({
+            documents: (driver.documents || []).map((document, index) =>
+                normalizeStoredDocumentEntry(req, document, index)
+            )
+        });
     } catch (error) {
         logger.error('Error fetching driver documents:', error);
         res.status(500).json({ message: 'Error fetching driver documents', error });

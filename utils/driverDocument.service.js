@@ -1,12 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 
-const resolveStoredDocumentPath = (documentUrl) => {
-  if (typeof documentUrl !== 'string' || !documentUrl.trim()) {
+const resolveStoredDocumentPath = (documentInput) => {
+  const rawValue =
+    typeof documentInput === 'string'
+      ? documentInput
+      : documentInput?.documentUrl || documentInput?.url || '';
+
+  if (typeof rawValue !== 'string' || !rawValue.trim()) {
     return null;
   }
 
-  const trimmedDocumentUrl = documentUrl.trim();
+  const trimmedDocumentUrl = rawValue.trim();
 
   if (/^https?:\/\//i.test(trimmedDocumentUrl)) {
     try {

@@ -64,10 +64,178 @@ const parseBoolean = (value) => {
   return undefined;
 };
 
+const DOCUMENT_TYPE_LABELS = {
+  AADHAAR_CARD: 'Aadhaar Card',
+  PAN_CARD: 'PAN Card',
+  DRIVING_LICENSE: 'Driving License',
+  GST_CERTIFICATE: 'GST Certificate',
+  BUSINESS_LICENSE: 'Business License',
+  PASSPORT: 'Passport',
+  VOTER_ID: 'Voter ID',
+  DOCUMENT: 'Document',
+};
+
+const normalizeDocumentTypeKey = (value) => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .toUpperCase();
+
+const inferDocumentTypeFromName = (value) => {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized.includes('aadhaar') || normalized.includes('aadhar')) return 'AADHAAR_CARD';
+  if (normalized.includes('pan')) return 'PAN_CARD';
+  if (normalized.includes('license') || normalized.includes('licence') || normalized.includes('dl')) return 'DRIVING_LICENSE';
+  if (normalized.includes('gst')) return 'GST_CERTIFICATE';
+  if (normalized.includes('business')) return 'BUSINESS_LICENSE';
+  if (normalized.includes('passport')) return 'PASSPORT';
+  if (normalized.includes('voter')) return 'VOTER_ID';
+  return null;
+};
+
+const getDocumentDisplayName = (documentType, url, fallbackIndex = 0) => {
+  const normalizedType = normalizeDocumentTypeKey(documentType);
+  if (normalizedType && DOCUMENT_TYPE_LABELS[normalizedType]) {
+    return DOCUMENT_TYPE_LABELS[normalizedType];
+  }
+
+  const inferredType = inferDocumentTypeFromName(documentType || url);
+  if (inferredType && DOCUMENT_TYPE_LABELS[inferredType]) {
+    return DOCUMENT_TYPE_LABELS[inferredType];
+  }
+
+  return `Document ${fallbackIndex + 1}`;
+};
+
+const normalizeStoredDocumentEntry = (req, document, index = 0) => {
+  const rawDocument = typeof document === 'string'
+    ? { documentType: inferDocumentTypeFromName(document), documentUrl: document }
+    : document || {};
+  const rawUrl = String(rawDocument.documentUrl || rawDocument.url || '').trim();
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  let documentUrl = rawUrl;
+
+  if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+    const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+    documentUrl = `${baseUrl}${path}`;
+  }
+
+  const documentType = normalizeDocumentTypeKey(
+    rawDocument.documentType || inferDocumentTypeFromName(rawUrl)
+  );
+
+  return {
+    documentType: documentType || null,
+    documentName: getDocumentDisplayName(documentType, rawUrl, index),
+    documentUrl,
+  };
+};
+
 const resolveVehicleStatus = (driver) => (
   driver.pendingVehicleInfo?.approvalStatus ||
   (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
 );
+
+const buildVehicleSummaryKey = (snapshot) => {
+  if (!snapshot) return 'UNKNOWN_VEHICLE';
+  if (snapshot.licensePlate) return `LICENSE:${String(snapshot.licensePlate).toUpperCase()}`;
+  const fallbackKeyParts = [
+    snapshot.make || 'UNKNOWN',
+    snapshot.model || 'UNKNOWN',
+    snapshot.year || 'NA',
+    snapshot.vehicleType || 'UNKNOWN',
+  ];
+  return `VEHICLE:${fallbackKeyParts.join('|').toUpperCase()}`;
+};
+
+const buildAdminVehicleSnapshotFallback = (driver) => {
+  const vehicles = Array.isArray(driver?.vehicles) ? driver.vehicles : [];
+  const activeVehicle =
+    vehicles.find((vehicle) => vehicle.approvalStatus === 'APPROVED' && vehicle.isActive) ||
+    [...vehicles].reverse().find((vehicle) => vehicle.approvalStatus === 'APPROVED');
+
+  const vehicleInfo = activeVehicle || driver?.vehicleInfo || null;
+  if (vehicleInfo) {
+    return {
+      licensePlate: vehicleInfo.licensePlate || null,
+      make: vehicleInfo.make || null,
+      model: vehicleInfo.model || null,
+      year: vehicleInfo.year || null,
+      color: vehicleInfo.color || null,
+      vehicleType: vehicleInfo.vehicleType || null,
+      source: driver?.assignedFleetVehicleId ? 'FLEET_ASSIGNED' : 'SELF_OWNED',
+    };
+  }
+
+  return {
+    licensePlate: null,
+    make: null,
+    model: null,
+    year: null,
+    color: null,
+    vehicleType: null,
+    source: 'UNKNOWN',
+  };
+};
+
+const buildAdminDriverRevenueMetrics = ({ driver, earnings = [] }) => {
+  const vehicleMap = new Map();
+
+  for (const earning of earnings) {
+    const snapshot = earning.vehicleSnapshot?.licensePlate ||
+      earning.vehicleSnapshot?.make ||
+      earning.vehicleSnapshot?.model
+      ? earning.vehicleSnapshot
+      : buildAdminVehicleSnapshotFallback(driver);
+
+    const key = buildVehicleSummaryKey(snapshot);
+    if (!vehicleMap.has(key)) {
+      vehicleMap.set(key, {
+        vehicleKey: key,
+        licensePlate: snapshot.licensePlate || null,
+        make: snapshot.make || null,
+        model: snapshot.model || null,
+        year: snapshot.year || null,
+        color: snapshot.color || null,
+        vehicleType: snapshot.vehicleType || null,
+        vehicleSource: snapshot.source || 'UNKNOWN',
+        rideCount: 0,
+        grossRevenue: 0,
+        driverEarning: 0,
+        vehicleProfit: 0,
+      });
+    }
+
+    const current = vehicleMap.get(key);
+    current.rideCount += 1;
+    current.grossRevenue += Number(earning.grossFare) || 0;
+    current.driverEarning += Number(earning.driverEarning) || 0;
+    current.vehicleProfit += Number(earning.platformFee) || 0;
+  }
+
+  const totalDriverEarnings = earnings.reduce(
+    (sum, earning) => sum + (Number(earning.driverEarning) || 0),
+    0
+  );
+  const totalVehicleProfit = earnings.reduce(
+    (sum, earning) => sum + (Number(earning.platformFee) || 0),
+    0
+  );
+
+  return {
+    earningsSummary: {
+      totalDriverEarnings: Math.round(totalDriverEarnings * 100) / 100,
+      totalVehicleProfit: Math.round(totalVehicleProfit * 100) / 100,
+      totalRides: earnings.length,
+    },
+    vehicleProfitBreakdown: Array.from(vehicleMap.values()).map((item) => ({
+      ...item,
+      grossRevenue: Math.round(item.grossRevenue * 100) / 100,
+      driverEarning: Math.round(item.driverEarning * 100) / 100,
+      vehicleProfit: Math.round(item.vehicleProfit * 100) / 100,
+    })),
+  };
+};
 
 const serializeDriverForResponse = (driver, req) => {
   const serializedDriver = driver.toObject();
@@ -75,6 +243,9 @@ const serializeDriverForResponse = (driver, req) => {
   return {
     ...serializedDriver,
     pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
+    vehicles: Array.isArray(serializedDriver.vehicles)
+      ? serializedDriver.vehicles.map((vehicle) => normalizeVehicleDocuments(vehicle, req))
+      : [],
     vehicleStatus: resolveVehicleStatus(driver),
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
@@ -198,24 +369,31 @@ const listDrivers = async (req, res) => {
     ]);
 
     const driverIds = drivers.map((driver) => driver._id);
-    const earningsSummary = await AdminEarnings.aggregate([
-      { $match: { driverId: { $in: driverIds } } },
-      {
-        $group: {
-          _id: '$driverId',
-          totalEarnings: { $sum: '$driverEarning' }
-        }
-      }
-    ]);
+    const earnings = driverIds.length
+      ? await AdminEarnings.find({ driverId: { $in: driverIds } })
+          .select('driverId grossFare platformFee driverEarning vehicleSnapshot')
+          .lean()
+      : [];
 
-    const earningsMap = earningsSummary.reduce((acc, item) => {
-      acc[item._id.toString()] = item.totalEarnings || 0;
+    const earningsMap = earnings.reduce((acc, item) => {
+      const key = item.driverId.toString();
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(item);
       return acc;
     }, {});
 
     const driversWithEarnings = drivers.map((driver) => ({
       ...serializeDriverForResponse(driver, req),
-      totalEarnings: Math.round((earningsMap[driver._id.toString()] || 0) * 100) / 100,
+      totalEarnings: Math.round(
+        (earningsMap[driver._id.toString()] || []).reduce(
+          (sum, earning) => sum + (Number(earning.driverEarning) || 0),
+          0
+        ) * 100
+      ) / 100,
+      ...buildAdminDriverRevenueMetrics({
+        driver,
+        earnings: earningsMap[driver._id.toString()] || [],
+      }),
     }));
 
     res.status(200).json({
@@ -242,13 +420,19 @@ const getDriverDetails = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    const [rides, payouts] = await Promise.all([
+    const [rides, payouts, earnings] = await Promise.all([
       Ride.find({ driver: id }).sort({ createdAt: -1 }).limit(20),
       Payout.find({ driver: id }).sort({ requestedAt: -1 }).limit(20),
+      AdminEarnings.find({ driverId: id })
+        .select('driverId grossFare platformFee driverEarning vehicleSnapshot')
+        .lean(),
     ]);
 
     res.status(200).json({
-      driver: serializeDriverForResponse(driver, req),
+      driver: {
+        ...serializeDriverForResponse(driver, req),
+        ...buildAdminDriverRevenueMetrics({ driver, earnings }),
+      },
       rides,
       payouts,
     });
@@ -399,14 +583,9 @@ const getDriverDocuments = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' });
     }
 
-    const raw = driver.documents || [];
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
-    const documents = raw.map((doc) => {
-      if (typeof doc !== 'string') return doc;
-      if (/^https?:\/\//i.test(doc)) return doc;
-      const path = doc.startsWith('/') ? doc : `/${doc}`;
-      return `${baseUrl}${path}`;
-    });
+    const documents = (driver.documents || []).map((document, index) =>
+      normalizeStoredDocumentEntry(req, document, index)
+    );
 
     res.status(200).json({ documents });
   } catch (error) {

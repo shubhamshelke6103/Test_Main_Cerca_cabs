@@ -38,6 +38,37 @@ const adminEarningsSchema = new mongoose.Schema({
         required: true,
         index: true,
     },
+    vehicleSnapshot: {
+        licensePlate: {
+            type: String,
+            default: null,
+        },
+        make: {
+            type: String,
+            default: null,
+        },
+        model: {
+            type: String,
+            default: null,
+        },
+        year: {
+            type: Number,
+            default: null,
+        },
+        color: {
+            type: String,
+            default: null,
+        },
+        vehicleType: {
+            type: String,
+            default: null,
+        },
+        source: {
+            type: String,
+            enum: ['SELF_OWNED', 'FLEET_ASSIGNED', 'UNKNOWN'],
+            default: 'UNKNOWN',
+        },
+    },
     paymentStatus: {
         type: String,
         enum: ['pending', 'completed', 'failed', 'refunded'],

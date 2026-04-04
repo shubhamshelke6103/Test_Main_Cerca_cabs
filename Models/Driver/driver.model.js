@@ -34,6 +34,10 @@ const vehicleDocumentSchema = new mongoose.Schema(
 const pendingVehicleSchema = new mongoose.Schema(
   {
     ...vehicleDetailsSchema.obj,
+    sourceVehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null
+    },
     documents: {
       type: [vehicleDocumentSchema],
       default: []
@@ -74,6 +78,75 @@ const pendingVehicleSchema = new mongoose.Schema(
     }
   },
   { _id: false }
+)
+
+const uploadedDocumentSchema = new mongoose.Schema(
+  {
+    documentType: {
+      type: String,
+      trim: true,
+      default: null
+    },
+    documentUrl: {
+      type: String,
+      required: true
+    }
+  },
+  { _id: false }
+)
+
+const driverVehicleSchema = new mongoose.Schema(
+  {
+    ...vehicleDetailsSchema.obj,
+    documents: {
+      type: [vehicleDocumentSchema],
+      default: []
+    },
+    approvalStatus: {
+      type: String,
+      enum: ['UNDER_APPROVAL', 'APPROVED', 'REJECTED'],
+      default: 'UNDER_APPROVAL'
+    },
+    approvalRoutedTo: {
+      type: String,
+      enum: ['ADMIN', 'VENDOR', null],
+      default: null
+    },
+    submittedAt: {
+      type: Date,
+      default: Date.now
+    },
+    approvedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
+    rejectionReason: {
+      type: String,
+      default: null
+    },
+    allowDocumentResubmit: {
+      type: Boolean,
+      default: false
+    },
+    vendorPreApprovedAt: {
+      type: Date,
+      default: null
+    },
+    approvedBy: {
+      type: String,
+      enum: ['ADMIN', 'VENDOR', null],
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: false
+    }
+  },
+  { _id: true }
 )
 
 const driverApprovalWorkflowSchema = new mongoose.Schema(
@@ -220,6 +293,10 @@ const driverSchema = new mongoose.Schema({
     type: pendingVehicleSchema,
     default: null
   },
+  vehicles: {
+    type: [driverVehicleSchema],
+    default: []
+  },
   approvalWorkflow: {
     type: driverApprovalWorkflowSchema,
     default: null
@@ -318,7 +395,8 @@ const driverSchema = new mongoose.Schema({
   },
   lastSeen: Date,
   documents: {
-    type: [String], // Array of document URLs or file paths
+    type: [uploadedDocumentSchema],
+    default: [],
     required: true
   },
   complianceDocuments: [

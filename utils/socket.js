@@ -8,6 +8,7 @@ const User = require('../Models/User/user.model')
 const Ride = require('../Models/Driver/ride.model')
 const Message = require('../Models/Driver/message.model')
 const AdminEarnings = require('../Models/Admin/adminEarnings.model')
+const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
 const Settings = require('../Models/Admin/settings.modal')
 const { validateShareToken } = require('./shareToken.service')
 // const rideBookingQueue = require('../src/queues/rideBooking.queue')
@@ -4109,6 +4110,77 @@ function getSocketIO () {
 }
 
 // Store ride earnings for admin analytics (non-blocking)
+async function getVehicleSnapshotForEarnings (driverId) {
+  if (!driverId) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    }
+  }
+
+  const driver = await Driver.findById(driverId)
+    .select('vehicleInfo assignedFleetVehicleId')
+    .lean()
+
+  if (!driver) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    }
+  }
+
+  if (driver.assignedFleetVehicleId) {
+    const fleetVehicle = await FleetVehicle.findById(driver.assignedFleetVehicleId)
+      .select('licensePlate make model year color vehicleType')
+      .lean()
+
+    if (fleetVehicle) {
+      return {
+        licensePlate: fleetVehicle.licensePlate || null,
+        make: fleetVehicle.make || null,
+        model: fleetVehicle.model || null,
+        year: fleetVehicle.year || null,
+        color: fleetVehicle.color || null,
+        vehicleType: fleetVehicle.vehicleType || null,
+        source: 'FLEET_ASSIGNED'
+      }
+    }
+  }
+
+  const vehicleInfo = driver.vehicleInfo || null
+  if (vehicleInfo) {
+    return {
+      licensePlate: vehicleInfo.licensePlate || null,
+      make: vehicleInfo.make || null,
+      model: vehicleInfo.model || null,
+      year: vehicleInfo.year || null,
+      color: vehicleInfo.color || null,
+      vehicleType: vehicleInfo.vehicleType || null,
+      source: 'SELF_OWNED'
+    }
+  }
+
+  return {
+    licensePlate: null,
+    make: null,
+    model: null,
+    year: null,
+    color: null,
+    vehicleType: null,
+    source: 'UNKNOWN'
+  }
+}
+
 async function storeRideEarnings (ride, retryCount = 0) {
   const maxRetries = 3
   const retryDelay = 1000 // 1 second
@@ -4311,6 +4383,8 @@ async function storeRideEarnings (ride, retryCount = 0) {
     // TRANSACTION SAFETY - Store earnings with validation
     // ============================
     // Use findOneAndUpdate with upsert to prevent duplicates in multi-instance environment
+    const vehicleSnapshot = await getVehicleSnapshotForEarnings(driverId)
+
     const earnings = await AdminEarnings.findOneAndUpdate(
       { rideId: rideId }, // Query condition
       {
@@ -4321,6 +4395,7 @@ async function storeRideEarnings (ride, retryCount = 0) {
         platformFee: roundedPlatformFee,
         driverEarning: roundedDriverEarning,
         rideDate: ride.actualEndTime || ride.updatedAt || new Date(),
+        vehicleSnapshot,
         paymentStatus: 'pending' // Always pending by default - admin controls completion
       },
       {

@@ -7,6 +7,73 @@ const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const ADMIN_VENDOR_FILTER_VALUES = ["ALL", "VERIFIED", "PENDING", "REJECTED"];
 
+const DOCUMENT_TYPE_LABELS = {
+  AADHAAR_CARD: 'Aadhaar Card',
+  PAN_CARD: 'PAN Card',
+  DRIVING_LICENSE: 'Driving License',
+  GST_CERTIFICATE: 'GST Certificate',
+  BUSINESS_LICENSE: 'Business License',
+  PASSPORT: 'Passport',
+  VOTER_ID: 'Voter ID',
+  DOCUMENT: 'Document'
+};
+
+const normalizeDocumentTypeKey = (value) => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .toUpperCase();
+
+const inferDocumentTypeFromName = (value) => {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized.includes('aadhaar') || normalized.includes('aadhar')) return 'AADHAAR_CARD';
+  if (normalized.includes('pan')) return 'PAN_CARD';
+  if (normalized.includes('license') || normalized.includes('licence') || normalized.includes('dl')) return 'DRIVING_LICENSE';
+  if (normalized.includes('gst')) return 'GST_CERTIFICATE';
+  if (normalized.includes('business')) return 'BUSINESS_LICENSE';
+  if (normalized.includes('passport')) return 'PASSPORT';
+  if (normalized.includes('voter')) return 'VOTER_ID';
+  return null;
+};
+
+const getDocumentDisplayName = (documentType, url, fallbackIndex = 0) => {
+  const normalizedType = normalizeDocumentTypeKey(documentType);
+  if (normalizedType && DOCUMENT_TYPE_LABELS[normalizedType]) {
+    return DOCUMENT_TYPE_LABELS[normalizedType];
+  }
+
+  const inferredType = inferDocumentTypeFromName(documentType || url);
+  if (inferredType && DOCUMENT_TYPE_LABELS[inferredType]) {
+    return DOCUMENT_TYPE_LABELS[inferredType];
+  }
+
+  return `Document ${fallbackIndex + 1}`;
+};
+
+const normalizeStoredDocumentEntry = (req, document, index = 0) => {
+  const rawDocument = typeof document === 'string'
+    ? { documentType: inferDocumentTypeFromName(document), documentUrl: document }
+    : document || {};
+  const rawUrl = String(rawDocument.documentUrl || rawDocument.url || '').trim();
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  let documentUrl = rawUrl;
+
+  if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+    const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+    documentUrl = `${baseUrl}${path}`;
+  }
+
+  const documentType = normalizeDocumentTypeKey(
+    rawDocument.documentType || inferDocumentTypeFromName(rawUrl)
+  );
+
+  return {
+    documentType: documentType || null,
+    documentName: getDocumentDisplayName(documentType, rawUrl, index),
+    documentUrl,
+  };
+};
+
 const normalizeAdminVendorFilter = (value) => {
   if (!value) return "ALL";
   const normalized = String(value).trim().toUpperCase();
@@ -233,14 +300,9 @@ exports.getVendorDocuments = async (req, res) => {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
-    const raw = vendor.documents || [];
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const documents = raw.map((doc) => {
-      if (typeof doc !== "string") return doc;
-      if (/^https?:\/\//i.test(doc)) return doc;
-      const path = doc.startsWith("/") ? doc : `/${doc}`;
-      return `${baseUrl}${path}`;
-    });
+    const documents = (vendor.documents || []).map((document, index) =>
+      normalizeStoredDocumentEntry(req, document, index)
+    );
 
     res.status(200).json({ documents });
   } catch (error) {

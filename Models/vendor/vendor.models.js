@@ -1,5 +1,17 @@
 const mongoose = require("mongoose");
 
+const uploadedDocumentSchema = new mongoose.Schema({
+  documentType: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  documentUrl: {
+    type: String,
+    required: true
+  }
+}, { _id: false })
+
 const vendorSchema = new mongoose.Schema({
   businessName: {
     type: String,
@@ -129,7 +141,7 @@ const vendorSchema = new mongoose.Schema({
   },
 
   documents: {
-    type: [String], // GST, business license, etc
+    type: [uploadedDocumentSchema], // GST, business license, etc
     default: []
   },
   complianceDocuments: [

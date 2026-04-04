@@ -23,6 +23,79 @@ const logger = require('./logger');
 const Ride = require('../Models/Driver/ride.model');
 const AdminEarnings = require('../Models/Admin/adminEarnings.model');
 const Settings = require('../Models/Admin/settings.modal');
+const Driver = require('../Models/Driver/driver.model');
+const FleetVehicle = require('../Models/Vendor/fleetVehicle.model');
+
+async function getVehicleSnapshotForRideDriver(driverId) {
+  if (!driverId) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    };
+  }
+
+  const driver = await Driver.findById(driverId)
+    .select('vehicleInfo assignedFleetVehicleId')
+    .lean();
+
+  if (!driver) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    };
+  }
+
+  if (driver.assignedFleetVehicleId) {
+    const fleetVehicle = await FleetVehicle.findById(driver.assignedFleetVehicleId)
+      .select('licensePlate make model year color vehicleType')
+      .lean();
+
+    if (fleetVehicle) {
+      return {
+        licensePlate: fleetVehicle.licensePlate || null,
+        make: fleetVehicle.make || null,
+        model: fleetVehicle.model || null,
+        year: fleetVehicle.year || null,
+        color: fleetVehicle.color || null,
+        vehicleType: fleetVehicle.vehicleType || null,
+        source: 'FLEET_ASSIGNED'
+      };
+    }
+  }
+
+  const vehicleInfo = driver.vehicleInfo || null;
+  if (vehicleInfo) {
+    return {
+      licensePlate: vehicleInfo.licensePlate || null,
+      make: vehicleInfo.make || null,
+      model: vehicleInfo.model || null,
+      year: vehicleInfo.year || null,
+      color: vehicleInfo.color || null,
+      vehicleType: vehicleInfo.vehicleType || null,
+      source: 'SELF_OWNED'
+    };
+  }
+
+  return {
+    licensePlate: null,
+    make: null,
+    model: null,
+    year: null,
+    color: null,
+    vehicleType: null,
+    source: 'UNKNOWN'
+  };
+}
 
 async function backfillEarnings(options = {}) {
   const {
@@ -203,6 +276,7 @@ async function backfillEarnings(options = {}) {
           logger.info(`  grossFare: ₹${grossFare}, platformFee: ₹${roundedPlatformFee}, driverEarning: ₹${roundedDriverEarning}`);
           successCount++;
         } else {
+          const vehicleSnapshot = await getVehicleSnapshotForRideDriver(driverId);
           // Execute: create or update earnings record
           if (fixMode) {
             // Update existing earnings record
@@ -212,7 +286,8 @@ async function backfillEarnings(options = {}) {
                 grossFare: grossFare,
                 platformFee: roundedPlatformFee,
                 driverEarning: roundedDriverEarning,
-                rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date()
+                rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date(),
+                vehicleSnapshot
               },
               { new: true }
             );
@@ -226,6 +301,7 @@ async function backfillEarnings(options = {}) {
               platformFee: roundedPlatformFee,
               driverEarning: roundedDriverEarning,
               rideDate: ride.actualEndTime || ride.updatedAt || ride.createdAt || new Date(),
+              vehicleSnapshot,
               paymentStatus: 'pending'
             });
           }

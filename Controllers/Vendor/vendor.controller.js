@@ -31,6 +31,80 @@ const VendorPayout = mongoose.model('VendorPayout')
 
 const roundCurrency = value => Math.round((Number(value) || 0) * 100) / 100
 
+const DOCUMENT_TYPE_LABELS = {
+  AADHAAR_CARD: 'Aadhaar Card',
+  PAN_CARD: 'PAN Card',
+  DRIVING_LICENSE: 'Driving License',
+  GST_CERTIFICATE: 'GST Certificate',
+  BUSINESS_LICENSE: 'Business License',
+  PASSPORT: 'Passport',
+  VOTER_ID: 'Voter ID',
+  DOCUMENT: 'Document'
+}
+
+const normalizeDocumentTypeKey = value => String(value || '')
+  .trim()
+  .replace(/[^a-zA-Z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .toUpperCase()
+
+const inferDocumentTypeFromName = value => {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized.includes('aadhaar') || normalized.includes('aadhar')) return 'AADHAAR_CARD'
+  if (normalized.includes('pan')) return 'PAN_CARD'
+  if (normalized.includes('license') || normalized.includes('licence') || normalized.includes('dl')) return 'DRIVING_LICENSE'
+  if (normalized.includes('gst')) return 'GST_CERTIFICATE'
+  if (normalized.includes('business')) return 'BUSINESS_LICENSE'
+  if (normalized.includes('passport')) return 'PASSPORT'
+  if (normalized.includes('voter')) return 'VOTER_ID'
+  return null
+}
+
+const getDocumentDisplayName = (documentType, url, fallbackIndex = 0) => {
+  const normalizedType = normalizeDocumentTypeKey(documentType)
+  if (normalizedType && DOCUMENT_TYPE_LABELS[normalizedType]) {
+    return DOCUMENT_TYPE_LABELS[normalizedType]
+  }
+
+  const inferredType = inferDocumentTypeFromName(documentType || url)
+  if (inferredType && DOCUMENT_TYPE_LABELS[inferredType]) {
+    return DOCUMENT_TYPE_LABELS[inferredType]
+  }
+
+  return `Document ${fallbackIndex + 1}`
+}
+
+const buildUploadedDocumentEntry = (req, file, explicitType = null) => ({
+  documentType: normalizeDocumentTypeKey(
+    explicitType || inferDocumentTypeFromName(file?.originalname) || 'DOCUMENT'
+  ),
+  documentUrl: `${req.protocol}://${req.get('host')}/uploads/vendorDocuments/${file.filename}`
+})
+
+const normalizeStoredDocumentEntry = (req, document, index = 0) => {
+  const rawDocument = typeof document === 'string'
+    ? { documentType: inferDocumentTypeFromName(document), documentUrl: document }
+    : document || {}
+  const rawUrl = String(rawDocument.documentUrl || rawDocument.url || '').trim()
+  const baseUrl = `${req.protocol}://${req.get('host')}`
+  let documentUrl = rawUrl
+
+  if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+    const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`
+    documentUrl = `${baseUrl}${path}`
+  }
+
+  const documentType = normalizeDocumentTypeKey(
+    rawDocument.documentType || inferDocumentTypeFromName(rawUrl)
+  )
+
+  return {
+    documentType: documentType || null,
+    documentName: getDocumentDisplayName(documentType, rawUrl, index),
+    documentUrl
+  }
+}
+
 const calculateVendorCommission = (vendor, driverEarning) => {
   const normalizedDriverEarning = Number(driverEarning) || 0
   if (!vendor || normalizedDriverEarning <= 0) return 0
@@ -59,6 +133,129 @@ const buildVendorEarningsFilter = ({ driverIds, startDate, endDate }) => {
   }
 
   return filter
+}
+
+const buildVehicleSummaryKey = snapshot => {
+  if (!snapshot) return 'UNKNOWN_VEHICLE'
+  if (snapshot.licensePlate) return `LICENSE:${String(snapshot.licensePlate).toUpperCase()}`
+  const fallbackKeyParts = [
+    snapshot.make || 'UNKNOWN',
+    snapshot.model || 'UNKNOWN',
+    snapshot.year || 'NA',
+    snapshot.vehicleType || 'UNKNOWN'
+  ]
+  return `VEHICLE:${fallbackKeyParts.join('|').toUpperCase()}`
+}
+
+const buildVehicleSnapshotFallback = driver => {
+  const activeVehicle = getActiveDriverVehicleRecord(driver)
+  if (activeVehicle) {
+    return {
+      licensePlate: activeVehicle.licensePlate || null,
+      make: activeVehicle.make || null,
+      model: activeVehicle.model || null,
+      year: activeVehicle.year || null,
+      color: activeVehicle.color || null,
+      vehicleType: activeVehicle.vehicleType || null,
+      source: 'SELF_OWNED'
+    }
+  }
+
+  const approvedVehicle = driver?.vehicleInfo || null
+  if (approvedVehicle) {
+    return {
+      licensePlate: approvedVehicle.licensePlate || null,
+      make: approvedVehicle.make || null,
+      model: approvedVehicle.model || null,
+      year: approvedVehicle.year || null,
+      color: approvedVehicle.color || null,
+      vehicleType: approvedVehicle.vehicleType || null,
+      source: driver?.assignedFleetVehicleId ? 'FLEET_ASSIGNED' : 'SELF_OWNED'
+    }
+  }
+
+  const assignedFleetVehicle = driver?.assignedFleetVehicleId
+  if (assignedFleetVehicle && typeof assignedFleetVehicle === 'object') {
+    return {
+      licensePlate: assignedFleetVehicle.licensePlate || null,
+      make: assignedFleetVehicle.make || null,
+      model: assignedFleetVehicle.model || null,
+      year: assignedFleetVehicle.year || null,
+      color: assignedFleetVehicle.color || null,
+      vehicleType: assignedFleetVehicle.vehicleType || null,
+      source: 'FLEET_ASSIGNED'
+    }
+  }
+
+  return {
+    licensePlate: null,
+    make: null,
+    model: null,
+    year: null,
+    color: null,
+    vehicleType: null,
+    source: 'UNKNOWN'
+  }
+}
+
+const buildVendorDriverRevenueMetrics = ({ driver, earnings = [], vendor }) => {
+  const vehicleMap = new Map()
+
+  for (const earning of earnings) {
+    const snapshot = earning.vehicleSnapshot?.licensePlate ||
+      earning.vehicleSnapshot?.make ||
+      earning.vehicleSnapshot?.model
+      ? earning.vehicleSnapshot
+      : buildVehicleSnapshotFallback(driver)
+
+    const key = buildVehicleSummaryKey(snapshot)
+    if (!vehicleMap.has(key)) {
+      vehicleMap.set(key, {
+        vehicleKey: key,
+        licensePlate: snapshot.licensePlate || null,
+        make: snapshot.make || null,
+        model: snapshot.model || null,
+        year: snapshot.year || null,
+        color: snapshot.color || null,
+        vehicleType: snapshot.vehicleType || null,
+        vehicleSource: snapshot.source || 'UNKNOWN',
+        rideCount: 0,
+        grossRevenue: 0,
+        driverEarning: 0,
+        vehicleProfit: 0
+      })
+    }
+
+    const current = vehicleMap.get(key)
+    const driverEarning = Number(earning.driverEarning) || 0
+    current.rideCount += 1
+    current.grossRevenue += Number(earning.grossFare) || 0
+    current.driverEarning += driverEarning
+    current.vehicleProfit += calculateVendorCommission(vendor, driverEarning)
+  }
+
+  const totalDriverEarnings = earnings.reduce(
+    (sum, earning) => sum + (Number(earning.driverEarning) || 0),
+    0
+  )
+  const totalVehicleProfit = earnings.reduce(
+    (sum, earning) => sum + calculateVendorCommission(vendor, earning.driverEarning),
+    0
+  )
+
+  return {
+    earningsSummary: {
+      totalDriverEarnings: roundCurrency(totalDriverEarnings),
+      totalVehicleProfit: roundCurrency(totalVehicleProfit),
+      totalRides: earnings.length
+    },
+    vehicleProfitBreakdown: Array.from(vehicleMap.values()).map(item => ({
+      ...item,
+      grossRevenue: roundCurrency(item.grossRevenue),
+      driverEarning: roundCurrency(item.driverEarning),
+      vehicleProfit: roundCurrency(item.vehicleProfit)
+    }))
+  }
 }
 
 const getVendorBaseContext = async vendorId => {
@@ -361,26 +558,137 @@ const resolveDriverVehicleStatus = driver => (
   (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
 )
 
+const toPlainDriverVehicleRecord = vehicle =>
+  vehicle?.toObject ? vehicle.toObject() : vehicle
+
+const getDriverVehicleRecords = driver =>
+  Array.isArray(driver?.vehicles) ? driver.vehicles : []
+
+const getLatestDriverVehicleRecord = (driver, predicate) => {
+  const vehicles = getDriverVehicleRecords(driver)
+  for (let index = vehicles.length - 1; index >= 0; index -= 1) {
+    if (predicate(vehicles[index])) {
+      return vehicles[index]
+    }
+  }
+  return null
+}
+
+const getPendingDriverVehicleRecord = driver => {
+  const sourceVehicleId = driver?.pendingVehicleInfo?.sourceVehicleId
+    ? String(driver.pendingVehicleInfo.sourceVehicleId)
+    : null
+
+  if (sourceVehicleId) {
+    const matchingVehicle = getDriverVehicleRecords(driver).find(
+      vehicle => String(vehicle._id) === sourceVehicleId
+    )
+    if (matchingVehicle) {
+      return matchingVehicle
+    }
+  }
+
+  return getLatestDriverVehicleRecord(
+    driver,
+    vehicle => vehicle.approvalStatus === 'UNDER_APPROVAL' || vehicle.approvalStatus === 'REJECTED'
+  )
+}
+
+const getActiveDriverVehicleRecord = driver => {
+  const activeVehicle = getLatestDriverVehicleRecord(
+    driver,
+    vehicle => vehicle.approvalStatus === 'APPROVED' && vehicle.isActive
+  )
+
+  if (activeVehicle) {
+    return activeVehicle
+  }
+
+  return getLatestDriverVehicleRecord(
+    driver,
+    vehicle => vehicle.approvalStatus === 'APPROVED'
+  )
+}
+
+const buildLegacyVehicleInfoFromRecord = vehicle => {
+  if (!vehicle) return null
+
+  return {
+    make: vehicle.make,
+    model: vehicle.model,
+    year: vehicle.year,
+    color: vehicle.color,
+    licensePlate: vehicle.licensePlate,
+    vehicleType: vehicle.vehicleType
+  }
+}
+
+const buildLegacyPendingVehicleFromRecord = vehicle => {
+  if (!vehicle) return null
+
+  return {
+    ...toPlainDriverVehicleRecord(vehicle),
+    sourceVehicleId: vehicle._id
+  }
+}
+
+const syncDriverLegacyVehicleState = driver => {
+  const activeVehicle = getActiveDriverVehicleRecord(driver)
+  const pendingVehicle = getPendingDriverVehicleRecord(driver)
+
+  if (!driver.assignedFleetVehicleId) {
+    driver.vehicleInfo = buildLegacyVehicleInfoFromRecord(activeVehicle)
+  }
+  driver.pendingVehicleInfo = buildLegacyPendingVehicleFromRecord(pendingVehicle)
+
+  return driver
+}
+
 const serializeVehicleState = (driver) => ({
   approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
   pendingVehicle: driver.pendingVehicleInfo || null,
-  vehicleStatus: resolveDriverVehicleStatus(driver)
+  vehicleStatus: resolveDriverVehicleStatus(driver),
+  vehicles: getDriverVehicleRecords(driver).map(vehicle => toPlainDriverVehicleRecord(vehicle))
 })
 
 const hasDriverVehicleState = driver =>
-  Boolean(driver?.vehicleInfo || driver?.pendingVehicleInfo || driver?.assignedFleetVehicleId)
+  Boolean(
+    driver?.vehicleInfo ||
+    driver?.pendingVehicleInfo ||
+    driver?.assignedFleetVehicleId ||
+    (Array.isArray(driver?.vehicles) && driver.vehicles.length > 0)
+  )
 
 const toObjectIdString = value => (value ? String(value) : null)
 
 const clearDriverVehicleState = driver => {
+  const vehicles = getDriverVehicleRecords(driver)
+  const pendingVehicle = getPendingDriverVehicleRecord(driver)
+  const activeVehicle = getActiveDriverVehicleRecord(driver)
+  const targetVehicle = pendingVehicle || activeVehicle
   const removed = {
-    approvedVehicle: Boolean(driver.vehicleInfo),
-    pendingVehicle: Boolean(driver.pendingVehicleInfo),
+    approvedVehicle: Boolean(activeVehicle || driver.vehicleInfo),
+    pendingVehicle: Boolean(pendingVehicle || driver.pendingVehicleInfo),
     assignedFleetVehicle: Boolean(driver.assignedFleetVehicleId)
   }
 
-  driver.vehicleInfo = null
-  driver.pendingVehicleInfo = null
+  if (targetVehicle) {
+    driver.vehicles = vehicles.filter(
+      vehicle => String(vehicle._id) !== String(targetVehicle._id)
+    )
+  }
+
+  const fallbackApprovedVehicle = getLatestDriverVehicleRecord(
+    driver,
+    vehicle => vehicle.approvalStatus === 'APPROVED'
+  )
+  getDriverVehicleRecords(driver).forEach(vehicle => {
+    vehicle.isActive =
+      Boolean(fallbackApprovedVehicle) &&
+      String(vehicle._id) === String(fallbackApprovedVehicle._id)
+  })
+
+  syncDriverLegacyVehicleState(driver)
   driver.assignedFleetVehicleId = null
 
   return removed
@@ -472,6 +780,9 @@ const serializeDriverForResponse = (driver, req) => {
     vendor: vendorSummary,
     registrationType: serializedDriver.vendorId ? 'VENDOR_ASSIGNED' : 'SELF_REGISTERED',
     pendingVehicleInfo: normalizeVehicleDocuments(serializedDriver.pendingVehicleInfo, req),
+    vehicles: getDriverVehicleRecords(driver).map(vehicle =>
+      normalizeVehicleDocuments(toPlainDriverVehicleRecord(vehicle), req)
+    ),
     vehicleStatus: resolveDriverVehicleStatus(driver),
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
@@ -930,9 +1241,36 @@ exports.getVendorDrivers = async (req, res) => {
       'licensePlate make model year approvalStatus'
     ).populate('vendorId', 'businessName')
 
+    const vendor = authenticatedVendorId
+      ? await Vendor.findById(authenticatedVendorId)
+          .select('commissionType commissionValue')
+          .lean()
+      : null
+
+    const driverIds = drivers.map(driver => driver._id)
+    const earnings = driverIds.length
+      ? await AdminEarnings.find({ driverId: { $in: driverIds } })
+          .select('driverId grossFare driverEarning vehicleSnapshot')
+          .lean()
+      : []
+
+    const earningsByDriverId = earnings.reduce((acc, earning) => {
+      const key = String(earning.driverId)
+      if (!acc[key]) acc[key] = []
+      acc[key].push(earning)
+      return acc
+    }, {})
+
     res.json({
       total: drivers.length,
-      drivers: drivers.map(driver => serializeDriverForResponse(driver, req))
+      drivers: drivers.map(driver => ({
+        ...serializeDriverForResponse(driver, req),
+        ...buildVendorDriverRevenueMetrics({
+          driver,
+          earnings: earningsByDriverId[String(driver._id)] || [],
+          vendor
+        })
+      }))
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -957,7 +1295,23 @@ exports.getVendorDriverById = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' })
     }
 
-    res.json(serializeDriverForResponse(driver, req))
+    const vendor = driver.vendorId?._id
+      ? await Vendor.findById(driver.vendorId._id)
+          .select('commissionType commissionValue')
+          .lean()
+      : null
+    const earnings = await AdminEarnings.find({ driverId: driver._id })
+      .select('driverId grossFare driverEarning vehicleSnapshot')
+      .lean()
+
+    res.json({
+      ...serializeDriverForResponse(driver, req),
+      ...buildVendorDriverRevenueMetrics({
+        driver,
+        earnings,
+        vendor
+      })
+    })
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -1189,12 +1543,20 @@ exports.approveDriverVehicle = async (req, res) => {
       })
     }
 
+    const pendingVehicle = getPendingDriverVehicleRecord(driver)
+    if (pendingVehicle) {
+      pendingVehicle.approvalRoutedTo = 'ADMIN'
+      pendingVehicle.approvalStatus = 'UNDER_APPROVAL'
+      pendingVehicle.vendorPreApprovedAt = new Date()
+    }
+
     driver.pendingVehicleInfo = {
       ...driver.pendingVehicleInfo.toObject(),
       approvalRoutedTo: 'ADMIN',
       approvalStatus: 'UNDER_APPROVAL',
       vendorPreApprovedAt: new Date()
     }
+    syncDriverLegacyVehicleState(driver)
     await driver.save()
 
     logger.info('Vendor forwarded driver vehicle to admin', {
@@ -1264,6 +1626,16 @@ exports.assignDriverFleetVehicle = async (req, res) => {
       }
 
       driver.assignedFleetVehicleId = null
+      const fallbackApprovedVehicle = getLatestDriverVehicleRecord(
+        driver,
+        vehicle => vehicle.approvalStatus === 'APPROVED'
+      )
+      getDriverVehicleRecords(driver).forEach(vehicle => {
+        vehicle.isActive =
+          Boolean(fallbackApprovedVehicle) &&
+          String(vehicle._id) === String(fallbackApprovedVehicle._id)
+      })
+      syncDriverLegacyVehicleState(driver)
       await driver.save()
       logger.info('Fleet vehicle unassigned from driver', {
         vendorId,
@@ -1315,6 +1687,9 @@ exports.assignDriverFleetVehicle = async (req, res) => {
 
     driver.vendorId = vendorId
     driver.assignedFleetVehicleId = fv._id
+    getDriverVehicleRecords(driver).forEach(vehicle => {
+      vehicle.isActive = false
+    })
     driver.vehicleInfo = buildDriverVehicleInfoFromFleetVehicle(fv)
     await driver.save()
 
@@ -1438,6 +1813,15 @@ exports.rejectDriverVehicle = async (req, res) => {
       })
     }
 
+    const pendingVehicle = getPendingDriverVehicleRecord(driver)
+    if (pendingVehicle) {
+      pendingVehicle.approvalStatus = 'REJECTED'
+      pendingVehicle.rejectedAt = new Date()
+      pendingVehicle.approvedAt = null
+      pendingVehicle.rejectionReason = reason.trim()
+      pendingVehicle.isActive = false
+    }
+
     driver.pendingVehicleInfo = {
       ...driver.pendingVehicleInfo.toObject(),
       approvalStatus: 'REJECTED',
@@ -1445,6 +1829,7 @@ exports.rejectDriverVehicle = async (req, res) => {
       approvedAt: null,
       rejectionReason: reason.trim()
     }
+    syncDriverLegacyVehicleState(driver)
     await driver.save()
 
     return res.status(200).json({
@@ -2195,7 +2580,12 @@ exports.getDriverDocuments = async (req, res) => {
 
     return res
       .status(200)
-      .json({ success: true, documents: driver.documents || [] })
+      .json({
+        success: true,
+        documents: (driver.documents || []).map((document, index) =>
+          normalizeStoredDocumentEntry(req, document, index)
+        )
+      })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
   }
@@ -2446,11 +2836,14 @@ exports.uploadVendorDocumentPostRegister = async (req, res) => {
       })
     }
 
-    const baseUrl = `${req.protocol}://${req.get('host')}`
-    const documentUrl = `${baseUrl}/uploads/vendorDocuments/${req.file.filename}`
+    const documentEntry = buildUploadedDocumentEntry(
+      req,
+      req.file,
+      req.body?.documentType
+    )
 
     if (canResubmit) {
-      vendor.documents = [documentUrl]
+      vendor.documents = [documentEntry]
       vendor.isVerified = false
       vendor.isActive = false
       vendor.rejectionReason = null
@@ -2458,7 +2851,7 @@ exports.uploadVendorDocumentPostRegister = async (req, res) => {
       vendor.vendorReviewStatus = 'PENDING'
     } else {
       vendor.documents = vendor.documents || []
-      vendor.documents.push(documentUrl)
+      vendor.documents.push(documentEntry)
     }
     await vendor.save()
 
@@ -2467,7 +2860,9 @@ exports.uploadVendorDocumentPostRegister = async (req, res) => {
       message: canResubmit
         ? 'Document resubmitted for verification.'
         : 'Document submitted for verification.',
-      documents: vendor.documents
+      documents: (vendor.documents || []).map((document, index) =>
+        normalizeStoredDocumentEntry(req, document, index)
+      )
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
@@ -2489,16 +2884,21 @@ exports.uploadVendorDocument = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Vendor not found' })
     }
 
-    const baseUrl = `${req.protocol}://${req.get('host')}`
-    const documentUrl = `${baseUrl}/uploads/vendorDocuments/${req.file.filename}`
+    const documentEntry = buildUploadedDocumentEntry(
+      req,
+      req.file,
+      req.body?.documentType
+    )
     vendor.documents = vendor.documents || []
-    vendor.documents.push(documentUrl)
+    vendor.documents.push(documentEntry)
     await vendor.save()
 
     return res.status(200).json({
       success: true,
       message: 'Document uploaded successfully.',
-      documents: vendor.documents
+      documents: (vendor.documents || []).map((document, index) =>
+        normalizeStoredDocumentEntry(req, document, index)
+      )
     })
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message })
