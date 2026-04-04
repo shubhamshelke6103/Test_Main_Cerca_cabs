@@ -38,6 +38,25 @@ const serializeVendorForResponse = (vendorDoc) => {
   return vendor;
 };
 
+const serializeVendorDriverSummary = (driverDoc) => {
+  if (!driverDoc) return driverDoc;
+
+  const driver = driverDoc.toObject ? driverDoc.toObject() : { ...driverDoc };
+  return {
+    id: driver._id,
+    name: driver.name,
+    email: driver.email || null,
+    phone: driver.phone || null,
+    isVerified: Boolean(driver.isVerified),
+    isActive: Boolean(driver.isActive),
+    isOnline: Boolean(driver.isOnline),
+    totalEarnings: roundCurrency(driver.totalEarnings || 0),
+    rideRejectionCount: Number(driver.rideRejectionCount || 0),
+    createdAt: driver.createdAt || null,
+    updatedAt: driver.updatedAt || null,
+  };
+};
+
 const matchesAdminVendorFilter = (vendor, filter) => {
   if (filter === "ALL") return true;
   if (filter === "VERIFIED") {
@@ -175,13 +194,29 @@ exports.getAllVendors = async (req, res) => {
 // ======================================
 exports.getVendorById = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id).select("-password");
+    const vendorId = req.params.id;
+    const [vendor, associatedDrivers] = await Promise.all([
+      Vendor.findById(vendorId).select("-password"),
+      Driver.find({ vendorId })
+        .select(
+          "name email phone isVerified isActive isOnline totalEarnings rideRejectionCount createdAt updatedAt"
+        )
+        .sort({ createdAt: -1 }),
+    ]);
 
     if (!vendor) {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
-    res.json(serializeVendorForResponse(vendor));
+    const serializedVendor = serializeVendorForResponse(vendor);
+    const drivers = associatedDrivers.map(serializeVendorDriverSummary);
+
+    res.json({
+      ...serializedVendor,
+      driverCount: drivers.length,
+      totalDrivers: drivers.length,
+      drivers,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
