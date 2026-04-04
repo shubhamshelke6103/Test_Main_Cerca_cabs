@@ -5,6 +5,13 @@ const Driver = require("../../Models/Driver/driver.model");
 const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+const ADMIN_VENDOR_FILTER_VALUES = ["ALL", "VERIFIED", "PENDING", "REJECTED"];
+
+const normalizeAdminVendorFilter = (value) => {
+  if (!value) return "ALL";
+  const normalized = String(value).trim().toUpperCase();
+  return ADMIN_VENDOR_FILTER_VALUES.includes(normalized) ? normalized : null;
+};
 
 const getVendorDisplayStatus = (vendor) => {
   if (!vendor) return "PENDING";
@@ -29,6 +36,20 @@ const serializeVendorForResponse = (vendorDoc) => {
   vendor.vendorReviewStatus = vendor.vendorReviewStatus || displayStatus;
 
   return vendor;
+};
+
+const matchesAdminVendorFilter = (vendor, filter) => {
+  if (filter === "ALL") return true;
+  if (filter === "VERIFIED") {
+    return vendor.vendorReviewStatus === "APPROVED" && vendor.isVerified === true;
+  }
+  if (filter === "PENDING") {
+    return vendor.status === "PENDING";
+  }
+  if (filter === "REJECTED") {
+    return vendor.status === "REJECTED";
+  }
+  return true;
 };
 
 const calculateVendorCommission = (vendor, driverEarning) => {
@@ -126,11 +147,23 @@ const syncVendorFinancialFields = async (vendorId) => {
 // ======================================
 exports.getAllVendors = async (req, res) => {
   try {
+    const filter = normalizeAdminVendorFilter(req.query.filter || req.query.status);
+    if (!filter) {
+      return res.status(400).json({
+        message: `Invalid vendor filter. Use one of: ${ADMIN_VENDOR_FILTER_VALUES.join(", ")}`
+      });
+    }
+
     const vendors = await Vendor.find().select("-password");
+    const serializedVendors = vendors.map(serializeVendorForResponse);
+    const filteredVendors = serializedVendors.filter((vendor) =>
+      matchesAdminVendorFilter(vendor, filter)
+    );
 
     res.json({
-      total: vendors.length,
-      vendors: vendors.map(serializeVendorForResponse)
+      total: filteredVendors.length,
+      filter,
+      vendors: filteredVendors
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

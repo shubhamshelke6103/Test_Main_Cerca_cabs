@@ -1489,10 +1489,15 @@ exports.getDashboardStats = async (req, res) => {
       .select('name phone isOnline isActive isVerified totalEarnings rideRejectionCount')
       .lean()
 
-    const totalDrivers = drivers.length
-    const onlineDrivers = drivers.filter(d => d.isOnline).length
-    const activeDrivers = drivers.filter(d => d.isActive).length
-    const verifiedDrivers = drivers.filter(d => d.isVerified).length
+    const allDriverList = drivers
+    const onlineDriverList = drivers.filter(driver => driver.isOnline)
+    const activeDriverList = drivers.filter(driver => driver.isActive)
+    const verifiedDriverList = drivers.filter(driver => driver.isVerified)
+
+    const totalDrivers = allDriverList.length
+    const onlineDrivers = onlineDriverList.length
+    const activeDrivers = activeDriverList.length
+    const verifiedDrivers = verifiedDriverList.length
     const totalDriverEarnings = drivers.reduce(
       (sum, d) => sum + (d.totalEarnings || 0), 0)
 
@@ -1519,7 +1524,13 @@ exports.getDashboardStats = async (req, res) => {
         processingPayoutAmount: snapshot.processingPayoutAmount || 0,
         eligibleEarningsCount: snapshot.eligibleEarningsCount || 0
       },
-      drivers
+      drivers: allDriverList,
+      driverLists: {
+        all: allDriverList,
+        active: activeDriverList,
+        online: onlineDriverList,
+        verified: verifiedDriverList
+      }
     })
   } catch (error) {
     res.status(500).json({
