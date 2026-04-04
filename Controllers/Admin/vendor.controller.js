@@ -6,13 +6,27 @@ const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const getVendorDisplayStatus = (vendor) => {
+  if (!vendor) return "PENDING";
+  if (vendor.vendorReviewStatus === "REJECTED") return "REJECTED";
+  if (vendor.vendorReviewStatus === "APPROVED" && vendor.isVerified) {
+    return vendor.isActive ? "ACTIVE" : "INACTIVE";
+  }
+  return "PENDING";
+};
+
 const serializeVendorForResponse = (vendorDoc) => {
   if (!vendorDoc) return vendorDoc;
 
   const vendor = vendorDoc.toObject ? vendorDoc.toObject() : { ...vendorDoc };
-  if (!vendor.isVerified || vendor.vendorReviewStatus !== "APPROVED") {
+  const displayStatus = getVendorDisplayStatus(vendor);
+
+  if (displayStatus !== "ACTIVE" && displayStatus !== "INACTIVE") {
     vendor.isActive = false;
   }
+  vendor.status = displayStatus;
+  vendor.approvalStatus = displayStatus;
+  vendor.vendorReviewStatus = vendor.vendorReviewStatus || displayStatus;
 
   return vendor;
 };
@@ -198,7 +212,7 @@ exports.verifyVendor = async (req, res) => {
     res.json({
       success: true,
       message: "Vendor verified successfully",
-      vendor
+      vendor: serializeVendorForResponse(vendor)
     });
 
   } catch (error) {
@@ -248,7 +262,7 @@ exports.rejectVendor = async (req, res) => {
     res.json({
       success: true,
       message: "Vendor rejected successfully",
-      vendor
+      vendor: serializeVendorForResponse(vendor)
     });
 
   } catch (error) {
@@ -287,7 +301,7 @@ exports.blockVendor = async (req, res) => {
     res.json({
       success: true,
       message: "Vendor blocked successfully",
-      vendor
+      vendor: serializeVendorForResponse(vendor)
     });
 
   } catch (error) {
@@ -349,7 +363,7 @@ exports.unblockVendor = async (req, res) => {
     res.json({
       success: true,
       message: "Vendor unblocked successfully",
-      vendor
+      vendor: serializeVendorForResponse(vendor)
     });
 
   } catch (error) {
