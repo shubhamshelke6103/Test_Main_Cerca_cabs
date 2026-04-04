@@ -6,6 +6,17 @@ const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const serializeVendorForResponse = (vendorDoc) => {
+  if (!vendorDoc) return vendorDoc;
+
+  const vendor = vendorDoc.toObject ? vendorDoc.toObject() : { ...vendorDoc };
+  if (!vendor.isVerified || vendor.vendorReviewStatus !== "APPROVED") {
+    vendor.isActive = false;
+  }
+
+  return vendor;
+};
+
 const calculateVendorCommission = (vendor, driverEarning) => {
   const normalizedDriverEarning = Number(driverEarning) || 0;
   if (!vendor || normalizedDriverEarning <= 0) return 0;
@@ -105,7 +116,7 @@ exports.getAllVendors = async (req, res) => {
 
     res.json({
       total: vendors.length,
-      vendors
+      vendors: vendors.map(serializeVendorForResponse)
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -123,7 +134,7 @@ exports.getVendorById = async (req, res) => {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
-    res.json(vendor);
+    res.json(serializeVendorForResponse(vendor));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -177,9 +188,10 @@ exports.verifyVendor = async (req, res) => {
     }
 
     vendor.isVerified = true;
+    vendor.isActive = true;
     vendor.rejectionReason = null;
     vendor.allowDocumentResubmit = false;
-    vendor.vendorReviewStatus = "PENDING";
+    vendor.vendorReviewStatus = "APPROVED";
 
     await vendor.save();
 
@@ -226,6 +238,7 @@ exports.rejectVendor = async (req, res) => {
     }
 
     vendor.isVerified = false;
+    vendor.isActive = false;
     vendor.rejectionReason = reason;
     vendor.allowDocumentResubmit = Boolean(allowDocumentResubmit);
     vendor.vendorReviewStatus = "REJECTED";
@@ -320,6 +333,12 @@ exports.unblockVendor = async (req, res) => {
     if (!vendor) {
       return res.status(404).json({
         message: "Vendor not found"
+      });
+    }
+
+    if (!vendor.isVerified || vendor.vendorReviewStatus !== "APPROVED") {
+      return res.status(400).json({
+        message: "Vendor must be approved before it can be activated"
       });
     }
 

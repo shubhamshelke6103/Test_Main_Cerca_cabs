@@ -550,7 +550,7 @@ exports.registerVendor = async (req, res) => {
       address,
       documents: req.body.documents || [],
       isVerified: false, // default pending
-      isActive: true, // default active
+      isActive: false, // becomes active only after admin approval
       vendorReviewStatus: 'PENDING'
     })
 
@@ -588,13 +588,6 @@ exports.loginVendor = async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' })
     }
 
-    if (!vendor.isActive) {
-      return res.status(403).json({
-        message: 'Vendor account is inactive',
-        code: 'VENDOR_INACTIVE'
-      })
-    }
-
     if (!vendor.isVerified) {
       const reason = (vendor.rejectionReason || '').toString().trim()
       const isRejected =
@@ -611,6 +604,13 @@ exports.loginVendor = async (req, res) => {
         rejectionReason: isRejected ? vendor.rejectionReason : null,
         vendorId: vendor._id.toString(),
         allowDocumentResubmit: Boolean(vendor.allowDocumentResubmit)
+      })
+    }
+
+    if (!vendor.isActive) {
+      return res.status(403).json({
+        message: 'Vendor account is inactive',
+        code: 'VENDOR_INACTIVE'
       })
     }
 
@@ -2440,6 +2440,8 @@ exports.uploadVendorDocumentPostRegister = async (req, res) => {
 
     if (canResubmit) {
       vendor.documents = [documentUrl]
+      vendor.isVerified = false
+      vendor.isActive = false
       vendor.rejectionReason = null
       vendor.allowDocumentResubmit = false
       vendor.vendorReviewStatus = 'PENDING'

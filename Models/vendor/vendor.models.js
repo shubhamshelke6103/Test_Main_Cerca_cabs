@@ -109,7 +109,7 @@ const vendorSchema = new mongoose.Schema({
 
   isActive: {
     type: Boolean,
-    default: true
+    default: false
   },
 
   rejectionReason: {
@@ -124,7 +124,7 @@ const vendorSchema = new mongoose.Schema({
 
   vendorReviewStatus: {
     type: String,
-    enum: ["PENDING", "REJECTED"],
+    enum: ["PENDING", "APPROVED", "REJECTED"],
     default: "PENDING"
   },
 
