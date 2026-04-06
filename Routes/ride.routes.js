@@ -18,7 +18,8 @@ const {
   createRideLiveLocationShare,
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
-  getSharedLiveLocation
+  getSharedLiveLocation,
+  updateRideDestination
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 const { createRidePaymentOrder, verifyRidePayment } = require('../Controllers/payment.controller');
@@ -79,6 +80,10 @@ router.post('/search/:id', searchRide);
 // Get a single ride by ID - MUST come after all specific routes
 // GET /rides/:id
 router.get('/:id', getRideById);
+
+// Update ride destination
+// PATCH /rides/:id/destination
+router.patch('/:id/destination', updateRideDestination);
 
 // Update a ride by ID
 // PUT /rides/:id

@@ -2,6 +2,11 @@ const Driver = require('../Models/Driver/driver.model')
 const DriverOnlineSession = require('../Models/Driver/driverOnlineSession.model')
 const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
 
+const DEFAULT_MAX_ONLINE_MINUTES = parseInt(
+  process.env.DRIVER_MAX_ONLINE_MINUTES || '300',
+  10
+)
+
 const roundMinutes = milliseconds =>
   Math.max(0, Math.round(milliseconds / (60 * 1000)))
 
@@ -228,9 +233,40 @@ const getFleetOnlineHoursSummary = async ({
   }
 }
 
+const autoStopExpiredDriverSessions = async ({
+  maxOnlineMinutes = DEFAULT_MAX_ONLINE_MINUTES,
+  limit = 100
+} = {}) => {
+  const safeMaxOnlineMinutes = Math.max(1, Number(maxOnlineMinutes) || DEFAULT_MAX_ONLINE_MINUTES)
+  const safeLimit = Math.max(1, Number(limit) || 100)
+  const threshold = new Date(Date.now() - safeMaxOnlineMinutes * 60 * 1000)
+
+  const expiredDrivers = await Driver.find({
+    isOnline: true,
+    currentOnlineSessionStartedAt: { $ne: null, $lte: threshold }
+  })
+    .select('_id socketId currentOnlineSessionStartedAt isOnline isBusy')
+    .limit(safeLimit)
+
+  const stoppedDrivers = []
+
+  for (const driver of expiredDrivers) {
+    const updatedDriver = await stopDriverOnlineSession(driver._id, 'auto_timeout')
+    stoppedDrivers.push(updatedDriver)
+  }
+
+  return {
+    checkedAt: new Date(),
+    maxOnlineMinutes: safeMaxOnlineMinutes,
+    threshold,
+    stoppedDrivers
+  }
+}
+
 module.exports = {
   startDriverOnlineSession,
   stopDriverOnlineSession,
+  autoStopExpiredDriverSessions,
   getDriverOnlineHoursSummary,
   getFleetOnlineHoursSummary
 }

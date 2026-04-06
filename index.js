@@ -39,9 +39,11 @@ require('./src/workers/rideBooking.worker')
 
 const initScheduledRideWorker = require('./src/workers/scheduledRide.worker')
 const initRideAutoCancelWorker = require('./src/workers/rideAutoCancel.worker')
+const initDriverOnlineTimeoutWorker = require('./src/workers/driverOnlineTimeout.worker')
 
 initScheduledRideWorker()
 initRideAutoCancelWorker()
+initDriverOnlineTimeoutWorker()
 
 /* =======================
    MIDDLEWARES

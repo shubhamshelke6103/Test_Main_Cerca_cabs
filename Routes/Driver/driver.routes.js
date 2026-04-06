@@ -24,6 +24,7 @@ const {
     getNearbyDrivers,
     updateDriverBusyStatus,
     getUpcomingBookings,
+    rejectAcceptedRide,
     markCashCollected,
     uploadPriorityDocument,
     getDriverOnlineHours,
@@ -88,6 +89,19 @@ router.get('/:id/rides', getAllRidesOfDriver);
 
 // Route to get upcoming scheduled bookings for a driver
 router.get('/:id/upcoming-bookings', getUpcomingBookings);
+
+// Route for a driver to reject an accidentally accepted ride before start
+router.patch(
+    '/:driverId/rides/:rideId/reject-accepted',
+    authenticateDriver,
+    (req, res, next) => {
+        if (req.driverId !== req.params.driverId) {
+            return res.status(403).json({ message: 'You are not authorized to reject this ride' });
+        }
+        return next();
+    },
+    rejectAcceptedRide
+);
 
 // Route to update a driver's location (authenticated driver only)
 router.patch(

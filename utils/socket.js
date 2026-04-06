@@ -57,6 +57,10 @@ const {
   startDriverOnlineSession,
   stopDriverOnlineSession
 } = require('./driverSession.service')
+const {
+  maskPhone,
+  sanitizeRideContactsForDriver
+} = require('./rideContactPrivacy.service')
 
 let io
 
@@ -65,13 +69,6 @@ const maskName = value => {
   const trimmed = String(value).trim()
   if (trimmed.length <= 2) return `${trimmed[0] || ''}*`
   return `${trimmed[0]}${'*'.repeat(Math.max(1, trimmed.length - 2))}${trimmed[trimmed.length - 1]}`
-}
-
-const maskPhone = value => {
-  if (!value) return null
-  const stringValue = String(value)
-  if (stringValue.length <= 4) return stringValue
-  return `${'*'.repeat(Math.max(0, stringValue.length - 4))}${stringValue.slice(-4)}`
 }
 
 const sanitizeSocketRatingPayload = rating => ({
@@ -1835,6 +1832,7 @@ function initializeSocket (server) {
           ...(assignedRide.toObject ? assignedRide.toObject() : assignedRide),
           isFullDayBooking
         }
+        const driverRidePayload = sanitizeRideContactsForDriver(rideWithMetadata)
 
         const roomName = `ride_${rideId}`
 
@@ -1872,7 +1870,7 @@ function initializeSocket (server) {
           try {
             io.to(`user_${riderIdentifier}`).emit(
               'rideAccepted',
-              rideWithMetadata
+              driverRidePayload
             )
           } catch (e) {
             logger.warn('Emit rideAccepted to rider failed', { err: e.message })
@@ -1890,7 +1888,7 @@ function initializeSocket (server) {
           try {
             io.to(assignedRide.driverSocketId).emit(
               'rideAssigned',
-              rideWithMetadata
+              driverRidePayload
             )
           } catch (e) {
             logger.warn('Emit rideAssigned to driver socket failed', {
@@ -1910,7 +1908,7 @@ function initializeSocket (server) {
         // ============================
         // BROADCAST TO RIDE ROOM
         // ============================
-        io.to(roomName).emit('rideAccepted', rideWithMetadata)
+        io.to(roomName).emit('rideAccepted', driverRidePayload)
 
         io.to('admin').emit('rideStatusUpdated', {
           rideId,

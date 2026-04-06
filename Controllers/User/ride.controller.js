@@ -26,6 +26,188 @@ const {
   revokeLiveLocationShare,
   getSharedLiveLocationPayload
 } = require('../../utils/liveLocationShare.service')
+const { getSocketIO } = require('../../utils/socket')
+
+const DEFAULT_CITY_SPEED_KMH = 35
+
+const normalizeLocationInput = (location, fieldName) => {
+  if (!location) {
+    throw new Error(`${fieldName} is required`)
+  }
+
+  if (Array.isArray(location.coordinates) && location.coordinates.length === 2) {
+    const [lng, lat] = location.coordinates
+    return {
+      type: 'Point',
+      coordinates: [Number(lng), Number(lat)]
+    }
+  }
+
+  if (
+    location.longitude !== undefined &&
+    location.latitude !== undefined
+  ) {
+    return {
+      type: 'Point',
+      coordinates: [Number(location.longitude), Number(location.latitude)]
+    }
+  }
+
+  throw new Error(`Invalid ${fieldName} format`)
+}
+
+const resolveVehiclePricingConfig = (ride, settings) => {
+  const vehicleServiceKey =
+    ride.vehicleService || mapServiceToVehicleService(ride.service)
+  const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
+
+  if (!vehicleService || vehicleService.enabled === false) {
+    throw new Error(`Invalid or disabled vehicle service: ${vehicleServiceKey}`)
+  }
+
+  return {
+    vehicleServiceKey,
+    basePrice: vehicleService.price || 0,
+    perMinuteRate: vehicleService.perMinuteRate || 0
+  }
+}
+
+const applyRidePromoDiscount = async (ride, vehicleServiceKey, fareAfterMinimum) => {
+  let discount = 0
+  let finalFare = fareAfterMinimum
+
+  if (!ride.promoCode) {
+    return { discount, finalFare }
+  }
+
+  const Coupon = require('../../Models/Admin/coupon.modal')
+  const coupon = await Coupon.findOne({
+    couponCode: ride.promoCode.toUpperCase().trim()
+  })
+
+  if (!coupon) {
+    return { discount, finalFare }
+  }
+
+  const canUse = coupon.canUserUse(ride.rider?._id || ride.rider)
+  if (!canUse.canUse) {
+    return { discount, finalFare }
+  }
+
+  const serviceApplicable =
+    !coupon.applicableServices ||
+    coupon.applicableServices.length === 0 ||
+    coupon.applicableServices.includes(ride.service) ||
+    coupon.applicableServices.includes(vehicleServiceKey)
+
+  if (!serviceApplicable) {
+    return { discount, finalFare }
+  }
+
+  const discountResult = coupon.calculateDiscount(fareAfterMinimum)
+  if (discountResult.discount > 0) {
+    discount = Math.round(discountResult.discount * 100) / 100
+    finalFare = Math.round(discountResult.finalFare * 100) / 100
+  }
+
+  return { discount, finalFare }
+}
+
+const buildDestinationUpdateQuote = async ({
+  ride,
+  pricingOrigin,
+  dropoffLocation,
+  estimatedDuration
+}) => {
+  const settings = await Settings.findOne()
+  if (!settings) {
+    throw new Error('Admin settings not found')
+  }
+
+  const { perKmRate, minimumFare, platformFees, driverCommissions } =
+    settings.pricingConfigurations
+  const { vehicleServiceKey, basePrice, perMinuteRate } =
+    resolveVehiclePricingConfig(ride, settings)
+
+  const [pickupLng, pickupLat] = pricingOrigin.coordinates
+  const [dropoffLng, dropoffLat] = dropoffLocation.coordinates
+
+  const distance = calculateHaversineDistance(
+    pickupLat,
+    pickupLng,
+    dropoffLat,
+    dropoffLng
+  )
+
+  let duration = Number(estimatedDuration)
+  if (!duration || duration <= 0) {
+    duration = Math.ceil((distance / DEFAULT_CITY_SPEED_KMH) * 60)
+  }
+
+  const rawFareBreakdown = calculateFareWithTime(
+    basePrice,
+    distance,
+    duration,
+    perKmRate,
+    perMinuteRate,
+    minimumFare
+  )
+
+  const { discount, finalFare } = await applyRidePromoDiscount(
+    ride,
+    vehicleServiceKey,
+    rawFareBreakdown.fareAfterMinimum
+  )
+
+  const driverEarnings = driverCommissions
+    ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
+    : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
+  const platformFee = platformFees
+    ? Math.round(finalFare * (platformFees / 100) * 100) / 100
+    : 0
+
+  return {
+    distanceInKm: Math.round(distance * 100) / 100,
+    estimatedDuration: duration,
+    discount,
+    fare: finalFare,
+    fareBreakdown: {
+      baseFare: rawFareBreakdown.baseFare,
+      distanceFare: rawFareBreakdown.distanceFare,
+      timeFare: rawFareBreakdown.timeFare,
+      subtotal: rawFareBreakdown.subtotal,
+      fareAfterMinimum: rawFareBreakdown.fareAfterMinimum,
+      discount,
+      finalFare
+    },
+    earnings: {
+      driverEarnings,
+      platformFees: platformFee,
+      adminEarnings: platformFee
+    },
+    pricingOriginSource: pricingOrigin.source
+  }
+}
+
+const resolveRidePricingOrigin = async ride => {
+  if (ride.status === 'in_progress' && ride.driver) {
+    const driver = await Driver.findById(ride.driver)
+      .select('location')
+      .lean()
+
+    if (driver?.location?.coordinates?.length === 2) {
+      return {
+        source: 'driver_current_location',
+        coordinates: driver.location.coordinates
+      }
+    }
+  }
+
+  return {
+    source: 'ride_pickup_location',
+    coordinates: ride.pickupLocation.coordinates
+  }
+}
 
 /**
  * @desc    Create a new ride
@@ -355,6 +537,170 @@ const updateRide = async (req, res) => {
 
     res.status(400).json({
       message: 'Error updating ride',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * @desc    Update active ride destination and recalculate fare
+ * @route   PATCH /rides/:id/destination
+ */
+const updateRideDestination = async (req, res) => {
+  try {
+    const rideId = req.params.id
+    const userId = getUserIdFromToken(req)
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      })
+    }
+
+    const ride = await Ride.findById(rideId).populate('driver rider')
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      })
+    }
+
+    if (String(ride.rider?._id || ride.rider) !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to update this ride destination'
+      })
+    }
+
+    if (ride.bookingType !== 'INSTANT') {
+      return res.status(400).json({
+        success: false,
+        message: 'Destination updates are only supported for instant rides'
+      })
+    }
+
+    const allowedStatuses = ['requested', 'accepted', 'arrived', 'in_progress']
+    if (!allowedStatuses.includes(ride.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Destination can only be updated for active rides'
+      })
+    }
+
+    const dropoffLocation = normalizeLocationInput(
+      req.body.dropoffLocation,
+      'dropoffLocation'
+    )
+    const pricingOrigin = await resolveRidePricingOrigin(ride)
+
+    const previousFare = Number(ride.fare || 0)
+    const previousDistanceInKm = Number(ride.distanceInKm || 0)
+    const previousEstimatedDuration = Number(ride.estimatedDuration || 0)
+    const previousDropoffAddress = ride.dropoffAddress || null
+    const previousDropoffLocation = ride.dropoffLocation || null
+
+    const quote = await buildDestinationUpdateQuote({
+      ride,
+      pricingOrigin,
+      dropoffLocation,
+      estimatedDuration: req.body.estimatedDuration
+    })
+
+    ride.dropoffLocation = dropoffLocation
+    if (typeof req.body.dropoffAddress === 'string' && req.body.dropoffAddress.trim()) {
+      ride.dropoffAddress = req.body.dropoffAddress.trim()
+    }
+    ride.distanceInKm = quote.distanceInKm
+    ride.estimatedDuration = quote.estimatedDuration
+    ride.discount = quote.discount
+    ride.fare = quote.fare
+    ride.fareBreakdown = quote.fareBreakdown
+    await ride.save()
+
+    const refreshedRide = await Ride.findById(rideId).populate('driver rider')
+
+    const responsePayload = {
+      success: true,
+      message: 'Ride destination updated successfully',
+      ride: refreshedRide,
+      pricing: {
+        previousFare,
+        newFare: quote.fare,
+        fareDifference: Math.round((quote.fare - previousFare) * 100) / 100,
+        previousDistanceInKm,
+        newDistanceInKm: quote.distanceInKm,
+        previousEstimatedDuration,
+        newEstimatedDuration: quote.estimatedDuration,
+        previousDropoffAddress,
+        newDropoffAddress: refreshedRide.dropoffAddress || null,
+        previousDropoffLocation,
+        newDropoffLocation: refreshedRide.dropoffLocation,
+        pricingOriginSource: quote.pricingOriginSource,
+        earnings: quote.earnings
+      }
+    }
+
+    try {
+      const io = getSocketIO()
+      if (io) {
+        const destinationUpdateEvent = {
+          ride: refreshedRide,
+          pricing: responsePayload.pricing
+        }
+
+        io.to(`ride_${rideId}`).emit('rideDestinationUpdated', destinationUpdateEvent)
+        io.to(`ride_${rideId}`).emit('rideUpdated', destinationUpdateEvent)
+
+        if (refreshedRide.userSocketId) {
+          io.to(refreshedRide.userSocketId).emit(
+            'rideDestinationUpdated',
+            destinationUpdateEvent
+          )
+        }
+
+        if (refreshedRide.driverSocketId) {
+          io.to(refreshedRide.driverSocketId).emit(
+            'rideDestinationUpdated',
+            destinationUpdateEvent
+          )
+        }
+
+        io.to('admin').emit('rideStatusUpdated', {
+          rideId,
+          status: refreshedRide.status,
+          ride: refreshedRide
+        })
+        io.to('admin').emit('rideDestinationUpdated', destinationUpdateEvent)
+
+        if (refreshedRide.shareToken && refreshedRide.isShared) {
+          io.to(`shared_ride_${refreshedRide.shareToken}`).emit(
+            'sharedRideStatusUpdate',
+            {
+              status: refreshedRide.status,
+              ride: {
+                _id: refreshedRide._id,
+                status: refreshedRide.status,
+                dropoffAddress: refreshedRide.dropoffAddress,
+                dropoffLocation: refreshedRide.dropoffLocation,
+                fare: refreshedRide.fare,
+                distanceInKm: refreshedRide.distanceInKm,
+                estimatedDuration: refreshedRide.estimatedDuration
+              }
+            }
+          )
+        }
+      }
+    } catch (socketError) {
+      logger.warn('Ride destination updated but socket broadcast failed:', socketError)
+    }
+
+    return res.status(200).json(responsePayload)
+  } catch (error) {
+    logger.error('Error updating ride destination:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating ride destination',
       error: error.message
     })
   }
@@ -1407,5 +1753,6 @@ module.exports = {
   createRideLiveLocationShare,
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
-  getSharedLiveLocation
+  getSharedLiveLocation,
+  updateRideDestination
 }

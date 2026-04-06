@@ -33,6 +33,11 @@ const {
     setDriverPendingApproval,
     DRIVER_APPROVAL_STATUS,
 } = require('../../utils/driverApproval.service.js');
+const {
+    sanitizeRideListContactsForDriver,
+} = require('../../utils/rideContactPrivacy.service.js');
+const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions.js');
+const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 
 const buildDateRange = (period, startDate, endDate) => {
     const now = new Date();
@@ -915,7 +920,7 @@ const getAllRidesOfDriver = async (req, res) => {
             return priorityA - priorityB;
         });
         
-        res.status(200).json({ rides: sortedRides });
+        res.status(200).json({ rides: sanitizeRideListContactsForDriver(sortedRides) });
     } catch (error) {
         logger.error('Error fetching rides of driver:', error);
         res.status(500).json({ message: 'Error fetching rides of driver', error });
@@ -941,7 +946,7 @@ const getUpcomingBookings = async (req, res) => {
 
         res.status(200).json({
             message: 'Upcoming bookings retrieved successfully',
-            bookings: upcomingBookings,
+            bookings: sanitizeRideListContactsForDriver(upcomingBookings),
             count: upcomingBookings.length
         });
     } catch (error) {
@@ -1247,6 +1252,69 @@ const updateDriverVehicle = async (req, res) => {
     } catch (error) {
         logger.error('Error updating driver vehicle:', error);
         res.status(500).json({ message: 'Error updating driver vehicle information', error });
+    }
+};
+
+/**
+ * @desc    Reject an accidentally accepted ride before trip start
+ * @route   PATCH /drivers/:driverId/rides/:rideId/reject-accepted
+ */
+const rejectAcceptedRide = async (req, res) => {
+    try {
+        const { driverId, rideId } = req.params;
+        const { reason } = req.body || {};
+
+        const ride = await Ride.findById(rideId)
+            .select('status driver rider userSocketId driverSocketId')
+            .populate('driver rider');
+
+        if (!ride) {
+            return res.status(404).json({ message: 'Ride not found' });
+        }
+
+        if (!ride.driver || String(ride.driver._id || ride.driver) !== String(driverId)) {
+            return res.status(403).json({ message: 'You can only reject your own accepted ride' });
+        }
+
+        if (ride.status !== 'accepted') {
+            return res.status(400).json({
+                message: 'This option is only available for rides that are accepted and not yet started',
+            });
+        }
+
+        const cancellationReason =
+            typeof reason === 'string' && reason.trim()
+                ? reason.trim()
+                : 'Driver accidentally accepted the ride';
+
+        const cancelledRide = await cancelRideFromBooking(
+            rideId,
+            'driver',
+            cancellationReason
+        );
+
+        try {
+            const io = getSocketIO();
+            await emitRideCancelledToClients(
+                io,
+                cancelledRide,
+                'driver',
+                cancellationReason
+            );
+        } catch (socketErr) {
+            logger.warn('Driver reject accepted ride: socket emit failed', socketErr);
+        }
+
+        return res.status(200).json({
+            message: 'Accepted ride rejected successfully',
+            ride: cancelledRide,
+        });
+    } catch (error) {
+        logger.error('Error rejecting accepted ride:', error);
+        return res.status(500).json({
+            message: 'Error rejecting accepted ride',
+            error: error.message,
+        });
     }
 };
 
@@ -1873,6 +1941,7 @@ module.exports = {
     updateDriverIsReadyForRides,
     getAllRidesOfDriver,
     getUpcomingBookings,
+    rejectAcceptedRide,
     updateDriverLocation,
     upsertDriverGoToHome,
     activateDriverGoTo,
