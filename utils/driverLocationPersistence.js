@@ -11,6 +11,9 @@ const {
  * Persists driver GeoJSON location and runs GO TO route refresh when thresholds match
  * (same semantics as PATCH /drivers/:id/location).
  *
+ * Uses atomic $set updates so legacy drivers with invalid `documents` subdocs are not
+ * re-validated on full-document save().
+ *
  * @param {string} driverId
  * @param {number} longitude
  * @param {number} latitude
@@ -18,46 +21,54 @@ const {
  * @throws {Error} 'Driver not found' when missing
  */
 async function persistDriverLocationWithGoTo (driverId, longitude, latitude) {
-  const driver = await Driver.findById(driverId)
-  if (!driver) {
+  const existing = await Driver.findById(driverId).select('goTo').lean()
+  if (!existing) {
     throw new Error('Driver not found')
   }
 
-  driver.set('location', {
+  const location = {
     type: 'Point',
     coordinates: [longitude, latitude]
-  })
+  }
 
   const coordinates = [longitude, latitude]
   let goToRouteRefreshed = false
 
+  const $set = { location }
+
+  const goTo = existing.goTo
   if (
-    driver.goTo?.isEnabled &&
-    driver.goTo?.homeLocation?.coordinates &&
-    shouldRefreshGoToRoute(driver.goTo, { coordinates })
+    goTo?.isEnabled &&
+    goTo?.homeLocation?.coordinates &&
+    shouldRefreshGoToRoute(goTo, { coordinates })
   ) {
     try {
-      driver.goTo = await buildGoToRouteSnapshot({
+      $set.goTo = await buildGoToRouteSnapshot({
         origin: { coordinates },
-        destination: driver.goTo.homeLocation,
-        homeAddress: driver.goTo.homeAddress,
+        destination: goTo.homeLocation,
+        homeAddress: goTo.homeAddress,
         corridorRadiusMeters:
-          driver.goTo.corridorRadiusMeters || DEFAULT_CORRIDOR_RADIUS_METERS,
-        activatedAt: driver.goTo.activatedAt || new Date()
+          goTo.corridorRadiusMeters || DEFAULT_CORRIDOR_RADIUS_METERS,
+        activatedAt: goTo.activatedAt || new Date()
       })
       goToRouteRefreshed = true
     } catch (routeError) {
-      driver.goTo = markGoToRouteStale(
-        driver.goTo?.toObject?.() || driver.goTo || {},
-        'ROUTE_REFRESH_FAILED'
-      )
+      $set.goTo = markGoToRouteStale(goTo, 'ROUTE_REFRESH_FAILED')
       logger.warn(
-        `GO TO route refresh failed for driver ${driver._id}: ${routeError.message}`
+        `GO TO route refresh failed for driver ${driverId}: ${routeError.message}`
       )
     }
   }
 
-  await driver.save()
+  const driver = await Driver.findByIdAndUpdate(
+    driverId,
+    { $set },
+    { new: true, runValidators: true }
+  )
+  if (!driver) {
+    throw new Error('Driver not found')
+  }
+
   return { driver, goToRouteRefreshed }
 }
 
