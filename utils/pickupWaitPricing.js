@@ -31,6 +31,7 @@ function getPickupWaitPolicyFromSettings (settings) {
   }
 }
 
+/** Admin API parses this as freeMin:tier1EndMin:rate1:rate2 (see pickupWaitAdminDetail.js). */
 function policyVersionString (policy) {
   return [
     policy.pickupWaitFreeMinutes,

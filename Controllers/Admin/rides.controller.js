@@ -1,6 +1,9 @@
 const Ride = require('../../Models/Driver/ride.model');
 const Driver = require('../../Models/Driver/driver.model');
 const logger = require('../../utils/logger');
+const {
+  buildPickupWaitAdminDetail
+} = require('../../utils/pickupWaitAdminDetail');
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket');
 
@@ -73,7 +76,12 @@ const getRideById = async (req, res) => {
       return res.status(404).json({ message: 'Ride not found' });
     }
 
-    res.status(200).json({ ride });
+    const pickupWaitAdminDetail = buildPickupWaitAdminDetail(ride);
+
+    res.status(200).json({
+      ride: ride.toObject ? ride.toObject() : ride,
+      pickupWaitAdminDetail
+    });
   } catch (error) {
     logger.error('Error fetching ride:', error);
     res.status(500).json({ message: 'Error fetching ride', error: error.message });
@@ -158,47 +166,52 @@ const getRideTimeline = async (req, res) => {
       return res.status(404).json({ message: 'Ride not found' });
     }
 
-    const events = [
-      { label: 'Ride Requested', time: ride.createdAt },
-      { label: 'Driver Assigned', time: ride.driver ? ride.updatedAt : null },
-      { label: 'Driver Arrived', time: ride.driverArrivedAt },
-      {
-        label: 'Start OTP verified / trip start',
-        time: ride.startOtpVerifiedAt || ride.actualStartTime,
-      },
-      {
-        label: 'Ride completed (stop OTP)',
-        time: ride.stopOtpVerifiedAt || ride.actualEndTime,
-      },
-      { label: 'Ride Cancelled', time: ride.status === 'cancelled' ? ride.updatedAt : null },
-    ].filter((event) => event.time);
+    const pickupWaitDetail = buildPickupWaitAdminDetail(ride);
 
-    const pw = ride.pickupWait;
-    const pickupWaitSummary =
-      pw &&
-      (pw.totalPickupWaitCharge > 0 ||
-        (pw.waitDurationSeconds != null && pw.waitDurationSeconds > 0))
-        ? {
-            waitDurationSeconds: pw.waitDurationSeconds,
-            waitStartedAt: pw.waitStartedAt,
-            waitEndedAt: pw.waitEndedAt,
-            freeMinutesApplied: pw.freeMinutesApplied,
-            tier1BillableMinutes: pw.tier1BillableMinutes,
-            tier2BillableMinutes: pw.tier2BillableMinutes,
-            amountTier1: pw.amountTier1,
-            amountTier2: pw.amountTier2,
-            totalPickupWaitCharge: pw.totalPickupWaitCharge,
-            policyVersion: pw.policyVersion,
-          }
-        : pw
-          ? {
-              waitDurationSeconds: pw.waitDurationSeconds || 0,
-              totalPickupWaitCharge: pw.totalPickupWaitCharge || 0,
-              note: 'No charge (within free window or no arrival timestamp)',
-            }
-          : null;
+    const events = [];
 
-    res.status(200).json({ events, pickupWaitSummary });
+    const push = (label, time, extra = {}) => {
+      if (time) {
+        events.push({ label, time, ...extra });
+      }
+    };
+
+    push('Ride Requested', ride.createdAt);
+    push('Driver Assigned', ride.driver ? ride.updatedAt : null);
+    push('Driver Arrived', ride.driverArrivedAt);
+
+    if (pickupWaitDetail && pickupWaitDetail.present === true) {
+      const endAt =
+        ride.actualStartTime ||
+        ride.startOtpVerifiedAt ||
+        ride.pickupWait?.waitEndedAt ||
+        pickupWaitDetail.waitEndedAt;
+      push('Pickup wait (arrival → start OTP)', endAt, {
+        type: 'pickup_wait',
+        startedAt:
+          pickupWaitDetail.waitStartedAt ||
+          ride.driverArrivedAt ||
+          ride.pickupWait?.waitStartedAt,
+        endedAt:
+          pickupWaitDetail.waitEndedAt ||
+          ride.actualStartTime ||
+          ride.pickupWait?.waitEndedAt,
+        durationSeconds: pickupWaitDetail.durationSeconds,
+        durationLabel: pickupWaitDetail.durationLabel,
+        amount: pickupWaitDetail.totalPickupWaitCharge,
+        detail: pickupWaitDetail
+      });
+    }
+
+    push('Start OTP verified / trip start', ride.startOtpVerifiedAt || ride.actualStartTime);
+    push('Ride completed (stop OTP)', ride.stopOtpVerifiedAt || ride.actualEndTime);
+    push('Ride Cancelled', ride.status === 'cancelled' ? ride.updatedAt : null);
+
+    res.status(200).json({
+      events,
+      pickupWaitDetail,
+      pickupWaitSummary: pickupWaitDetail
+    });
   } catch (error) {
     logger.error('Error fetching ride timeline:', error);
     res.status(500).json({ message: 'Error fetching ride timeline', error: error.message });
