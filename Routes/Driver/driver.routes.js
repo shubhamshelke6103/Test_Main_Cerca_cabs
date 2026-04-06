@@ -66,6 +66,14 @@ const vehicleDocumentUpload = upload.fields([
     { name: 'vehiclePuc', maxCount: 1 },
 ]);
 
+/** Identity docs: field names map to types on the server (no client-provided names). */
+const driverIdentityUpload = upload.fields([
+    { name: 'aadhaarCard', maxCount: 1 },
+    { name: 'panCard', maxCount: 1 },
+    { name: 'drivingLicense', maxCount: 1 },
+    { name: 'documents', maxCount: 10 },
+]);
+
 // Routes for driver management
 router.post('/', addDriver); // Add a new driver with documents
 router.post('/login', loginDriver); // Login driver
@@ -75,10 +83,10 @@ router.delete('/:id', deleteDriver); // Delete a driver by ID
 router.put('/:id', updateDriver); // Update a driver with optional new documents
 
 // Route to add documents to a driver's documents array
-router.post('/:id/documents', upload.array('documents', 10), addDriverDocuments);
+router.post('/:id/documents', driverIdentityUpload, addDriverDocuments);
 
 // Route to update a driver's documents
-router.put('/:id/documents', upload.array('documents', 10), updateDriverDocuments);
+router.put('/:id/documents', driverIdentityUpload, updateDriverDocuments);
 
 // Route to fetch a driver's documents
 router.get('/:id/documents', getDriverDocuments);

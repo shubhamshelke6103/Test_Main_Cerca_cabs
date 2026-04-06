@@ -202,6 +202,104 @@ const normalizeStoredDocumentEntry = (req, document, index = 0) => {
     };
 };
 
+/** Multipart field name → stored documentType (driver identity uploads). */
+const DRIVER_IDENTITY_FIELD_TYPES = {
+    aadhaarCard: 'AADHAAR_CARD',
+    panCard: 'PAN_CARD',
+    drivingLicense: 'DRIVING_LICENSE',
+};
+
+/** Legacy `documents[]` order matches onboarding: Aadhaar, Driving license, PAN. */
+const LEGACY_DOCUMENTS_ORDER_TYPES = ['AADHAAR_CARD', 'DRIVING_LICENSE', 'PAN_CARD'];
+
+const IDENTITY_DOC_TYPES_FOR_MERGE = new Set(['AADHAAR_CARD', 'PAN_CARD', 'DRIVING_LICENSE']);
+
+/**
+ * @returns {{ error: string|null, entries: object[], mode: 'named'|'legacy'|null }}
+ */
+const collectDriverIdentityUploads = (req) => {
+    const f = req.files;
+
+    if (f == null) {
+        return { error: 'No files uploaded', entries: [], mode: null };
+    }
+
+    const entries = [];
+
+    if (Array.isArray(f)) {
+        if (f.length === 0) {
+            return { error: 'No files uploaded', entries: [], mode: null };
+        }
+        if (f.length > 3) {
+            return {
+                error: 'At most 3 files allowed in legacy documents upload; use aadhaarCard, panCard, and drivingLicense fields instead.',
+                entries: [],
+                mode: 'legacy',
+            };
+        }
+        f.forEach((file, index) => {
+            entries.push(
+                buildUploadedDocumentEntry(req, file, LEGACY_DOCUMENTS_ORDER_TYPES[index])
+            );
+        });
+        return { error: null, entries, mode: 'legacy' };
+    }
+
+    if (typeof f === 'object') {
+        let hasNamed = false;
+        Object.entries(DRIVER_IDENTITY_FIELD_TYPES).forEach(([field, type]) => {
+            const arr = f[field];
+            if (arr && arr[0]) {
+                hasNamed = true;
+                entries.push(buildUploadedDocumentEntry(req, arr[0], type));
+            }
+        });
+        if (hasNamed) {
+            return { error: null, entries, mode: 'named' };
+        }
+
+        const legacyArr = f.documents;
+        if (legacyArr && legacyArr.length > 0) {
+            if (legacyArr.length > 3) {
+                return {
+                    error: 'At most 3 files allowed in legacy documents upload; use aadhaarCard, panCard, and drivingLicense fields instead.',
+                    entries: [],
+                    mode: 'legacy',
+                };
+            }
+            legacyArr.forEach((file, index) => {
+                entries.push(
+                    buildUploadedDocumentEntry(req, file, LEGACY_DOCUMENTS_ORDER_TYPES[index])
+                );
+            });
+            return { error: null, entries, mode: 'legacy' };
+        }
+    }
+
+    return { error: 'No files uploaded', entries: [], mode: null };
+};
+
+/** Remove + delete files for matching identity types, then append new rows. */
+const mergeIdentityDriverDocuments = (driver, newEntries) => {
+    const existing = Array.isArray(driver.documents) ? [...driver.documents] : [];
+    let merged = [...existing];
+
+    newEntries.forEach((newEntry) => {
+        const nt = normalizeDocumentTypeKey(newEntry.documentType);
+        if (!nt || !IDENTITY_DOC_TYPES_FOR_MERGE.has(nt)) {
+            return;
+        }
+        const toRemove = merged.filter(
+            (d) => normalizeDocumentTypeKey(d.documentType) === nt
+        );
+        deleteDriverDocuments(toRemove);
+        merged = merged.filter((d) => normalizeDocumentTypeKey(d.documentType) !== nt);
+        merged.push(newEntry);
+    });
+
+    driver.documents = merged;
+};
+
 const collectVehicleDocuments = (req) => {
     const uploadedFields = req.files || {};
     const missingFields = VEHICLE_DOCUMENT_FIELDS
@@ -547,23 +645,11 @@ const addDriverDocuments = async (req, res) => {
     try {
         const driverId = req.params.id;
 
-        // Check if files are uploaded
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ message: 'No files uploaded' });
+        const { error, entries: documentEntries } = collectDriverIdentityUploads(req);
+        if (error) {
+            return res.status(400).json({ message: error });
         }
 
-        // Generate complete URLs for the uploaded documents
-        const requestedDocumentTypes = Array.isArray(req.body?.documentTypes)
-            ? req.body.documentTypes
-            : typeof req.body?.documentTypes === 'string'
-                ? req.body.documentTypes.split(',').map((item) => item.trim()).filter(Boolean)
-                : [];
-
-        const documentEntries = req.files.map((file, index) =>
-            buildUploadedDocumentEntry(req, file, requestedDocumentTypes[index] || req.body?.documentType)
-        );
-
-        // Find the driver and update the documents array
         const driver = await Driver.findById(driverId);
 
         if (!driver) {
@@ -577,7 +663,7 @@ const addDriverDocuments = async (req, res) => {
             deleteDriverDocuments(driver.documents || []);
             driver.documents = documentEntries;
         } else {
-            driver.documents.push(...documentEntries);
+            mergeIdentityDriverDocuments(driver, documentEntries);
         }
 
         driver.rejectionReason = null;
@@ -788,27 +874,18 @@ const updateDriverDocuments = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        // Check if new documents are uploaded
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ message: 'No files uploaded' });
+        const { error, entries: documentEntries, mode } = collectDriverIdentityUploads(req);
+        if (error) {
+            return res.status(400).json({ message: error });
         }
 
-        // Delete previous files
-        deleteDriverDocuments(driver.documents || []);
+        if (mode === 'legacy') {
+            deleteDriverDocuments(driver.documents || []);
+            driver.documents = documentEntries;
+        } else {
+            mergeIdentityDriverDocuments(driver, documentEntries);
+        }
 
-        // Generate complete URLs for the new documents
-        const requestedDocumentTypes = Array.isArray(req.body?.documentTypes)
-            ? req.body.documentTypes
-            : typeof req.body?.documentTypes === 'string'
-                ? req.body.documentTypes.split(',').map((item) => item.trim()).filter(Boolean)
-                : [];
-
-        const documentEntries = req.files.map((file, index) =>
-            buildUploadedDocumentEntry(req, file, requestedDocumentTypes[index] || req.body?.documentType)
-        );
-
-        // Update the driver's documents array
-        driver.documents = documentEntries;
         driver.rejectionReason = null;
         await driver.save();
 
