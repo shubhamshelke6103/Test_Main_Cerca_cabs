@@ -1342,13 +1342,9 @@ const logoutDriver = async (req, res) => {
 const updateDriverVehicle = async (req, res) => {
     try {
         const { make, model, year, color, licensePlate, vehicleType } = req.body;
+        const driverId = req.params.id;
 
-        const driver = await Driver.findById(req.params.id);
-
-        if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
-        }
-
+        // Validate request body early
         if (!make || !model || !year || !color || !licensePlate) {
             return res.status(400).json({
                 message: 'make, model, year, color, and licensePlate are required',
@@ -1363,6 +1359,16 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
+        // Fetch only the fields needed for validation (not entire driver document)
+        const driver = await Driver.findById(driverId).select('vehicles vendorId email pendingVehicleInfo');
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const owned = getOwnedVehicleRecords(driver);
+
+        // Check for pending approval
         const existingPending = getLatestOwnedVehicleRecord(
             driver,
             vehicle => vehicle.approvalStatus === 'UNDER_APPROVAL'
@@ -1373,7 +1379,7 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        const owned = getOwnedVehicleRecords(driver);
+        // Check max vehicles limit
         if (owned.length >= MAX_DRIVER_OWNED_VEHICLES) {
             return res.status(400).json({
                 message: `You can register at most ${MAX_DRIVER_OWNED_VEHICLES} vehicles`,
@@ -1381,6 +1387,7 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
+        // Check for duplicate license plate
         const plateKey = normalizeLicensePlateKey(licensePlate);
         const duplicatePlate = owned.some(
             (v) =>
@@ -1393,8 +1400,8 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        driver.vehicles = owned;
-        driver.vehicles.push({
+        // Create the new vehicle object
+        const newVehicle = {
             make,
             model,
             year: Number(year),
@@ -1412,25 +1419,34 @@ const updateDriverVehicle = async (req, res) => {
             vendorPreApprovedAt: null,
             approvedBy: null,
             isActive: false,
-        });
-
-        const createdVehicle = driver.vehicles[driver.vehicles.length - 1];
-        driver.pendingVehicleInfo = {
-            ...toPlainVehicleRecord(createdVehicle),
-            sourceVehicleId: createdVehicle._id,
         };
 
-        sanitizeOwnedVehicleDocuments(driver);
-        driver.markModified('vehicles');
-        driver.markModified('pendingVehicleInfo');
+        // Use atomic MongoDB update instead of loading entire document
+        const updatedDriver = await Driver.findByIdAndUpdate(
+            driverId,
+            {
+                $push: { vehicles: newVehicle },
+                $set: {
+                    pendingVehicleInfo: {
+                        ...newVehicle,
+                        sourceVehicleId: new mongoose.Types.ObjectId(), // Generate new ObjectId
+                    },
+                    updatedAt: new Date(),
+                },
+            },
+            { new: true, select: 'vehicles pendingVehicleInfo vendorId' }
+        );
 
-        await driver.save();
+        if (!updatedDriver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
 
         logger.info(`Driver vehicle info updated: ${driver.email}`);
         res.status(200).json({ 
             message: `Vehicle submitted for ${driver.vendorId ? 'vendor' : 'admin'} approval successfully`,
             routedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',
-            ...serializeVehicleState(driver),
+            vehicles: updatedDriver.vehicles,
+            pendingVehicleInfo: updatedDriver.pendingVehicleInfo,
         });
     } catch (error) {
         logger.error('Error updating driver vehicle:', error);
