@@ -1085,12 +1085,22 @@ const deactivateDriverGoTo = async (req, res) => {
         const driver = await getDriverOr404(req.params.id, res);
         if (!driver) return;
 
-        driver.goTo = deactivateGoToState(driver.goTo?.toObject?.() || driver.goTo || {});
-        await driver.save();
+        const goToPayload = deactivateGoToState(
+            driver.goTo?.toObject?.() || driver.goTo || {}
+        );
+        // Atomic $set avoids full-document save() validation on legacy `documents` entries.
+        const updated = await Driver.findByIdAndUpdate(
+            req.params.id,
+            { $set: { goTo: goToPayload } },
+            { new: true, runValidators: true }
+        );
+        if (!updated) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
 
         res.status(200).json({
             message: 'GO TO deactivated successfully',
-            goTo: sanitizeGoToResponse(driver.goTo),
+            goTo: sanitizeGoToResponse(updated.goTo),
         });
     } catch (error) {
         logger.error('Error deactivating GO TO:', error);
