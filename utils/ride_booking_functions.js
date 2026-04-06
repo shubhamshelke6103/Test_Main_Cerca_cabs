@@ -12,6 +12,9 @@ const {
 const { isGoToRideEligible } = require('./goToRoute.service')
 const { persistDriverLocationWithGoTo } = require('./driverLocationPersistence')
 const WalletTransaction = require('../Models/User/walletTransaction.model')
+const AdminEarnings = require('../Models/Admin/adminEarnings.model')
+const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
+const Vendor = require('../Models/vendor/vendor.models')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
 const razorpay = require('razorpay')
@@ -1564,11 +1567,508 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
   }
 }
 
+// --- Driver in-progress cancellation settlement ---------------------------------
+
+const roundMoney = n => Math.round(Number(n || 0) * 100) / 100
+
+async function getRiderPrepaidTotalForRide (ride) {
+  let prepaid = ride.razorpayAmountPaid || 0
+  const wt = await WalletTransaction.findOne({
+    relatedRide: ride._id,
+    transactionType: 'RIDE_PAYMENT',
+    status: 'COMPLETED'
+  }).lean()
+  if (wt && wt.amount > 0) {
+    prepaid += wt.amount
+  } else if ((ride.walletAmountUsed || 0) > 0) {
+    prepaid += ride.walletAmountUsed
+  }
+  return roundMoney(prepaid)
+}
+
+async function getDriverVehicleSnapshotForEarnings (driverId) {
+  if (!driverId) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    }
+  }
+  const driver = await Driver.findById(driverId)
+    .select('vehicleInfo assignedFleetVehicleId')
+    .lean()
+  if (!driver) {
+    return {
+      licensePlate: null,
+      make: null,
+      model: null,
+      year: null,
+      color: null,
+      vehicleType: null,
+      source: 'UNKNOWN'
+    }
+  }
+  if (driver.assignedFleetVehicleId) {
+    const fleetVehicle = await FleetVehicle.findById(driver.assignedFleetVehicleId)
+      .select('licensePlate make model year color vehicleType')
+      .lean()
+    if (fleetVehicle) {
+      return {
+        licensePlate: fleetVehicle.licensePlate || null,
+        make: fleetVehicle.make || null,
+        model: fleetVehicle.model || null,
+        year: fleetVehicle.year || null,
+        color: fleetVehicle.color || null,
+        vehicleType: fleetVehicle.vehicleType || null,
+        source: 'FLEET_ASSIGNED'
+      }
+    }
+  }
+  const vehicleInfo = driver.vehicleInfo || null
+  if (vehicleInfo) {
+    return {
+      licensePlate: vehicleInfo.licensePlate || null,
+      make: vehicleInfo.make || null,
+      model: vehicleInfo.model || null,
+      year: vehicleInfo.year || null,
+      color: vehicleInfo.color || null,
+      vehicleType: vehicleInfo.vehicleType || null,
+      source: 'SELF_OWNED'
+    }
+  }
+  return {
+    licensePlate: null,
+    make: null,
+    model: null,
+    year: null,
+    color: null,
+    vehicleType: null,
+    source: 'UNKNOWN'
+  }
+}
+
+/**
+ * Build settlement object for driver cancelling while ride is in_progress.
+ * Plan A: driver gets full perKmRate × km; penalty to platform or vendor.
+ */
+async function computeDriverInProgressCancelSettlement (originalRide) {
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  const penalty = settings?.pricingConfigurations?.cancellationFees ?? 50
+  const perKmRate = settings?.pricingConfigurations?.perKmRate ?? 12
+
+  const driverDoc =
+    originalRide.driver && originalRide.driver._id
+      ? originalRide.driver
+      : await Driver.findById(originalRide.driver).lean()
+  if (!driverDoc) {
+    throw new Error('Driver not found for settlement')
+  }
+
+  const pickupCoords = originalRide.pickupLocation?.coordinates
+  let partialKm = 0
+  let driverCoords = null
+  if (
+    pickupCoords &&
+    pickupCoords.length >= 2 &&
+    driverDoc.location?.coordinates?.length >= 2
+  ) {
+    const [pLng, pLat] = pickupCoords
+    const [dLng, dLat] = driverDoc.location.coordinates
+    driverCoords = [dLng, dLat]
+    partialKm = calculateHaversineDistance(pLat, pLng, dLat, dLng)
+  }
+
+  const driverPartialAmount = roundMoney(partialKm * perKmRate)
+  const riderPenaltyAmount = roundMoney(penalty)
+  const riderTotalCharge = roundMoney(riderPenaltyAmount + driverPartialAmount)
+
+  const vendorId = driverDoc.vendorId || null
+  const fineRecipient = vendorId ? 'vendor' : 'platform'
+  const vendorFineAmount = fineRecipient === 'vendor' ? riderPenaltyAmount : 0
+  const platformFineAmount = fineRecipient === 'platform' ? riderPenaltyAmount : 0
+
+  const prepaidTotal = await getRiderPrepaidTotalForRide(originalRide)
+  const additionalDue = roundMoney(Math.max(0, riderTotalCharge - prepaidTotal))
+  const refundDue = roundMoney(Math.max(0, prepaidTotal - riderTotalCharge))
+
+  const riderPaymentStatus = additionalDue > 0 ? 'pending' : 'none_due'
+
+  return {
+    partialDistanceKm: roundMoney(partialKm),
+    perKmRateUsed: perKmRate,
+    driverPartialAmount,
+    riderPenaltyAmount,
+    riderTotalCharge,
+    prepaidTotal,
+    additionalDue,
+    refundDue,
+    fineRecipient,
+    vendorFineAmount,
+    platformFineAmount,
+    driverCoordsAtCancel: driverCoords,
+    riderPaymentStatus,
+    ledgerFinalizedAt: null,
+    settlementVersion: 1
+  }
+}
+
+async function applyRefundForDriverInProgressCancel (ride, settlement) {
+  const refundDue = settlement.refundDue || 0
+  if (refundDue <= 0) {
+    return { refunded: true, refundAmount: 0 }
+  }
+
+  const riderId = ride.rider?._id || ride.rider
+  const user = await User.findById(riderId)
+  if (!user) {
+    logger.error(`applyRefundForDriverInProgressCancel: rider ${riderId} not found`)
+    return { refunded: false, error: 'User not found' }
+  }
+
+  const existingRefund = await WalletTransaction.findOne({
+    relatedRide: ride._id,
+    transactionType: 'REFUND',
+    status: 'COMPLETED',
+    'metadata.driverInProgressCancel': true
+  })
+  if (existingRefund) {
+    return { refunded: true, refundAmount: existingRefund.amount, duplicate: true }
+  }
+
+  let remaining = refundDue
+  const rzPaid = ride.razorpayAmountPaid || 0
+  let razorpayRefundId = null
+  let razorpayRefundStatus = null
+
+  if (ride.razorpayPaymentId && rzPaid > 0 && remaining > 0) {
+    const rzRefundAmount = Math.min(remaining, rzPaid)
+    const rzRefundPaise = Math.round(rzRefundAmount * 100)
+    if (rzRefundPaise > 0) {
+      try {
+        const refund = await razorpayInstance.payments.refund(ride.razorpayPaymentId, {
+          amount: rzRefundPaise,
+          speed: 'normal',
+          notes: {
+            reason: 'driver_in_progress_cancel',
+            rideId: String(ride._id)
+          }
+        })
+        razorpayRefundId = refund.id
+        razorpayRefundStatus = refund.status
+        remaining = roundMoney(remaining - rzRefundAmount)
+        logger.info(
+          `applyRefundForDriverInProgressCancel: Razorpay refund ₹${rzRefundAmount} for ride ${ride._id}`
+        )
+      } catch (e) {
+        logger.error(`applyRefundForDriverInProgressCancel: Razorpay error ${e.message}`)
+      }
+    }
+  }
+
+  if (remaining > 0) {
+    const balanceBefore = user.walletBalance || 0
+    const balanceAfter = roundMoney(balanceBefore + remaining)
+    user.walletBalance = balanceAfter
+    await user.save()
+
+    await WalletTransaction.create({
+      user: riderId,
+      transactionType: 'REFUND',
+      amount: remaining,
+      balanceBefore,
+      balanceAfter,
+      relatedRide: ride._id,
+      paymentMethod: 'WALLET',
+      status: 'COMPLETED',
+      description: `Refund after driver cancelled trip (₹${refundDue} total settlement)`,
+      metadata: {
+        driverInProgressCancel: true,
+        razorpayPortion: roundMoney(refundDue - remaining)
+      }
+    })
+  }
+
+  const ridePaymentPatch = {
+    refundAmount: refundDue,
+    razorpayRefundId: razorpayRefundId || ride.razorpayRefundId,
+    razorpayRefundStatus: razorpayRefundStatus || ride.razorpayRefundStatus
+  }
+  if (refundDue > 0) {
+    ridePaymentPatch.paymentStatus = 'refunded'
+  }
+  await Ride.findByIdAndUpdate(ride._id, ridePaymentPatch)
+
+  return { refunded: true, refundAmount: refundDue, razorpayRefundId }
+}
+
+/**
+ * Idempotent: creates AdminEarnings, vendor sync, driver socket event.
+ */
+async function finalizeDriverInProgressCancelLedger (rideId) {
+  const ride = await Ride.findById(rideId)
+    .populate('driver', 'vendorId')
+    .populate('rider')
+    .lean()
+  if (!ride || !ride.driverInProgressCancelSettlement) {
+    return { ok: false, reason: 'no_settlement' }
+  }
+
+  const st = ride.driverInProgressCancelSettlement
+  if (st.ledgerFinalizedAt) {
+    return { ok: true, alreadyFinalized: true }
+  }
+
+  const allowed = ['none_due', 'paid_online', 'cash_acknowledged']
+  if (!allowed.includes(st.riderPaymentStatus)) {
+    return { ok: false, reason: 'rider_payment_pending' }
+  }
+
+  const driverPartial = st.driverPartialAmount || 0
+  const penalty = st.riderPenaltyAmount || 0
+  const grossFare = roundMoney(driverPartial + penalty)
+  const vendorFine = st.vendorFineAmount || 0
+  const platformFine = st.platformFineAmount || 0
+
+  const driverId = ride.driver._id || ride.driver
+  const riderId = ride.rider._id || ride.rider
+
+  const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
+
+  const rideDocForRefund = await Ride.findById(rideId).populate('rider')
+  await applyRefundForDriverInProgressCancel(rideDocForRefund, st)
+
+  await AdminEarnings.findOneAndUpdate(
+    { rideId: ride._id },
+    {
+      rideId: ride._id,
+      driverId,
+      riderId,
+      grossFare,
+      platformFee: roundMoney(platformFine),
+      driverEarning: roundMoney(driverPartial),
+      rideDate: new Date(),
+      vehicleSnapshot,
+      paymentStatus: 'completed',
+      settlementType: 'driver_cancel_in_progress',
+      vendorFineCredit: roundMoney(vendorFine),
+      riderPenaltyAmount: roundMoney(penalty)
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  )
+
+  const vendorDocId =
+    ride.driver?.vendorId ||
+    (await Driver.findById(driverId).select('vendorId').lean())?.vendorId
+  if (vendorDocId) {
+    try {
+      const { syncVendorFinancialFields } = require('../Controllers/Vendor/vendor.controller.js')
+      await syncVendorFinancialFields(vendorDocId)
+    } catch (e) {
+      logger.warn(`finalizeDriverInProgressCancelLedger: vendor sync ${e.message}`)
+    }
+  }
+
+  await Ride.findByIdAndUpdate(rideId, {
+    'driverInProgressCancelSettlement.ledgerFinalizedAt': new Date(),
+    cancellationFee: penalty
+  })
+
+  try {
+    const { getSocketIO } = require('./socket.js')
+    const io = getSocketIO()
+    io.to(`driver_${driverId}`).emit('driverEarningAdded', {
+      driverId: String(driverId),
+      rideId: String(rideId),
+      driverEarning: driverPartial,
+      grossFare,
+      platformFee: platformFine,
+      settlementType: 'driver_cancel_in_progress'
+    })
+    const riderSock = ride.userSocketId
+    if (riderSock) {
+      io.to(riderSock).emit('riderSettlementCompleted', {
+        rideId: String(rideId),
+        success: true
+      })
+    }
+  } catch (e) {
+    logger.warn(`finalizeDriverInProgressCancelLedger: socket emit ${e.message}`)
+  }
+
+  return { ok: true }
+}
+
+/**
+ * Rider: acknowledge no extra charge (or after server auto none_due) — ensures ledger if not yet.
+ */
+async function riderAcknowledgeDriverInProgressCancel (rideId, userId) {
+  const ride = await Ride.findById(rideId).populate('rider')
+  if (!ride) throw new Error('Ride not found')
+  const rid = ride.rider._id || ride.rider
+  if (String(rid) !== String(userId)) throw new Error('Unauthorized')
+
+  const st = ride.driverInProgressCancelSettlement
+  if (!st || ride.cancelledBy !== 'driver') {
+    throw new Error('No driver in-progress cancellation settlement for this ride')
+  }
+
+  if ((st.additionalDue || 0) > 0) {
+    throw new Error('Additional payment required; use pay-wallet or Razorpay flow')
+  }
+
+  await Ride.findByIdAndUpdate(rideId, {
+    'driverInProgressCancelSettlement.riderPaymentStatus': 'none_due'
+  })
+
+  return finalizeDriverInProgressCancelLedger(rideId)
+}
+
+/**
+ * Rider confirms cash payment of additional due.
+ */
+async function riderConfirmCashDriverInProgressCancel (rideId, userId) {
+  const ride = await Ride.findById(rideId).populate('rider')
+  if (!ride) throw new Error('Ride not found')
+  const rid = ride.rider._id || ride.rider
+  if (String(rid) !== String(userId)) throw new Error('Unauthorized')
+
+  const st = ride.driverInProgressCancelSettlement
+  if (!st || ride.cancelledBy !== 'driver') {
+    throw new Error('No driver in-progress cancellation settlement for this ride')
+  }
+
+  if ((st.additionalDue || 0) <= 0) {
+    await Ride.findByIdAndUpdate(rideId, {
+      'driverInProgressCancelSettlement.riderPaymentStatus': 'none_due'
+    })
+  } else {
+    await Ride.findByIdAndUpdate(rideId, {
+      'driverInProgressCancelSettlement.riderPaymentStatus': 'cash_acknowledged'
+    })
+  }
+
+  return finalizeDriverInProgressCancelLedger(rideId)
+}
+
+/**
+ * Debit rider wallet for additionalDue then finalize.
+ */
+async function riderPayWalletDriverInProgressCancel (rideId, userId) {
+  const ride = await Ride.findById(rideId).populate('rider')
+  if (!ride) throw new Error('Ride not found')
+  const rid = ride.rider._id || ride.rider
+  if (String(rid) !== String(userId)) throw new Error('Unauthorized')
+
+  const st = ride.driverInProgressCancelSettlement
+  if (!st || ride.cancelledBy !== 'driver') {
+    throw new Error('No driver in-progress cancellation settlement for this ride')
+  }
+
+  const due = st.additionalDue || 0
+  if (due <= 0) {
+    await Ride.findByIdAndUpdate(rideId, {
+      'driverInProgressCancelSettlement.riderPaymentStatus': 'none_due'
+    })
+    return finalizeDriverInProgressCancelLedger(rideId)
+  }
+
+  const user = await User.findById(userId)
+  if (!user) throw new Error('User not found')
+  const balanceBefore = user.walletBalance || 0
+  if (balanceBefore < due) {
+    throw new Error('Insufficient wallet balance')
+  }
+
+  const existing = await WalletTransaction.findOne({
+    relatedRide: ride._id,
+    transactionType: 'CANCELLATION_FEE',
+    status: 'COMPLETED',
+    'metadata.driverInProgressCancelAdditional': true
+  })
+  if (existing) {
+    await Ride.findByIdAndUpdate(rideId, {
+      'driverInProgressCancelSettlement.riderPaymentStatus': 'paid_online'
+    })
+    return finalizeDriverInProgressCancelLedger(rideId)
+  }
+
+  const balanceAfter = roundMoney(balanceBefore - due)
+  user.walletBalance = balanceAfter
+  await user.save()
+
+  await WalletTransaction.create({
+    user: userId,
+    transactionType: 'CANCELLATION_FEE',
+    amount: due,
+    balanceBefore,
+    balanceAfter,
+    relatedRide: ride._id,
+    paymentMethod: 'WALLET',
+    status: 'COMPLETED',
+    description: `Driver cancelled trip — settlement charge ₹${due}`,
+    metadata: { driverInProgressCancelAdditional: true }
+  })
+
+  await Ride.findByIdAndUpdate(rideId, {
+    'driverInProgressCancelSettlement.riderPaymentStatus': 'paid_online'
+  })
+
+  return finalizeDriverInProgressCancelLedger(rideId)
+}
+
+/**
+ * After Razorpay payment for additionalDue — verify and finalize.
+ */
+async function riderVerifyRazorpayDriverInProgressCancel (rideId, userId, razorpayPaymentId) {
+  const ride = await Ride.findById(rideId).populate('rider')
+  if (!ride) throw new Error('Ride not found')
+  const rid = ride.rider._id || ride.rider
+  if (String(rid) !== String(userId)) throw new Error('Unauthorized')
+
+  const st = ride.driverInProgressCancelSettlement
+  if (!st || ride.cancelledBy !== 'driver') {
+    throw new Error('No driver in-progress cancellation settlement for this ride')
+  }
+
+  const due = roundMoney(st.additionalDue || 0)
+  if (due <= 0) {
+    await Ride.findByIdAndUpdate(rideId, {
+      'driverInProgressCancelSettlement.riderPaymentStatus': 'none_due'
+    })
+    return finalizeDriverInProgressCancelLedger(rideId)
+  }
+
+  const payment = await razorpayInstance.payments.fetch(razorpayPaymentId)
+  if (payment.status !== 'captured' && payment.status !== 'authorized') {
+    throw new Error(`Payment not completed: ${payment.status}`)
+  }
+  const paid = roundMoney(payment.amount / 100)
+  if (Math.abs(paid - due) > 0.02) {
+    throw new Error('Payment amount does not match amount due')
+  }
+
+  await Ride.findByIdAndUpdate(rideId, {
+    'driverInProgressCancelSettlement.riderPaymentStatus': 'paid_online',
+    'driverInProgressCancelSettlement.razorpaySettlementPaymentId': razorpayPaymentId
+  })
+
+  return finalizeDriverInProgressCancelLedger(rideId)
+}
+
 const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
   try {
     // Fetch ride BEFORE updating to get original status for refund calculation
     const originalRide = await Ride.findById(rideId).populate('driver rider')
     if (!originalRide) throw new Error('Ride not found')
+
+    if (originalRide.status === 'cancelled') {
+      return await Ride.findById(rideId).populate('driver rider')
+    }
 
     const originalStatus = originalRide.status
 
@@ -1581,6 +2081,22 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
       logger.info(`cancelRide: Normalized cancelledBy from "${cancelledBy}" to "${normalizedCancelledBy}" for ride ${rideId}`)
     }
 
+    let skipStandardRefunds = false
+    let driverInProgressSettlementSnapshot = null
+
+    if (normalizedCancelledBy === 'driver' && originalStatus === 'in_progress') {
+      if (
+        originalRide.driverInProgressCancelSettlement &&
+        originalRide.driverInProgressCancelSettlement.ledgerFinalizedAt
+      ) {
+        return await Ride.findById(rideId).populate('driver rider')
+      }
+      driverInProgressSettlementSnapshot = await computeDriverInProgressCancelSettlement(
+        originalRide
+      )
+      skipStandardRefunds = true
+    }
+
     const updateData = {
       status: 'cancelled',
       cancelledBy: normalizedCancelledBy
@@ -1589,6 +2105,11 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
     // Add cancellation reason if provided
     if (cancellationReason) {
       updateData.cancellationReason = cancellationReason
+    }
+
+    if (driverInProgressSettlementSnapshot) {
+      updateData.driverInProgressCancelSettlement = driverInProgressSettlementSnapshot
+      updateData.cancellationFee = driverInProgressSettlementSnapshot.riderPenaltyAmount
     }
 
     const ride = await Ride.findByIdAndUpdate(rideId, updateData, {
@@ -1655,8 +2176,17 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
       // Use originalRide with originalStatus for accurate cancellation fee calculation
       try {
         logger.info(
-          `cancelRide refund path - rideId: ${rideId}, cancelledBy: ${normalizedCancelledBy}, paymentMethod: ${originalRide.paymentMethod}, originalStatus: ${originalStatus}`
+          `cancelRide refund path - rideId: ${rideId}, cancelledBy: ${normalizedCancelledBy}, paymentMethod: ${originalRide.paymentMethod}, originalStatus: ${originalStatus}, skipStandardRefunds: ${skipStandardRefunds}`
         )
+
+        if (skipStandardRefunds && driverInProgressSettlementSnapshot) {
+          logger.info(
+            `cancelRide: driver in_progress cancel — standard refunds skipped; additionalDue=${driverInProgressSettlementSnapshot.additionalDue}`
+          )
+          if (driverInProgressSettlementSnapshot.additionalDue <= 0) {
+            await finalizeDriverInProgressCancelLedger(rideId)
+          }
+        } else if (!skipStandardRefunds) {
 
         // Check for Razorpay payment (either pure RAZORPAY or hybrid with Razorpay portion)
         const hasRazorpayPayment = originalRide.razorpayPaymentId && (originalRide.razorpayAmountPaid > 0 || originalRide.fare > 0)
@@ -1703,6 +2233,7 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
           }
         } else {
           logger.info(`ℹ️ No refund processing needed for cancelled ride ${rideId} - payment method: ${originalRide.paymentMethod}`)
+        }
         }
       } catch (refundError) {
         // Don't fail cancellation if refund fails - log for manual review
@@ -2855,5 +3386,11 @@ module.exports = {
   clearRideRedisKeys,
   checkAndCleanStaleRideLocks,
   clearRideLock,
-  clearWorkerLock
+  clearWorkerLock,
+  computeDriverInProgressCancelSettlement,
+  finalizeDriverInProgressCancelLedger,
+  riderAcknowledgeDriverInProgressCancel,
+  riderConfirmCashDriverInProgressCancel,
+  riderPayWalletDriverInProgressCancel,
+  riderVerifyRazorpayDriverInProgressCancel
 }

@@ -294,7 +294,38 @@ const rideSchema = new mongoose.Schema(
       default: false
     },
 
-    shareCreatedAt: Date
+    shareCreatedAt: Date,
+
+    // Driver cancelled during in_progress — settlement + rider payment gate
+    driverInProgressCancelSettlement: {
+      partialDistanceKm: { type: Number, default: null },
+      perKmRateUsed: { type: Number, default: null },
+      driverPartialAmount: { type: Number, default: null },
+      riderPenaltyAmount: { type: Number, default: null },
+      riderTotalCharge: { type: Number, default: null },
+      prepaidTotal: { type: Number, default: null },
+      additionalDue: { type: Number, default: null },
+      refundDue: { type: Number, default: null },
+      fineRecipient: {
+        type: String,
+        enum: ['platform', 'vendor'],
+        default: null
+      },
+      vendorFineAmount: { type: Number, default: 0 },
+      platformFineAmount: { type: Number, default: 0 },
+      driverCoordsAtCancel: {
+        type: [Number],
+        default: null
+      },
+      riderPaymentStatus: {
+        type: String,
+        enum: ['pending', 'none_due', 'paid_online', 'cash_acknowledged'],
+        default: null
+      },
+      ledgerFinalizedAt: { type: Date, default: null },
+      settlementVersion: { type: Number, default: 1 },
+      razorpaySettlementPaymentId: { type: String, default: null }
+    }
   },
   {
     timestamps: true

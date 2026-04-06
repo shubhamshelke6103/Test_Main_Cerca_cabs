@@ -19,10 +19,18 @@ const {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
-  updateRideDestination
+  updateRideDestination,
+  acknowledgeDriverCancelSettlement,
+  confirmCashDriverCancelSettlement,
+  payWalletDriverCancelSettlement,
+  verifyRazorpayDriverCancelSettlement
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
-const { createRidePaymentOrder, verifyRidePayment } = require('../Controllers/payment.controller');
+const {
+  createRidePaymentOrder,
+  verifyRidePayment,
+  createDriverCancelSettlementOrder
+} = require('../Controllers/payment.controller');
 
 const router = express.Router();
 
@@ -64,6 +72,28 @@ router.post('/:rideId/pay-online', createRidePaymentOrder);
 
 // POST /rides/:rideId/verify-payment - Verify Razorpay payment for ride
 router.post('/:rideId/verify-payment', verifyRidePayment);
+
+// Driver in-progress cancel — rider settlement (must be before /:id)
+router.post(
+  '/:rideId/driver-cancel-settlement/acknowledge',
+  acknowledgeDriverCancelSettlement
+);
+router.post(
+  '/:rideId/driver-cancel-settlement/confirm-cash',
+  confirmCashDriverCancelSettlement
+);
+router.post(
+  '/:rideId/driver-cancel-settlement/pay-wallet',
+  payWalletDriverCancelSettlement
+);
+router.post(
+  '/:rideId/driver-cancel-settlement/pay-order',
+  createDriverCancelSettlementOrder
+);
+router.post(
+  '/:rideId/driver-cancel-settlement/verify-razorpay',
+  verifyRazorpayDriverCancelSettlement
+);
 
 // Get rides for a specific user
 // GET /rides/user/:userId

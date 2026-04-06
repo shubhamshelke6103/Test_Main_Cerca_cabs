@@ -1735,6 +1735,97 @@ const getSharedLiveLocation = async (req, res) => {
   }
 }
 
+const {
+  riderAcknowledgeDriverInProgressCancel,
+  riderConfirmCashDriverInProgressCancel,
+  riderPayWalletDriverInProgressCancel,
+  riderVerifyRazorpayDriverInProgressCancel
+} = rideBookingFunctions
+
+/**
+ * POST /rides/:rideId/driver-cancel-settlement/acknowledge
+ * Rider confirms receipt when no additional amount is due (or to sync ledger).
+ */
+const acknowledgeDriverCancelSettlement = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const { userId } = req.body
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const result = await riderAcknowledgeDriverInProgressCancel(rideId, userId)
+    const ride = await Ride.findById(rideId).populate('driver rider')
+    res.status(200).json({ success: true, data: { result, ride } })
+  } catch (error) {
+    logger.error('acknowledgeDriverCancelSettlement:', error)
+    res.status(400).json({ success: false, message: error.message })
+  }
+}
+
+/**
+ * POST /rides/:rideId/driver-cancel-settlement/confirm-cash
+ */
+const confirmCashDriverCancelSettlement = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const { userId } = req.body
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const result = await riderConfirmCashDriverInProgressCancel(rideId, userId)
+    const ride = await Ride.findById(rideId).populate('driver rider')
+    res.status(200).json({ success: true, data: { result, ride } })
+  } catch (error) {
+    logger.error('confirmCashDriverCancelSettlement:', error)
+    res.status(400).json({ success: false, message: error.message })
+  }
+}
+
+/**
+ * POST /rides/:rideId/driver-cancel-settlement/pay-wallet
+ */
+const payWalletDriverCancelSettlement = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const { userId } = req.body
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const result = await riderPayWalletDriverInProgressCancel(rideId, userId)
+    const ride = await Ride.findById(rideId).populate('driver rider')
+    res.status(200).json({ success: true, data: { result, ride } })
+  } catch (error) {
+    logger.error('payWalletDriverCancelSettlement:', error)
+    res.status(400).json({ success: false, message: error.message })
+  }
+}
+
+/**
+ * POST /rides/:rideId/driver-cancel-settlement/verify-razorpay
+ */
+const verifyRazorpayDriverCancelSettlement = async (req, res) => {
+  try {
+    const { rideId } = req.params
+    const { userId, razorpay_payment_id: razorpayPaymentId } = req.body
+    if (!userId || !razorpayPaymentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId and razorpay_payment_id are required'
+      })
+    }
+    const result = await riderVerifyRazorpayDriverInProgressCancel(
+      rideId,
+      userId,
+      razorpayPaymentId
+    )
+    const ride = await Ride.findById(rideId).populate('driver rider')
+    res.status(200).json({ success: true, data: { result, ride } })
+  } catch (error) {
+    logger.error('verifyRazorpayDriverCancelSettlement:', error)
+    res.status(400).json({ success: false, message: error.message })
+  }
+}
+
 module.exports = {
   createRide,
   getAllRides,
@@ -1754,5 +1845,9 @@ module.exports = {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
-  updateRideDestination
+  updateRideDestination,
+  acknowledgeDriverCancelSettlement,
+  confirmCashDriverCancelSettlement,
+  payWalletDriverCancelSettlement,
+  verifyRazorpayDriverCancelSettlement
 }

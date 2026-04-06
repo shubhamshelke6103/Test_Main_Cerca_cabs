@@ -466,9 +466,96 @@ const verifyRidePayment = async (req, res) => {
   }
 };
 
+/**
+ * Razorpay order for additional amount after driver cancels in_progress
+ * POST /rides/:rideId/driver-cancel-settlement/pay-order
+ */
+const createDriverCancelSettlementOrder = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId is required'
+      });
+    }
+
+    const Ride = require('../Models/Driver/ride.model');
+    const ride = await Ride.findById(rideId);
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' });
+    }
+
+    const riderId = ride.rider?._id || ride.rider;
+    if (!riderId || riderId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized: This ride does not belong to you'
+      });
+    }
+
+    const st = ride.driverInProgressCancelSettlement;
+    if (!st || ride.cancelledBy !== 'driver') {
+      return res.status(400).json({
+        success: false,
+        message: 'No driver in-progress cancellation settlement for this ride'
+      });
+    }
+
+    const amount = Math.round((st.additionalDue || 0) * 100) / 100;
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No additional payment required for this ride'
+      });
+    }
+
+    if (amount < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Use wallet payment for amounts below ₹10'
+      });
+    }
+
+    const options = {
+      amount: Math.round(amount * 100),
+      currency: 'INR',
+      notes: {
+        rideId: rideId.toString(),
+        userId: userId.toString(),
+        type: 'driver_in_progress_cancel_settlement'
+      }
+    };
+
+    const order = await instance.orders.create(options);
+    logger.info(
+      `Driver cancel settlement order ${order.id} ride=${rideId} amount=₹${amount}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order created',
+      data: {
+        orderId: order.id,
+        amount,
+        key
+      }
+    });
+  } catch (error) {
+    logger.error('createDriverCancelSettlementOrder:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create order'
+    });
+  }
+};
+
 module.exports = { 
   initiatePayment, 
   handleRazorpayWebhook,
   createRidePaymentOrder,
-  verifyRidePayment
+  verifyRidePayment,
+  createDriverCancelSettlementOrder
 };

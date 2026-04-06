@@ -3126,7 +3126,7 @@ function initializeSocket (server) {
         }
 
         // Load ride to validate canceller and set cancelledBy server-side
-        const rideForAuth = await Ride.findById(rideId).select('rider driver').lean()
+        const rideForAuth = await Ride.findById(rideId).select('rider driver status').lean()
         if (!rideForAuth) {
           logger.warn(`rideCancelled: Ride not found - rideId: ${rideId}`)
           socket.emit('rideError', { message: 'Ride not found' })
@@ -3143,6 +3143,16 @@ function initializeSocket (server) {
           serverCancelledBy = 'rider'
         } else if (socketDriverId && driverIdStr && socketDriverId === driverIdStr) {
           serverCancelledBy = 'driver'
+        }
+
+        if (serverCancelledBy === 'driver' && rideForAuth.status !== 'in_progress') {
+          logger.warn(
+            `rideCancelled: Driver may only cancel via socket during in_progress — ride ${rideId} status=${rideForAuth.status}`
+          )
+          socket.emit('rideError', {
+            message: 'You can only cancel during an active trip. Use reject ride if the trip has not started.'
+          })
+          return
         }
 
         if (!serverCancelledBy) {

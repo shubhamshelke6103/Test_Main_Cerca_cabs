@@ -74,6 +74,21 @@ const adminEarningsSchema = new mongoose.Schema({
         enum: ['pending', 'completed', 'failed', 'refunded'],
         default: 'pending',
     },
+    settlementType: {
+        type: String,
+        enum: ['completed', 'driver_cancel_in_progress'],
+        default: 'completed',
+    },
+    vendorFineCredit: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
+    riderPenaltyAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
 }, {
     timestamps: true,
 });

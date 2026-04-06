@@ -231,7 +231,9 @@ const buildVendorDriverRevenueMetrics = ({ driver, earnings = [], vendor }) => {
     current.rideCount += 1
     current.grossRevenue += Number(earning.grossFare) || 0
     current.driverEarning += driverEarning
-    current.vehicleProfit += calculateVendorCommission(vendor, driverEarning)
+    const fine = Number(earning.vendorFineCredit) || 0
+    current.vehicleProfit +=
+      calculateVendorCommission(vendor, driverEarning) + fine
   }
 
   const totalDriverEarnings = earnings.reduce(
@@ -239,7 +241,10 @@ const buildVendorDriverRevenueMetrics = ({ driver, earnings = [], vendor }) => {
     0
   )
   const totalVehicleProfit = earnings.reduce(
-    (sum, earning) => sum + calculateVendorCommission(vendor, earning.driverEarning),
+    (sum, earning) =>
+      sum +
+      calculateVendorCommission(vendor, earning.driverEarning) +
+      (Number(earning.vendorFineCredit) || 0),
     0
   )
 
@@ -290,6 +295,8 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
         totalGrossRevenue: 0,
         totalDriverEarnings: 0,
         totalVendorCommission: 0,
+        totalCancellationFines: 0,
+        totalVendorProfit: 0,
         totalPlatformFee: 0,
         rideCount: 0
       },
@@ -308,6 +315,8 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
 
   const rideWiseRevenue = earnings.map(entry => {
     const vendorCommission = calculateVendorCommission(vendor, entry.driverEarning)
+    const cancellationFineCredit = roundCurrency(entry.vendorFineCredit || 0)
+    const vendorProfit = roundCurrency(vendorCommission + cancellationFineCredit)
     return {
       earningId: entry._id,
       rideId: entry.rideId?._id || null,
@@ -326,7 +335,9 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       platformFee: roundCurrency(entry.platformFee),
       driverEarning: roundCurrency(entry.driverEarning),
       vendorCommission,
-      vendorProfit: vendorCommission,
+      cancellationFineCredit,
+      vendorProfit,
+      settlementType: entry.settlementType || 'completed',
       paymentStatus: entry.paymentStatus
     }
   })
@@ -352,7 +363,7 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
     current.rideCount += 1
     current.grossRevenue += row.grossRevenue || 0
     current.driverEarning += row.driverEarning || 0
-    current.vendorCommission += row.vendorCommission || 0
+    current.vendorCommission += row.vendorProfit || row.vendorCommission || 0
   }
 
   const driverWiseEarnings = Array.from(driverWiseMap.values()).map(item => ({
@@ -367,6 +378,8 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       acc.totalGrossRevenue += row.grossRevenue || 0
       acc.totalDriverEarnings += row.driverEarning || 0
       acc.totalVendorCommission += row.vendorCommission || 0
+      acc.totalCancellationFines += row.cancellationFineCredit || 0
+      acc.totalVendorProfit += row.vendorProfit || 0
       acc.totalPlatformFee += row.platformFee || 0
       acc.rideCount += 1
       return acc
@@ -375,6 +388,8 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       totalGrossRevenue: 0,
       totalDriverEarnings: 0,
       totalVendorCommission: 0,
+      totalCancellationFines: 0,
+      totalVendorProfit: 0,
       totalPlatformFee: 0,
       rideCount: 0
     }
@@ -386,6 +401,8 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       totalGrossRevenue: roundCurrency(summary.totalGrossRevenue),
       totalDriverEarnings: roundCurrency(summary.totalDriverEarnings),
       totalVendorCommission: roundCurrency(summary.totalVendorCommission),
+      totalCancellationFines: roundCurrency(summary.totalCancellationFines),
+      totalVendorProfit: roundCurrency(summary.totalVendorProfit),
       totalPlatformFee: roundCurrency(summary.totalPlatformFee),
       rideCount: summary.rideCount
     },
@@ -419,7 +436,9 @@ const getVendorFinancialSnapshot = async vendorId => {
       driverId: { $in: driverIds },
       paymentStatus: 'completed'
     })
-      .select('driverId rideId driverEarning grossFare platformFee rideDate')
+      .select(
+        'driverId rideId driverEarning grossFare platformFee rideDate vendorFineCredit settlementType'
+      )
       .lean(),
     VendorPayout.find({
       vendor: vendorId,
@@ -437,14 +456,23 @@ const getVendorFinancialSnapshot = async vendorId => {
     })
   })
 
-  const completedCommissionRows = completedEarnings.map(earning => ({
-    earningId: earning._id?.toString(),
-    rideId: earning.rideId || null,
-    driverId: earning.driverId || null,
-    driverEarning: roundCurrency(earning.driverEarning),
-    vendorCommission: calculateVendorCommission(vendor, earning.driverEarning),
-    rideDate: earning.rideDate
-  }))
+  const completedCommissionRows = completedEarnings.map(earning => {
+    const vendorCommission = calculateVendorCommission(
+      vendor,
+      earning.driverEarning
+    )
+    const vendorFineCredit = roundCurrency(earning.vendorFineCredit || 0)
+    return {
+      earningId: earning._id?.toString(),
+      rideId: earning.rideId || null,
+      driverId: earning.driverId || null,
+      driverEarning: roundCurrency(earning.driverEarning),
+      vendorCommission,
+      vendorFineCredit,
+      totalVendorCredit: roundCurrency(vendorCommission + vendorFineCredit),
+      rideDate: earning.rideDate
+    }
+  })
 
   const eligibleCommissionRows = completedCommissionRows.filter(
     row => row.earningId && !reservedEarningIds.has(row.earningId)
@@ -452,13 +480,13 @@ const getVendorFinancialSnapshot = async vendorId => {
 
   const totalCompletedCommission = roundCurrency(
     completedCommissionRows.reduce(
-      (sum, row) => sum + (row.vendorCommission || 0),
+      (sum, row) => sum + (row.totalVendorCredit || 0),
       0
     )
   )
   const availableBalance = roundCurrency(
     eligibleCommissionRows.reduce(
-      (sum, row) => sum + (row.vendorCommission || 0),
+      (sum, row) => sum + (row.totalVendorCredit || 0),
       0
     )
   )
@@ -511,6 +539,8 @@ const syncVendorFinancialFields = async vendorId => {
 
   return snapshot
 }
+
+exports.syncVendorFinancialFields = syncVendorFinancialFields
 
 const normalizeStoredDocumentUrl = (req, url) => {
   const rawUrl = String(url || '').trim()
@@ -2022,6 +2052,8 @@ exports.getVendorDriverWiseEarnings = async (req, res) => {
         summary: {
           totalDriverEarnings: report.summary.totalDriverEarnings,
           totalVendorCommission: report.summary.totalVendorCommission,
+          totalCancellationFines: report.summary.totalCancellationFines,
+          totalVendorProfit: report.summary.totalVendorProfit,
           rideCount: report.summary.rideCount
         },
         driverWiseEarnings: report.driverWiseEarnings
