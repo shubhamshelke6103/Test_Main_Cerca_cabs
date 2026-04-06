@@ -34,7 +34,7 @@ const addBucketMinutes = (buckets, key, minutes) => {
 }
 
 const startDriverOnlineSession = async (driverId, source = 'manual_toggle') => {
-  const driver = await Driver.findById(driverId)
+  let driver = await Driver.findById(driverId)
   if (!driver) {
     throw new Error('Driver not found')
   }
@@ -62,8 +62,16 @@ const startDriverOnlineSession = async (driverId, source = 'manual_toggle') => {
     }
   }
 
-  if (driver.currentOnlineSessionStartedAt) {
+  if (driver.currentOnlineSessionStartedAt && driver.isOnline) {
     return driver
+  }
+
+  if (driver.currentOnlineSessionStartedAt && !driver.isOnline) {
+    await stopDriverOnlineSession(driverId, `${source}_orphan_repair`)
+    driver = await Driver.findById(driverId)
+    if (!driver) {
+      throw new Error('Driver not found')
+    }
   }
 
   const startedAt = new Date()

@@ -2270,13 +2270,15 @@ async function clearUserSocket (userId, socketId) {
 async function setDriverSocket (driverId, socketId) {
   // Only bind socket — do not start an online session here. Ride availability (`isOnline`)
   // is controlled by PATCH /drivers/:id/online-status and driverToggleStatus.
-  const driver = await Driver.findById(driverId)
+  // Use atomic $set so a concurrent in-memory save() cannot clobber `isOnline` after PATCH.
+  const driver = await Driver.findByIdAndUpdate(
+    driverId,
+    { $set: { socketId, lastSeen: new Date() } },
+    { new: true }
+  )
   if (!driver) {
     throw new Error('Driver not found')
   }
-  driver.socketId = socketId
-  driver.lastSeen = new Date()
-  await driver.save()
   return driver
 }
 

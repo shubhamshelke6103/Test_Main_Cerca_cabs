@@ -1131,7 +1131,7 @@ function initializeSocket (server) {
           isOnline: driver.isOnline,
           isActive: driver.isActive,
           isBusy: driver.isBusy,
-          message: isOnline
+          message: driver.isOnline
             ? 'You are now accepting ride requests'
             : 'You are now offline for ride requests'
         })
@@ -1204,7 +1204,15 @@ function initializeSocket (server) {
           `Driver location updated successfully - driverId: ${data.driverId}`
         )
       } catch (error) {
-        logger.error('Error updating driver location:', error)
+        logger.error(
+          `Error updating driver location — driverId=${data?.driverId}: ${error?.message || error}`
+        )
+        if (error?.errors) {
+          logger.error(
+            'Driver location validation:',
+            Object.values(error.errors).map(e => e.message)
+          )
+        }
         socket.emit('errorEvent', { message: 'Failed to update location' })
       }
     })
@@ -1224,14 +1232,18 @@ function initializeSocket (server) {
           return
         }
 
-        // 🔥 HARD RESET DRIVER STATE (SOURCE OF TRUTH = DB)
+        try {
+          await stopDriverOnlineSession(driverId, 'driver_disconnect')
+        } catch (sessionErr) {
+          logger.error('driverDisconnect stopDriverOnlineSession:', sessionErr)
+        }
+
         const driver = await Driver.findByIdAndUpdate(
           driverId,
           {
             $unset: { socketId: 1 },
-            isOnline: false,
-            isBusy: false, // ✅ CRITICAL FIX
-            busyUntil: null, // ✅ CRITICAL FIX
+            isBusy: false,
+            busyUntil: null,
             lastSeen: new Date()
           },
           { new: true }
@@ -4030,15 +4042,23 @@ function initializeSocket (server) {
         // ============================
         // CLEANUP DRIVER SOCKET (DB + REDIS)
         // ============================
-        const driverResult = await Driver.findOneAndUpdate(
-          { socketId: socket.id },
-          {
-            $unset: { socketId: 1 },
-            isOnline: false,
-            lastSeen: new Date()
-          },
-          { new: true }
-        )
+        const driverBySocket = await Driver.findOne({ socketId: socket.id })
+        let driverResult = null
+        if (driverBySocket) {
+          try {
+            await stopDriverOnlineSession(driverBySocket._id, 'socket_disconnect')
+          } catch (sessionErr) {
+            logger.error('disconnect stopDriverOnlineSession:', sessionErr)
+          }
+          driverResult = await Driver.findByIdAndUpdate(
+            driverBySocket._id,
+            {
+              $unset: { socketId: 1 },
+              lastSeen: new Date()
+            },
+            { new: true }
+          )
+        }
 
         if (driverResult) {
           logger.info(
