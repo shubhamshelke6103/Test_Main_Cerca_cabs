@@ -239,6 +239,37 @@ const getOwnedVehicleRecords = (driver) => (
     Array.isArray(driver?.vehicles) ? driver.vehicles : []
 );
 
+/**
+ * Drops embedded vehicle document entries that fail schema validation (e.g. missing
+ * documentUrl) so a new submission does not fail on legacy bad rows.
+ */
+const sanitizeOwnedVehicleDocuments = (driver) => {
+    getOwnedVehicleRecords(driver).forEach((vehicle) => {
+        if (!vehicle || typeof vehicle !== 'object') return;
+        if (!Array.isArray(vehicle.documents)) {
+            vehicle.documents = [];
+            return;
+        }
+        vehicle.documents = vehicle.documents.filter(
+            (doc) =>
+                doc &&
+                typeof doc.documentUrl === 'string' &&
+                doc.documentUrl.trim() !== '' &&
+                doc.documentType,
+        );
+    });
+    const p = driver.pendingVehicleInfo;
+    if (p && typeof p === 'object' && Array.isArray(p.documents)) {
+        p.documents = p.documents.filter(
+            (doc) =>
+                doc &&
+                typeof doc.documentUrl === 'string' &&
+                doc.documentUrl.trim() !== '' &&
+                doc.documentType,
+        );
+    }
+};
+
 const getLatestOwnedVehicleRecord = (driver, predicate) => {
     const vehicles = getOwnedVehicleRecords(driver);
     for (let index = vehicles.length - 1; index >= 0; index -= 1) {
@@ -1311,6 +1342,10 @@ const updateDriverVehicle = async (req, res) => {
             ...toPlainVehicleRecord(createdVehicle),
             sourceVehicleId: createdVehicle._id,
         };
+
+        sanitizeOwnedVehicleDocuments(driver);
+        driver.markModified('vehicles');
+        driver.markModified('pendingVehicleInfo');
 
         await driver.save();
 
