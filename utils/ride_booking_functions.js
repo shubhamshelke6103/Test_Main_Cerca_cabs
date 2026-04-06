@@ -2283,13 +2283,13 @@ async function setDriverSocket (driverId, socketId) {
 }
 
 async function clearDriverSocket (driverId, socketId) {
-  const driver = await Driver.findOne({ _id: driverId, socketId })
-  if (!driver) {
-    return { matchedCount: 0, modifiedCount: 0 }
-  }
-
-  await stopDriverOnlineSession(driverId, 'socket_disconnect', socketId)
-  return { matchedCount: 1, modifiedCount: 1 }
+  // Only unbind the stale socket id. Do NOT call stopDriverOnlineSession here — that
+  // ended the online session on every reconnect (driver flipped offline) and save()
+  // could throw on invalid legacy driver docs. Real disconnect uses socket.on('disconnect').
+  return Driver.updateOne(
+    { _id: driverId, socketId },
+    { $unset: { socketId: 1 }, $set: { lastSeen: new Date() } }
+  )
 }
 //end of socket management functions
 

@@ -944,17 +944,21 @@ function initializeSocket (server) {
         const driver = await setDriverSocket(driverId, socket.id)
 
         // ============================
-        // REDIS PRESENCE (REALTIME SOURCE)
+        // REDIS PRESENCE (REALTIME SOURCE) — non-fatal; Mongo registration must succeed
         // ============================
-        await redis.hset(`driver:${driverId}`, {
-          socketId: socket.id,
-          isOnline: driver?.isOnline ? 1 : 0,
-          isActive: driver?.isActive ? 1 : 0,
-          lastSeen: Date.now()
-        })
-
-        // Keep heartbeat alive (driver must ping / update location)
-        await redis.expire(`driver:${driverId}`, 60)
+        try {
+          await redis.hset(`driver:${driverId}`, {
+            socketId: socket.id,
+            isOnline: driver?.isOnline ? 1 : 0,
+            isActive: driver?.isActive ? 1 : 0,
+            lastSeen: Date.now()
+          })
+          await redis.expire(`driver:${driverId}`, 60)
+        } catch (redisErr) {
+          logger.warn(
+            `driverConnect redis presence failed driverId=${driverId}: ${redisErr.message}`
+          )
+        }
 
         // ============================
         // BIND SOCKET ↔ DRIVER (CRITICAL)
@@ -1021,16 +1025,20 @@ function initializeSocket (server) {
         // VALIDATE SOCKET ID
         // ============================
         const updatedDriver = await Driver.findById(driverId)
-        if (!updatedDriver?.socketId || updatedDriver.socketId.trim() === '') {
+        const storedSid =
+          updatedDriver?.socketId != null
+            ? String(updatedDriver.socketId).trim()
+            : ''
+        if (!storedSid) {
           logger.warn(
             `⚠️ [Socket] Driver ${driverId} socketId is missing or empty after connection. Setting to ${socket.id}`
           )
           await Driver.findByIdAndUpdate(driverId, {
             socketId: socket.id
           })
-        } else if (updatedDriver.socketId !== socket.id) {
+        } else if (storedSid !== socket.id) {
           logger.warn(
-            `⚠️ [Socket] Driver ${driverId} socketId mismatch. Expected: ${socket.id}, Found: ${updatedDriver.socketId}. Updating...`
+            `⚠️ [Socket] Driver ${driverId} socketId mismatch. Expected: ${socket.id}, Found: ${storedSid}. Updating...`
           )
           await Driver.findByIdAndUpdate(driverId, {
             socketId: socket.id
@@ -1061,7 +1069,10 @@ function initializeSocket (server) {
           isBusy: finalDriver?.isBusy || false
         })
       } catch (err) {
-        logger.error('driverConnect error:', err)
+        logger.error(
+          `driverConnect error driverId=${data?.driverId} socketId=${socket.id}: ${err?.message || err}`,
+          err
+        )
         socket.emit('errorEvent', {
           message: 'Failed to register driver socket'
         })
@@ -1174,18 +1185,22 @@ function initializeSocket (server) {
         await updateDriverLocation(data.driverId, data.location)
 
         // ============================
-        // REALTIME LOCATION (Redis)
+        // REALTIME LOCATION (Redis) — non-fatal if Mongo already saved
         // ============================
         const [lng, lat] = coords
 
-        await redis.hset(`driver:${data.driverId}`, {
-          lat,
-          lng,
-          lastLocationAt: Date.now()
-        })
-
-        // Keep driver alive in Redis
-        await redis.expire(`driver:${data.driverId}`, 60)
+        try {
+          await redis.hset(`driver:${data.driverId}`, {
+            lat,
+            lng,
+            lastLocationAt: Date.now()
+          })
+          await redis.expire(`driver:${data.driverId}`, 60)
+        } catch (redisErr) {
+          logger.warn(
+            `driverLocationUpdate redis failed driverId=${data.driverId}: ${redisErr.message}`
+          )
+        }
 
         // ============================
         // BROADCAST TO RIDE ROOM
