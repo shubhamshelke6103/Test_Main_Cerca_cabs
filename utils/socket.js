@@ -3153,7 +3153,9 @@ function initializeSocket (server) {
         }
 
         // Load ride to validate canceller and set cancelledBy server-side
-        const rideForAuth = await Ride.findById(rideId).select('rider driver status').lean()
+        const rideForAuth = await Ride.findById(rideId)
+          .select('rider driver status driverArrivedAt')
+          .lean()
         if (!rideForAuth) {
           logger.warn(`rideCancelled: Ride not found - rideId: ${rideId}`)
           socket.emit('rideError', { message: 'Ride not found' })
@@ -3172,14 +3174,50 @@ function initializeSocket (server) {
           serverCancelledBy = 'driver'
         }
 
-        if (serverCancelledBy === 'driver' && rideForAuth.status !== 'in_progress') {
-          logger.warn(
-            `rideCancelled: Driver may only cancel via socket during in_progress — ride ${rideId} status=${rideForAuth.status}`
-          )
-          socket.emit('rideError', {
-            message: 'You can only cancel during an active trip. Use reject ride if the trip has not started.'
-          })
-          return
+        if (serverCancelledBy === 'driver') {
+          if (rideForAuth.status === 'in_progress') {
+            // allowed
+          } else if (rideForAuth.status === 'arrived') {
+            const {
+              getPickupWaitPolicyFromSettings
+            } = require('./pickupWaitPricing')
+            const Settings = require('../Models/Admin/settings.modal.js')
+            const arrivedAt = rideForAuth.driverArrivedAt
+            if (arrivedAt) {
+              const settings = await Settings.findOne().lean()
+              const policy = getPickupWaitPolicyFromSettings(settings || {})
+              const needMs =
+                (policy.pickupWaitDriverCancelAfterMinutes || 8) * 60 * 1000
+              const elapsed = Date.now() - new Date(arrivedAt).getTime()
+              if (elapsed < needMs) {
+                const unlockAt = new Date(
+                  new Date(arrivedAt).getTime() + needMs
+                )
+                logger.warn(
+                  `rideCancelled: Driver cancel blocked until pickup wait — ride ${rideId}`
+                )
+                socket.emit('rideError', {
+                  code: 'PICKUP_WAIT_CANCEL_BLOCKED',
+                  message: `Wait ${policy.pickupWaitDriverCancelAfterMinutes} minutes at pickup before cancelling.`,
+                  unlockAt: unlockAt.toISOString(),
+                  secondsRemaining: Math.max(
+                    0,
+                    Math.ceil((needMs - elapsed) / 1000)
+                  )
+                })
+                return
+              }
+            }
+          } else {
+            logger.warn(
+              `rideCancelled: Driver cancel not allowed — ride ${rideId} status=${rideForAuth.status}`
+            )
+            socket.emit('rideError', {
+              message:
+                'Cancel during the trip, or after the pickup wait period once you have arrived. Use reject if you have not accepted the ride yet.'
+            })
+            return
+          }
         }
 
         if (!serverCancelledBy) {

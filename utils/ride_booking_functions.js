@@ -1031,7 +1031,8 @@ const completeRide = async (rideId, fare) => {
     // This ensures recalculateRideFare can access the correct actualDuration from the database
     await Ride.findByIdAndUpdate(rideId, {
       actualEndTime: endTime,
-      actualDuration: actualDuration
+      actualDuration: actualDuration,
+      stopOtpVerifiedAt: endTime
     })
     logger.info(
       `[Fare Tracking] Persisted actualDuration: ${actualDuration}min, actualEndTime: ${endTime.toISOString()} before fare recalculation`
@@ -1072,6 +1073,7 @@ const completeRide = async (rideId, fare) => {
         subtotal: fareBreakdown.subtotal,
         fareAfterMinimum: fareBreakdown.fareAfterMinimum,
         discount: fareBreakdown.discount,
+        pickupWaitCharge: fareBreakdown.pickupWaitCharge || 0,
         finalFare: fareBreakdown.finalFare
       }
       // Update discount if promo code was re-applied
@@ -2418,16 +2420,37 @@ const markDriverArrived = async rideId => {
   }
 }
 
-// Update ride with actual start time
+// Update ride with actual start time + pickup wait snapshot (server clock)
 const updateRideStartTime = async rideId => {
   try {
+    const Settings = require('../Models/Admin/settings.modal.js')
+    const {
+      getPickupWaitPolicyFromSettings,
+      buildPickupWaitSnapshot
+    } = require('./pickupWaitPricing')
+
+    const settings = await Settings.findOne().lean()
+    const policy = getPickupWaitPolicyFromSettings(settings || {})
+    const existing = await Ride.findById(rideId)
+    if (!existing) throw new Error('Ride not found')
+
+    const end = new Date()
+    const pickupWaitSnapshot = buildPickupWaitSnapshot(
+      existing.driverArrivedAt,
+      end,
+      policy
+    )
+
     const ride = await Ride.findByIdAndUpdate(
       rideId,
-      { actualStartTime: new Date() },
+      {
+        actualStartTime: end,
+        startOtpVerifiedAt: end,
+        pickupWait: pickupWaitSnapshot
+      },
       { new: true }
     ).populate('driver rider')
 
-    // Update driver status to busy
     if (ride.driver) {
       await Driver.findByIdAndUpdate(ride.driver._id, { isBusy: true })
     }
@@ -2451,14 +2474,17 @@ const recalculateRideFare = async (rideId) => {
     // Skip recalculation for special booking types
     if (ride.bookingType !== 'INSTANT') {
       logger.info(`[Fare Recalculation] Skipping recalculation for booking type: ${ride.bookingType}`)
+      const pickupWaitCharge = roundMoney(ride.pickupWait?.totalPickupWaitCharge || 0)
+      const baseFare = ride.fare || 0
       return {
         baseFare: ride.fareBreakdown?.baseFare || 0,
         distanceFare: ride.fareBreakdown?.distanceFare || 0,
         timeFare: ride.fareBreakdown?.timeFare || 0,
-        subtotal: ride.fare || 0,
-        fareAfterMinimum: ride.fare || 0,
+        subtotal: ride.fareBreakdown?.subtotal ?? baseFare,
+        fareAfterMinimum: ride.fareBreakdown?.fareAfterMinimum ?? baseFare,
         discount: ride.discount || 0,
-        finalFare: ride.fare || 0
+        pickupWaitCharge,
+        finalFare: roundMoney(baseFare + pickupWaitCharge)
       }
     }
 
@@ -2594,6 +2620,10 @@ const recalculateRideFare = async (rideId) => {
       }
     }
 
+    const tripFinalAfterCap = Math.round(finalFare * 100) / 100
+    const pickupWaitCharge = roundMoney(ride.pickupWait?.totalPickupWaitCharge || 0)
+    const finalFareWithWait = roundMoney(tripFinalAfterCap + pickupWaitCharge)
+
     return {
       baseFare: fareBreakdown.baseFare,
       distanceFare: fareBreakdown.distanceFare,
@@ -2601,7 +2631,8 @@ const recalculateRideFare = async (rideId) => {
       subtotal: fareBreakdown.subtotal,
       fareAfterMinimum: fareBreakdown.fareAfterMinimum,
       discount: Math.round(discount * 100) / 100,
-      finalFare: Math.round(finalFare * 100) / 100
+      pickupWaitCharge,
+      finalFare: finalFareWithWait
     }
   } catch (error) {
     logger.error(`Error recalculating ride fare for rideId ${rideId}:`, error)
@@ -2627,7 +2658,8 @@ const updateRideEndTime = async rideId => {
       rideId,
       {
         actualEndTime: endTime,
-        actualDuration: actualDuration
+        actualDuration: actualDuration,
+        stopOtpVerifiedAt: endTime
       },
       { new: true }
     ).populate('driver rider')

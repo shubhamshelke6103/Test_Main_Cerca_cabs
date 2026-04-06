@@ -12,6 +12,11 @@ const SettingsSchema = new mongoose.Schema({
         cancellationFees: { type: Number, required: true },
         platformFees: { type: Number, required: true },
         driverCommissions: { type: Number, required: true },
+        pickupWaitFreeMinutes: { type: Number, default: 5 },
+        pickupWaitTier1EndMinute: { type: Number, default: 8 },
+        pickupWaitTier1RatePerMin: { type: Number, default: 4 },
+        pickupWaitTier2RatePerMin: { type: Number, default: 2 },
+        pickupWaitDriverCancelAfterMinutes: { type: Number, default: 8 },
     },
     services: [
         {

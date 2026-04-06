@@ -104,7 +104,7 @@ const rideSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['requested', 'accepted', 'in_progress', 'completed', 'cancelled'],
+      enum: ['requested', 'accepted', 'arrived', 'in_progress', 'completed', 'cancelled'],
       default: 'requested'
     },
 
@@ -165,6 +165,25 @@ const rideSchema = new mongoose.Schema(
     actualDuration: Number,
     estimatedArrivalTime: Date,
     driverArrivedAt: Date,
+    /** Same instant as actualStartTime when start OTP verified */
+    startOtpVerifiedAt: Date,
+    /** Same instant as actualEndTime when ride completes (stop OTP / completion) */
+    stopOtpVerifiedAt: Date,
+
+    /** Snapshot at ride start; immutable billing record for pickup wait */
+    pickupWait: {
+      waitStartedAt: { type: Date, default: null },
+      waitEndedAt: { type: Date, default: null },
+      waitDurationSeconds: { type: Number, default: 0 },
+      freeMinutesApplied: { type: Number, default: 5 },
+      tier1BillableMinutes: { type: Number, default: 0 },
+      tier2BillableMinutes: { type: Number, default: 0 },
+      amountTier1: { type: Number, default: 0 },
+      amountTier2: { type: Number, default: 0 },
+      totalPickupWaitCharge: { type: Number, default: 0 },
+      computedAt: { type: Date, default: null },
+      policyVersion: { type: String, default: null }
+    },
 
     // =========================
     // Vehicle & Service
@@ -191,7 +210,8 @@ const rideSchema = new mongoose.Schema(
       subtotal: Number,
       fareAfterMinimum: Number,
       discount: Number,
-      finalFare: Number
+      finalFare: Number,
+      pickupWaitCharge: { type: Number, default: 0 }
     },
 
     riderRating: {

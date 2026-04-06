@@ -162,12 +162,43 @@ const getRideTimeline = async (req, res) => {
       { label: 'Ride Requested', time: ride.createdAt },
       { label: 'Driver Assigned', time: ride.driver ? ride.updatedAt : null },
       { label: 'Driver Arrived', time: ride.driverArrivedAt },
-      { label: 'Ride Started', time: ride.actualStartTime },
-      { label: 'Ride Completed', time: ride.actualEndTime },
+      {
+        label: 'Start OTP verified / trip start',
+        time: ride.startOtpVerifiedAt || ride.actualStartTime,
+      },
+      {
+        label: 'Ride completed (stop OTP)',
+        time: ride.stopOtpVerifiedAt || ride.actualEndTime,
+      },
       { label: 'Ride Cancelled', time: ride.status === 'cancelled' ? ride.updatedAt : null },
     ].filter((event) => event.time);
 
-    res.status(200).json({ events });
+    const pw = ride.pickupWait;
+    const pickupWaitSummary =
+      pw &&
+      (pw.totalPickupWaitCharge > 0 ||
+        (pw.waitDurationSeconds != null && pw.waitDurationSeconds > 0))
+        ? {
+            waitDurationSeconds: pw.waitDurationSeconds,
+            waitStartedAt: pw.waitStartedAt,
+            waitEndedAt: pw.waitEndedAt,
+            freeMinutesApplied: pw.freeMinutesApplied,
+            tier1BillableMinutes: pw.tier1BillableMinutes,
+            tier2BillableMinutes: pw.tier2BillableMinutes,
+            amountTier1: pw.amountTier1,
+            amountTier2: pw.amountTier2,
+            totalPickupWaitCharge: pw.totalPickupWaitCharge,
+            policyVersion: pw.policyVersion,
+          }
+        : pw
+          ? {
+              waitDurationSeconds: pw.waitDurationSeconds || 0,
+              totalPickupWaitCharge: pw.totalPickupWaitCharge || 0,
+              note: 'No charge (within free window or no arrival timestamp)',
+            }
+          : null;
+
+    res.status(200).json({ events, pickupWaitSummary });
   } catch (error) {
     logger.error('Error fetching ride timeline:', error);
     res.status(500).json({ message: 'Error fetching ride timeline', error: error.message });
