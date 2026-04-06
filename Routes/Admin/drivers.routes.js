@@ -16,6 +16,8 @@ const {
   rejectPriorityDriver,
   approveDriverVehicle,
   rejectDriverVehicle,
+  approveDriverVehicleBySubdoc,
+  rejectDriverVehicleBySubdoc,
   getDriverOnlineHours,
   updateDriverComplianceDocuments
 } = require('../../Controllers/Driver/driver.controller')
@@ -33,6 +35,8 @@ router.get('/drivers/:id/documents', getDriverDocuments);
 router.get('/drivers/:id/priority-document', getPriorityDocument);
 router.patch('/drivers/:id/vehicle/approve', approveDriverVehicle);
 router.patch('/drivers/:id/vehicle/reject', rejectDriverVehicle);
+router.patch('/drivers/:id/vehicles/:vehicleId/approve', approveDriverVehicleBySubdoc);
+router.patch('/drivers/:id/vehicles/:vehicleId/reject', rejectDriverVehicleBySubdoc);
 router.get('/drivers/online-hours/report', getFleetOnlineHoursReport);
 router.get('/drivers/:id/online-hours', getDriverOnlineHours);
 router.put('/drivers/:id/compliance-documents', updateDriverComplianceDocuments);

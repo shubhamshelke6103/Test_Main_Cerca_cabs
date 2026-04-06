@@ -4205,7 +4205,7 @@ async function getVehicleSnapshotForEarnings (driverId) {
   }
 
   const driver = await Driver.findById(driverId)
-    .select('vehicleInfo assignedFleetVehicleId')
+    .select('vehicleInfo assignedFleetVehicleId vehicles')
     .lean()
 
   if (!driver) {
@@ -4238,7 +4238,21 @@ async function getVehicleSnapshotForEarnings (driverId) {
     }
   }
 
-  const vehicleInfo = driver.vehicleInfo || null
+  let vehicleInfo = driver.vehicleInfo || null
+  if (!vehicleInfo && Array.isArray(driver.vehicles) && driver.vehicles.length > 0) {
+    const approved = driver.vehicles.filter(v => v.approvalStatus === 'APPROVED')
+    const active = approved.find(v => v.isActive) || approved[approved.length - 1]
+    if (active) {
+      vehicleInfo = {
+        licensePlate: active.licensePlate,
+        make: active.make,
+        model: active.model,
+        year: active.year,
+        color: active.color,
+        vehicleType: active.vehicleType
+      }
+    }
+  }
   if (vehicleInfo) {
     return {
       licensePlate: vehicleInfo.licensePlate || null,

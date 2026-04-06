@@ -41,6 +41,7 @@ There are **2 vehicle sources** in the system:
 ## Authentication Summary
 
 - Driver routes use driver authentication where enforced by route/controller.
+- **`PATCH /drivers/:id/vehicle`**, **`PATCH /drivers/:id/vehicles/active`**, **`DELETE /drivers/:id/vehicles/:vehicleId`**, and **`DELETE /drivers/:id/vehicle`** require a **driver JWT** and the authenticated driver must match `:id`.
 - Vendor routes require vendor JWT after `router.use(authenticateVendor)`.
 - Admin routes require admin JWT.
 
@@ -54,7 +55,7 @@ Base path: `/drivers`
 **Path:** `/:id/vehicle`
 
 **Purpose:**  
-Driver submits vehicle details and mandatory documents for approval.
+Driver submits a **new** vehicle row (pushed to `vehicles[]`) with mandatory documents for approval.
 
 **Content-Type:** `multipart/form-data`
 
@@ -78,8 +79,10 @@ Driver submits vehicle details and mandatory documents for approval.
 
 - If driver has no vendor, approval is routed to admin.
 - If driver belongs to a vendor, approval is routed to vendor first.
-- Approved data eventually moves into `vehicleInfo`.
-- Pending or rejected submission stays in `pendingVehicleInfo`.
+- **Garage limits:** at most `MAX_DRIVER_OWNED_VEHICLES` entries (default **5**, env `MAX_DRIVER_OWNED_VEHICLES`).
+- **Duplicate plate:** same normalized plate cannot be submitted while another entry is `APPROVED` or `UNDER_APPROVAL`.
+- **Phase A pending:** only one `UNDER_APPROVAL` owned vehicle at a time; a second submission is rejected until the first is approved or rejected.
+- Legacy **`vehicleInfo`** is kept in sync with the **active** approved owned vehicle (or fallback) via `syncLegacyVehicleState`; **`pendingVehicleInfo`** mirrors the pending/rejected row used for admin/vendor queues.
 
 **Success response highlights:**
 
@@ -88,6 +91,32 @@ Driver submits vehicle details and mandatory documents for approval.
 - `approvedVehicle`
 - `pendingVehicle`
 - `vehicleStatus`
+- `vehicles` (full garage list)
+- `activeVehicleId`
+
+### 1.1a Set active owned vehicle (self drivers)
+
+**Method:** `PATCH`  
+**Path:** `/:id/vehicles/active`
+
+**Auth:** Driver JWT, own `:id`.
+
+**Body (JSON):**
+
+```json
+{ "vehicleId": "<vehicles subdocument _id>" }
+```
+
+**Rules:** Target subdoc must be `APPROVED`. Forbidden for vendor drivers / when `assignedFleetVehicleId` is set. Exactly one owned subdoc ends with `isActive: true`; `vehicleInfo` is synced after save.
+
+### 1.1b Remove one owned vehicle from garage
+
+**Method:** `DELETE`  
+**Path:** `/:id/vehicles/:vehicleId`
+
+**Auth:** Driver JWT, own `:id`.
+
+Removes the subdoc. If it was the active approved vehicle, another approved vehicle (if any) becomes active; legacy fields are synced.
 
 ### 1.2 Get Driver Details Including Vehicle State
 
@@ -99,9 +128,11 @@ Returns the driver record, including current vehicle state.
 
 **Important response fields:**
 
-- `vehicleInfo`
+- `vehicleInfo` (legacy snapshot of active owned vehicle when not on fleet)
 - `pendingVehicleInfo`
 - `vehicleStatus`
+- `vehicles` (garage subdocuments)
+- `activeVehicleId`
 - `assignedFleetVehicleId`
 - `vendorId`
 
@@ -301,6 +332,22 @@ Admin rejects the driver's pending vehicle submission.
   "allowDocumentResubmit": true
 }
 ```
+
+### 5.5 Approve driver vehicle by garage subdocument id
+
+**Method:** `PATCH`  
+**Path:** `/drivers/:id/vehicles/:vehicleId/approve`
+
+**Purpose:**  
+Approves the specific `vehicles[]` entry that is `UNDER_APPROVAL` and routed to `ADMIN` (supports multiple pending rows in Phase B). Legacy `PATCH .../vehicle/approve` remains for the usual single-pending queue.
+
+### 5.6 Reject driver vehicle by garage subdocument id
+
+**Method:** `PATCH`  
+**Path:** `/drivers/:id/vehicles/:vehicleId/reject`
+
+**Purpose:**  
+Rejects that specific pending admin-routed submission. Same body shape as **5.4**.
 
 ## 6. Admin Routes For Vendor Fleet Vehicles
 
@@ -564,8 +611,12 @@ Each object inside `vehicles` contains:
 | Vendor | `PATCH` | `/vendor/drivers/:driverId/fleet-vehicle` | Assign or unassign fleet vehicle to vendor driver |
 | Admin | `GET` | `/admin/drivers` | List drivers with vehicle filters |
 | Admin | `GET` | `/admin/drivers/:id` | Get driver details including vehicle state |
-| Admin | `PATCH` | `/admin/drivers/:id/vehicle/approve` | Approve driver vehicle |
-| Admin | `PATCH` | `/admin/drivers/:id/vehicle/reject` | Reject driver vehicle |
+| Admin | `PATCH` | `/admin/drivers/:id/vehicle/approve` | Approve driver vehicle (legacy single-pending) |
+| Admin | `PATCH` | `/admin/drivers/:id/vehicle/reject` | Reject driver vehicle (legacy single-pending) |
+| Admin | `PATCH` | `/admin/drivers/:id/vehicles/:vehicleId/approve` | Approve specific owned vehicle subdoc |
+| Admin | `PATCH` | `/admin/drivers/:id/vehicles/:vehicleId/reject` | Reject specific owned vehicle subdoc |
+| Driver | `PATCH` | `/drivers/:id/vehicles/active` | Set active approved owned vehicle |
+| Driver | `DELETE` | `/drivers/:id/vehicles/:vehicleId` | Remove one garage vehicle |
 | Admin | `GET` | `/admin/fleet-vehicles` | List vendor fleet vehicles |
 | Admin | `GET` | `/admin/fleet-vehicles/:id` | Get one vendor fleet vehicle |
 | Admin | `PATCH` | `/admin/fleet-vehicles/:id/approve` | Approve fleet vehicle |

@@ -267,8 +267,21 @@ const applyAdminVehicleListFilter = (query, { vehiclePending, vehicleStatus }) =
   const status = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : '';
 
   if (pendingFlag || status === 'UNDER_APPROVAL') {
-    query['pendingVehicleInfo.approvalStatus'] = 'UNDER_APPROVAL';
-    query['pendingVehicleInfo.approvalRoutedTo'] = 'ADMIN';
+    query.$or = [
+      {
+        pendingVehicleInfo: { $exists: true, $ne: null },
+        'pendingVehicleInfo.approvalStatus': 'UNDER_APPROVAL',
+        'pendingVehicleInfo.approvalRoutedTo': 'ADMIN',
+      },
+      {
+        vehicles: {
+          $elemMatch: {
+            approvalStatus: 'UNDER_APPROVAL',
+            approvalRoutedTo: 'ADMIN',
+          },
+        },
+      },
+    ];
     return;
   }
 

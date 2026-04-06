@@ -20,6 +20,8 @@ const {
     logoutDriver,
     updateDriverVehicle,
     deleteDriverVehicle,
+    deleteDriverGarageVehicle,
+    setDriverActiveOwnedVehicle,
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
@@ -156,8 +158,28 @@ router.get('/:id/live-location/shares', authenticateDriver, requireOwnDriver, li
 router.delete('/:id/live-location/share/:shareId', authenticateDriver, requireOwnDriver, deleteDriverLocationShare);
 router.get('/live-location/shared/:shareToken', sharedLiveLocationRateLimiter, getSharedDriverLocation);
 
-// Route to update driver vehicle information
-router.patch('/:id/vehicle', vehicleDocumentUpload, updateDriverVehicle);
+// Owned-vehicle garage: set active approved vehicle (self drivers)
+router.patch(
+    '/:id/vehicles/active',
+    authenticateDriver,
+    requireOwnDriver,
+    setDriverActiveOwnedVehicle
+);
+router.delete(
+    '/:id/vehicles/:vehicleId',
+    authenticateDriver,
+    requireOwnDriver,
+    deleteDriverGarageVehicle
+);
+
+// Route to update driver vehicle information (submit new vehicle for approval)
+router.patch(
+    '/:id/vehicle',
+    authenticateDriver,
+    requireOwnDriver,
+    vehicleDocumentUpload,
+    updateDriverVehicle
+);
 router.delete(
     '/:id/vehicle',
     authenticateDriver,

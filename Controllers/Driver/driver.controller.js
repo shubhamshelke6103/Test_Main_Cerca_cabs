@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Driver = require('../../Models/Driver/driver.model.js');
 const Ride = require('../../Models/Driver/ride.model.js');
 const Vendor = require('../../Models/vendor/vendor.models.js');
@@ -113,6 +114,10 @@ const VEHICLE_DOCUMENT_FIELDS = [
     { field: 'vehiclePermit', type: 'PERMIT' },
     { field: 'vehiclePuc', type: 'PUC' },
 ];
+
+const MAX_DRIVER_OWNED_VEHICLES = parseInt(process.env.MAX_DRIVER_OWNED_VEHICLES || '5', 10);
+
+const normalizeLicensePlateKey = (plate) => String(plate || '').replace(/\s+/g, '').toUpperCase();
 
 const DOCUMENT_TYPE_LABELS = {
     AADHAAR_CARD: 'Aadhaar Card',
@@ -318,12 +323,16 @@ const serializeOwnedVehicles = (driver) => (
     getOwnedVehicleRecords(driver).map(vehicle => toPlainVehicleRecord(vehicle))
 );
 
-const serializeVehicleState = (driver) => ({
-    approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
-    pendingVehicle: driver.pendingVehicleInfo || null,
-    vehicleStatus: resolveVehicleStatus(driver),
-    vehicles: serializeOwnedVehicles(driver),
-});
+const serializeVehicleState = (driver) => {
+    const activeRec = getActiveOwnedVehicleRecord(driver);
+    return {
+        approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
+        pendingVehicle: driver.pendingVehicleInfo || null,
+        vehicleStatus: resolveVehicleStatus(driver),
+        vehicles: serializeOwnedVehicles(driver),
+        activeVehicleId: activeRec && activeRec._id ? String(activeRec._id) : null,
+    };
+};
 
 const hasDriverVehicleState = (driver) => (
     Boolean(
@@ -373,26 +382,31 @@ const serializeDriverApprovalState = (driver) => ({
     missingDocuments: getMissingDriverApprovalDocuments(driver),
 });
 
-const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
-    const pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
-    if (!pendingVehicleRecord) {
-        throw new Error('No pending vehicle found');
+const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN', vehicleSubdocId = null) => {
+    let pendingVehicleRecord;
+    if (vehicleSubdocId) {
+        pendingVehicleRecord = getOwnedVehicleRecords(driver).find(
+            (v) => String(v._id) === String(vehicleSubdocId)
+        );
+        if (!pendingVehicleRecord || pendingVehicleRecord.approvalStatus !== 'UNDER_APPROVAL') {
+            throw new Error('No pending vehicle found for this id');
+        }
+        if (approvedBy === 'ADMIN' && pendingVehicleRecord.approvalRoutedTo !== 'ADMIN') {
+            throw new Error('This vehicle approval is not routed to admin');
+        }
+    } else {
+        pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
+        if (!pendingVehicleRecord || pendingVehicleRecord.approvalStatus !== 'UNDER_APPROVAL') {
+            throw new Error('No pending vehicle found');
+        }
     }
 
-    const approvedVehicle = {
-        make: pendingVehicleRecord.make,
-        model: pendingVehicleRecord.model,
-        year: pendingVehicleRecord.year,
-        color: pendingVehicleRecord.color,
-        licensePlate: pendingVehicleRecord.licensePlate,
-        vehicleType: pendingVehicleRecord.vehicleType,
-    };
-
-    getOwnedVehicleRecords(driver).forEach((vehicle) => {
-        if (vehicle.approvalStatus === 'APPROVED') {
-            vehicle.isActive = false;
-        }
-    });
+    const hadAnotherActiveApproved = getOwnedVehicleRecords(driver).some(
+        (v) =>
+            v !== pendingVehicleRecord &&
+            v.approvalStatus === 'APPROVED' &&
+            v.isActive
+    );
 
     pendingVehicleRecord.approvalStatus = 'APPROVED';
     pendingVehicleRecord.approvedAt = new Date();
@@ -400,11 +414,18 @@ const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
     pendingVehicleRecord.rejectionReason = null;
     pendingVehicleRecord.allowDocumentResubmit = false;
     pendingVehicleRecord.approvedBy = approvedBy;
-    pendingVehicleRecord.isActive = true;
 
-    if (!driver.assignedFleetVehicleId) {
-        driver.vehicleInfo = approvedVehicle;
+    if (!hadAnotherActiveApproved) {
+        getOwnedVehicleRecords(driver).forEach((vehicle) => {
+            if (vehicle !== pendingVehicleRecord && vehicle.approvalStatus === 'APPROVED') {
+                vehicle.isActive = false;
+            }
+        });
+        pendingVehicleRecord.isActive = true;
+    } else {
+        pendingVehicleRecord.isActive = false;
     }
+
     driver.pendingVehicleInfo = null;
     syncLegacyVehicleState(driver);
     await driver.save();
@@ -412,10 +433,28 @@ const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN') => {
     return driver;
 };
 
-const rejectPendingVehicleForDriver = async (driver, reason, allowDocumentResubmit = false) => {
-    const pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
-    if (!pendingVehicleRecord) {
-        throw new Error('No pending vehicle found');
+const rejectPendingVehicleForDriver = async (
+    driver,
+    reason,
+    allowDocumentResubmit = false,
+    vehicleSubdocId = null
+) => {
+    let pendingVehicleRecord;
+    if (vehicleSubdocId) {
+        pendingVehicleRecord = getOwnedVehicleRecords(driver).find(
+            (v) => String(v._id) === String(vehicleSubdocId)
+        );
+        if (!pendingVehicleRecord || pendingVehicleRecord.approvalStatus !== 'UNDER_APPROVAL') {
+            throw new Error('No pending vehicle found for this id');
+        }
+        if (pendingVehicleRecord.approvalRoutedTo !== 'ADMIN') {
+            throw new Error('This vehicle approval is not routed to admin');
+        }
+    } else {
+        pendingVehicleRecord = getPendingOwnedVehicleRecord(driver);
+        if (!pendingVehicleRecord) {
+            throw new Error('No pending vehicle found');
+        }
     }
 
     pendingVehicleRecord.approvalStatus = 'REJECTED';
@@ -638,6 +677,8 @@ const getDriverById = async (req, res) => {
         delete driverObj.password;
         driverObj.rejectionReason = driver.rejectionReason ?? null;
         driverObj.vehicleStatus = resolveVehicleStatus(driver);
+        const activeRec = getActiveOwnedVehicleRecord(driver);
+        driverObj.activeVehicleId = activeRec && activeRec._id ? String(activeRec._id) : null;
         Object.assign(driverObj, serializeDriverApprovalState(driver));
 
         res.status(200).json(driverObj);
@@ -1224,7 +1265,27 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        driver.vehicles = getOwnedVehicleRecords(driver);
+        const owned = getOwnedVehicleRecords(driver);
+        if (owned.length >= MAX_DRIVER_OWNED_VEHICLES) {
+            return res.status(400).json({
+                message: `You can register at most ${MAX_DRIVER_OWNED_VEHICLES} vehicles`,
+                maxVehicles: MAX_DRIVER_OWNED_VEHICLES,
+            });
+        }
+
+        const plateKey = normalizeLicensePlateKey(licensePlate);
+        const duplicatePlate = owned.some(
+            (v) =>
+                normalizeLicensePlateKey(v.licensePlate) === plateKey &&
+                (v.approvalStatus === 'APPROVED' || v.approvalStatus === 'UNDER_APPROVAL')
+        );
+        if (duplicatePlate) {
+            return res.status(400).json({
+                message: 'A vehicle with this license plate is already registered or awaiting approval',
+            });
+        }
+
+        driver.vehicles = owned;
         driver.vehicles.push({
             make,
             model,
@@ -1361,6 +1422,165 @@ const deleteDriverVehicle = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Set which approved owned vehicle is active for rides (self drivers only)
+ * @route   PATCH /drivers/:id/vehicles/active
+ */
+const setDriverActiveOwnedVehicle = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const vehicleId = req.body?.vehicleId ?? req.body?.vehicle_id;
+        if (!vehicleId || typeof vehicleId !== 'string') {
+            return res.status(400).json({ message: 'vehicleId is required' });
+        }
+
+        let vehicleObjectId;
+        try {
+            vehicleObjectId = new mongoose.Types.ObjectId(vehicleId);
+        } catch {
+            return res.status(400).json({ message: 'Invalid vehicleId' });
+        }
+
+        const driver = await Driver.findById(id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (driver.vendorId) {
+            return res.status(403).json({
+                message: 'Vendor drivers use fleet assignment; active owned vehicle is not applicable',
+            });
+        }
+        if (driver.assignedFleetVehicleId) {
+            return res.status(403).json({
+                message: 'Clear fleet vehicle assignment before managing owned vehicles',
+            });
+        }
+
+        const target = getOwnedVehicleRecords(driver).find(
+            (v) => String(v._id) === String(vehicleId)
+        );
+        if (!target) {
+            return res.status(404).json({ message: 'Vehicle not found on this driver' });
+        }
+        if (target.approvalStatus !== 'APPROVED') {
+            return res.status(400).json({ message: 'Only an approved vehicle can be set active' });
+        }
+
+        const applyFallbackSave = async () => {
+            const fresh = await Driver.findById(id);
+            if (!fresh) {
+                return res.status(404).json({ message: 'Driver not found' });
+            }
+            getOwnedVehicleRecords(fresh).forEach((v) => {
+                v.isActive = String(v._id) === String(vehicleId);
+            });
+            syncLegacyVehicleState(fresh);
+            await fresh.save();
+            return res.status(200).json({
+                message: 'Active vehicle updated',
+                ...serializeVehicleState(fresh),
+            });
+        };
+
+        try {
+            const session = await mongoose.startSession();
+            session.startTransaction();
+            try {
+                await Driver.updateOne(
+                    { _id: driver._id },
+                    { $set: { 'vehicles.$[].isActive': false } },
+                    { session }
+                );
+                await Driver.updateOne(
+                    { _id: driver._id, 'vehicles._id': vehicleObjectId },
+                    { $set: { 'vehicles.$.isActive': true } },
+                    { session }
+                );
+                await session.commitTransaction();
+            } catch (txErr) {
+                await session.abortTransaction();
+                throw txErr;
+            } finally {
+                session.endSession();
+            }
+        } catch (txErr) {
+            logger.warn('setDriverActiveOwnedVehicle: transaction failed, using save fallback', {
+                error: txErr?.message,
+            });
+            return await applyFallbackSave();
+        }
+
+        const updated = await Driver.findById(id);
+        if (!updated) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+        syncLegacyVehicleState(updated);
+        await updated.save();
+
+        return res.status(200).json({
+            message: 'Active vehicle updated',
+            ...serializeVehicleState(updated),
+        });
+    } catch (error) {
+        logger.error('Error setting active vehicle:', error);
+        return res.status(500).json({ message: 'Error setting active vehicle', error: error.message });
+    }
+};
+
+/**
+ * @desc    Remove one owned vehicle from garage by subdocument id (self drivers)
+ * @route   DELETE /drivers/:id/vehicles/:vehicleId
+ */
+const deleteDriverGarageVehicle = async (req, res) => {
+    try {
+        const { id, vehicleId } = req.params;
+        const driver = await Driver.findById(id);
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (driver.vendorId) {
+            return res.status(403).json({
+                message: 'Only the vendor can manage vehicles for vendor-registered drivers',
+            });
+        }
+
+        const sub = driver.vehicles.id(vehicleId);
+        if (!sub) {
+            return res.status(404).json({ message: 'Vehicle not found on this driver' });
+        }
+
+        const wasActiveApproved = sub.approvalStatus === 'APPROVED' && sub.isActive;
+        driver.vehicles.pull({ _id: sub._id });
+
+        if (wasActiveApproved) {
+            const nextActive = getLatestOwnedVehicleRecord(
+                driver,
+                (v) => v.approvalStatus === 'APPROVED'
+            );
+            getOwnedVehicleRecords(driver).forEach((v) => {
+                v.isActive = Boolean(
+                    nextActive && String(v._id) === String(nextActive._id)
+                );
+            });
+        }
+
+        syncLegacyVehicleState(driver);
+        await driver.save();
+
+        logger.info(`Driver removed garage vehicle subdoc: ${driver.email} vehicleId=${vehicleId}`);
+        return res.status(200).json({
+            message: 'Vehicle removed from garage',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error deleting garage vehicle:', error);
+        return res.status(500).json({ message: 'Error deleting garage vehicle', error: error.message });
+    }
+};
+
 const approveDriverVehicle = async (req, res) => {
     try {
         const driver = await Driver.findById(req.params.id);
@@ -1369,11 +1589,12 @@ const approveDriverVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        if (!driver.pendingVehicleInfo) {
+        const pendingForAdmin = getPendingOwnedVehicleRecord(driver);
+        if (!pendingForAdmin || pendingForAdmin.approvalStatus !== 'UNDER_APPROVAL') {
             return res.status(400).json({ message: 'No pending vehicle approval found' });
         }
 
-        if (driver.pendingVehicleInfo.approvalRoutedTo !== 'ADMIN') {
+        if (pendingForAdmin.approvalRoutedTo !== 'ADMIN') {
             return res.status(403).json({ message: 'This vehicle approval is routed to vendor' });
         }
 
@@ -1398,11 +1619,12 @@ const rejectDriverVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        if (!driver.pendingVehicleInfo) {
+        const pendingForAdmin = getPendingOwnedVehicleRecord(driver);
+        if (!pendingForAdmin || pendingForAdmin.approvalStatus !== 'UNDER_APPROVAL') {
             return res.status(400).json({ message: 'No pending vehicle approval found' });
         }
 
-        if (driver.pendingVehicleInfo.approvalRoutedTo !== 'ADMIN') {
+        if (pendingForAdmin.approvalRoutedTo !== 'ADMIN') {
             return res.status(403).json({ message: 'This vehicle approval is routed to vendor' });
         }
 
@@ -1419,6 +1641,63 @@ const rejectDriverVehicle = async (req, res) => {
         });
     } catch (error) {
         logger.error('Error rejecting driver vehicle:', error);
+        return res.status(500).json({ message: 'Error rejecting driver vehicle', error: error.message });
+    }
+};
+
+/**
+ * Approve a specific pending owned vehicle (admin). Supports multi-pending Phase B.
+ * @route PATCH /admin/drivers/:id/vehicles/:vehicleId/approve
+ */
+const approveDriverVehicleBySubdoc = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        await approvePendingVehicleForDriver(driver, 'ADMIN', req.params.vehicleId);
+
+        return res.status(200).json({
+            message: 'Driver vehicle approved successfully',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error approving driver vehicle by subdoc:', error);
+        return res.status(500).json({ message: 'Error approving driver vehicle', error: error.message });
+    }
+};
+
+/**
+ * @route PATCH /admin/drivers/:id/vehicles/:vehicleId/reject
+ */
+const rejectDriverVehicleBySubdoc = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+        const reason = req.body?.reason;
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (typeof reason !== 'string' || !reason.trim()) {
+            return res.status(400).json({ message: 'Rejection reason is required' });
+        }
+
+        const allowDocumentResubmit = Boolean(req.body?.allowDocumentResubmit);
+        await rejectPendingVehicleForDriver(
+            driver,
+            reason.trim(),
+            allowDocumentResubmit,
+            req.params.vehicleId
+        );
+
+        return res.status(200).json({
+            message: 'Driver vehicle rejected successfully',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error rejecting driver vehicle by subdoc:', error);
         return res.status(500).json({ message: 'Error rejecting driver vehicle', error: error.message });
     }
 };
@@ -1961,8 +2240,13 @@ module.exports = {
     logoutDriver,
     updateDriverVehicle,
     deleteDriverVehicle,
+    deleteDriverGarageVehicle,
+    setDriverActiveOwnedVehicle,
     approveDriverVehicle,
     rejectDriverVehicle,
+    approveDriverVehicleBySubdoc,
+    rejectDriverVehicleBySubdoc,
+    syncDriverLegacyVehicleFields: syncLegacyVehicleState,
     getDriverEarnings,
     getDriverStats,
     getNearbyDrivers,

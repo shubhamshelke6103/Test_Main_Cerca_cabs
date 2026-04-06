@@ -60,6 +60,26 @@ const startDriverOnlineSession = async (driverId, source = 'manual_toggle') => {
         'Assign an approved fleet vehicle from your vendor (or complete vehicle onboarding) before going online'
       )
     }
+  } else {
+    const vehicles = Array.isArray(driver.vehicles) ? driver.vehicles : []
+    const approvedOwned = vehicles.filter(v => v.approvalStatus === 'APPROVED')
+    if (approvedOwned.length === 0) {
+      throw new Error('Add and get an approved vehicle before going online')
+    }
+    if (approvedOwned.length > 1) {
+      const activeCount = approvedOwned.filter(v => v.isActive).length
+      if (activeCount !== 1) {
+        throw new Error(
+          'Select exactly one active vehicle for rides when you have multiple approved vehicles'
+        )
+      }
+    }
+    const hasLegacyVehicle =
+      driver.vehicleInfo &&
+      (driver.vehicleInfo.licensePlate || driver.vehicleInfo.make)
+    if (!hasLegacyVehicle) {
+      throw new Error('Vehicle profile incomplete; refresh the app or contact support')
+    }
   }
 
   if (driver.currentOnlineSessionStartedAt && driver.isOnline) {
