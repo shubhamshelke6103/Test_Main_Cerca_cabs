@@ -5,6 +5,7 @@ const express = require('express')
 const cors = require('cors')
 const http = require('http')
 const multer = require('multer')
+const compression = require('compression')
 const path = require('path')
 
 const logger = require('./utils/logger')
@@ -48,6 +49,7 @@ initDriverOnlineTimeoutWorker()
 /* =======================
    MIDDLEWARES
 ======================= */
+app.use(compression()) // Compress responses to reduce bandwidth
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
@@ -210,6 +212,30 @@ app.post('/upload', upload.single('image'), (req, res) => {
 /* =======================
    START SERVER
 ======================= */
+
+// Set request timeout for large file uploads and slow networks
+// 60 seconds should be sufficient for file uploads on most connections
+app.use((req, res, next) => {
+  // For file upload routes, set longer timeout (60 seconds)
+  if (req.path.includes('/vehicle') || req.path.includes('/documents') || req.path.includes('/priority-document')) {
+    req.setTimeout(60000); // 60 seconds for uploads
+    res.setTimeout(60000);
+  }
+  // For other routes, use default timeout (30 seconds)
+  else {
+    req.setTimeout(30000); // 30 seconds for regular requests
+    res.setTimeout(30000);
+  }
+  next();
+});
+
+// Configure HTTP server socket timeout
+server.timeout = 65000; // 65 seconds (includes 60s request processing + 5s buffer)
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 server.listen(port, () => {
   logger.info(`🚀 Server running on http://localhost:${port}`)
+  logger.info(`📤 File upload timeout: 60 seconds`)
+  logger.info(`⏱️ Regular request timeout: 30 seconds`)
 })

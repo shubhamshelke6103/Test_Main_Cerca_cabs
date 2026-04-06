@@ -58,7 +58,17 @@ const storage = multer.diskStorage({
     },
 });
 
-const upload = multer({ storage });
+// General multer configuration with file size limits
+const upload = multer({ 
+    storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 5 MB per file (reasonable for documents)
+        files: 10, // Max 10 files per request
+    },
+});
+
+// Vehicle document upload: 4 required documents (RC, Insurance, Permit, PUC)
+// Each limited to 5MB
 const vehicleDocumentUpload = upload.fields([
     { name: 'vehicleRc', maxCount: 1 },
     { name: 'vehicleInsurance', maxCount: 1 },
@@ -207,5 +217,37 @@ router.get('/nearby', getNearbyDrivers);
 
 // Route to mark cash as collected for a ride
 router.patch('/:driverId/rides/:rideId/mark-cash-collected', markCashCollected);
+
+// Multer error handler for file upload errors (must be after all routes)
+router.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        if (error.code === 'FILE_TOO_LARGE') {
+            return res.status(413).json({
+                message: 'File size exceeds 5 MB limit. Please upload smaller files.',
+                maxFileSize: '5 MB',
+                error: error.message,
+            });
+        }
+        if (error.code === 'LIMIT_FILE_COUNT') {
+            return res.status(413).json({
+                message: 'Too many files. Maximum 10 files allowed per request.',
+                error: error.message,
+            });
+        }
+        if (error.code === 'LIMIT_PART_COUNT') {
+            return res.status(413).json({
+                message: 'Too many fields in request.',
+                error: error.message,
+            });
+        }
+        // Generic multer error
+        return res.status(400).json({
+            message: 'File upload error',
+            error: error.message,
+        });
+    }
+    // If it's not a multer error, pass to next handler
+    next(error);
+});
 
 module.exports = router;
