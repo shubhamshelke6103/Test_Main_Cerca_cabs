@@ -1,5 +1,5 @@
 const express = require('express');
-const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken } = require('../../Controllers/User/user.controller.js');
+const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken, getOutstandingDriverCancelSettlements } = require('../../Controllers/User/user.controller.js');
 
 const router = express.Router();
 
@@ -14,6 +14,12 @@ router.post('/login', loginUserByMobile);
 
 // POST /users - Create user
 router.post('/', createUser);
+
+// Pending driver in-progress cancel charges (must be before GET /:id)
+router.get(
+  '/:id/outstanding-driver-cancel-settlements',
+  getOutstandingDriverCancelSettlements
+);
 
 // Parameterized routes - these should come after specific routes
 // GET /users/:id - Get user by ID

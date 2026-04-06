@@ -361,6 +361,12 @@ rideSchema.pre('validate', function (next) {
 ===================================================== */
 
 rideSchema.index({ status: 1, createdAt: -1 })
+rideSchema.index({
+  rider: 1,
+  status: 1,
+  cancelledBy: 1,
+  'driverInProgressCancelSettlement.riderPaymentStatus': 1
+})
 rideSchema.index({ pickupLocation: '2dsphere' })
 rideSchema.index({ dropoffLocation: '2dsphere' })
 rideSchema.index({ shareToken: 1 })

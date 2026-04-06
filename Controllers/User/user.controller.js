@@ -7,6 +7,9 @@
 const User = require('../../Models/User/user.model');
 const jwt = require('jsonwebtoken');
 const logger = require('../../utils/logger');
+const {
+  getPendingDriverInProgressCancelSettlements
+} = require('../../utils/ride_booking_functions.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -441,6 +444,43 @@ const loginUserByMobile = async (req, res) => {
 // Add wallet-related controller functions
 
 /**
+ * @desc    List pending driver in-progress cancellation amounts owed by rider (JWT must match :id)
+ * @route   GET /users/:id/outstanding-driver-cancel-settlements
+ */
+const getOutstandingDriverCancelSettlements = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || req.headers.Authorization || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const authUserId = decoded.id || decoded.userId;
+    if (String(authUserId) !== String(req.params.id)) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    const { items, totalAdditionalDue } =
+      await getPendingDriverInProgressCancelSettlements(req.params.id);
+
+    return res.status(200).json({
+      success: true,
+      data: { items, totalAdditionalDue }
+    });
+  } catch (error) {
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+    logger.error('getOutstandingDriverCancelSettlements:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching outstanding settlements',
+      error: error.message
+    });
+  }
+};
+
+/**
  * @desc    Get the wallet balance of a user by ID
  * @route   GET /users/:id/wallet
  */
@@ -510,4 +550,5 @@ module.exports = {
   getUserWallet,
   updateUserWallet,
   validateToken,
+  getOutstandingDriverCancelSettlements,
 };

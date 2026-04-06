@@ -1571,6 +1571,50 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
 
 const roundMoney = n => Math.round(Number(n || 0) * 100) / 100
 
+/**
+ * Rides where driver cancelled in_progress and rider still owes additionalDue (ledger not finalized).
+ */
+async function getPendingDriverInProgressCancelSettlements (userId) {
+  const rides = await Ride.find({
+    rider: userId,
+    status: 'cancelled',
+    cancelledBy: 'driver',
+    'driverInProgressCancelSettlement.riderPaymentStatus': 'pending'
+  })
+    .select('_id createdAt updatedAt pickupAddress driverInProgressCancelSettlement')
+    .sort({ updatedAt: -1 })
+    .lean()
+
+  const items = rides
+    .filter(
+      r =>
+        r.driverInProgressCancelSettlement &&
+        !r.driverInProgressCancelSettlement.ledgerFinalizedAt
+    )
+    .map(r => {
+      const st = r.driverInProgressCancelSettlement
+      return {
+        rideId: String(r._id),
+        additionalDue: roundMoney(st.additionalDue || 0),
+        riderPenaltyAmount: st.riderPenaltyAmount,
+        driverPartialAmount: st.driverPartialAmount,
+        riderTotalCharge: st.riderTotalCharge,
+        prepaidTotal: st.prepaidTotal,
+        refundDue: st.refundDue,
+        createdAt: r.createdAt,
+        summary:
+          r.pickupAddress && String(r.pickupAddress).trim()
+            ? `Previous trip from ${r.pickupAddress}`
+            : 'Previous trip cancellation'
+      }
+    })
+
+  const totalAdditionalDue = roundMoney(
+    items.reduce((s, i) => s + (i.additionalDue || 0), 0)
+  )
+  return { items, totalAdditionalDue }
+}
+
 async function getRiderPrepaidTotalForRide (ride) {
   let prepaid = ride.razorpayAmountPaid || 0
   const wt = await WalletTransaction.findOne({
@@ -2181,8 +2225,27 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
 
         if (skipStandardRefunds && driverInProgressSettlementSnapshot) {
           logger.info(
-            `cancelRide: driver in_progress cancel — standard refunds skipped; additionalDue=${driverInProgressSettlementSnapshot.additionalDue}`
+            `cancelRide: driver in_progress cancel — standard refunds skipped; additionalDue=${driverInProgressSettlementSnapshot.additionalDue}, refundDue=${driverInProgressSettlementSnapshot.refundDue}`
           )
+          const refundDue = driverInProgressSettlementSnapshot.refundDue || 0
+          if (refundDue > 0) {
+            const rideForRefund = await Ride.findById(rideId).populate('rider')
+            if (rideForRefund) {
+              try {
+                await applyRefundForDriverInProgressCancel(
+                  rideForRefund,
+                  driverInProgressSettlementSnapshot
+                )
+                logger.info(
+                  `cancelRide: prepaid refund applied at cancel for ride ${rideId} (refundDue=${refundDue})`
+                )
+              } catch (refErr) {
+                logger.error(
+                  `cancelRide: prepaid refund at cancel failed ride ${rideId}: ${refErr.message}`
+                )
+              }
+            }
+          }
           if (driverInProgressSettlementSnapshot.additionalDue <= 0) {
             await finalizeDriverInProgressCancelLedger(rideId)
           }
@@ -3394,5 +3457,6 @@ module.exports = {
   riderAcknowledgeDriverInProgressCancel,
   riderConfirmCashDriverInProgressCancel,
   riderPayWalletDriverInProgressCancel,
-  riderVerifyRazorpayDriverInProgressCancel
+  riderVerifyRazorpayDriverInProgressCancel,
+  getPendingDriverInProgressCancelSettlements
 }
