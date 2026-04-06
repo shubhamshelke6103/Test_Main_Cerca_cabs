@@ -75,19 +75,30 @@ const startDriverOnlineSession = async (driverId, source = 'manual_toggle') => {
   }
 
   const startedAt = new Date()
-  driver.currentOnlineSessionStartedAt = startedAt
-  driver.isOnline = true
-  driver.lastSeen = startedAt
-  await driver.save()
+  // Atomic update avoids full-document validation (legacy drivers may have invalid `documents` subdocs).
+  const updated = await Driver.findByIdAndUpdate(
+    driverId,
+    {
+      $set: {
+        currentOnlineSessionStartedAt: startedAt,
+        isOnline: true,
+        lastSeen: startedAt
+      }
+    },
+    { new: true }
+  )
+  if (!updated) {
+    throw new Error('Driver not found')
+  }
 
   await DriverOnlineSession.create({
-    driver: driver._id,
+    driver: updated._id,
     loginAt: startedAt,
     source,
     status: 'active'
   })
 
-  return driver
+  return updated
 }
 
 const stopDriverOnlineSession = async (
@@ -95,7 +106,9 @@ const stopDriverOnlineSession = async (
   source = 'manual_toggle',
   socketId = null
 ) => {
-  const driver = await Driver.findById(driverId)
+  const driver = await Driver.findById(driverId).select(
+    'currentOnlineSessionStartedAt totalOnlineMinutes socketId'
+  )
   if (!driver) {
     throw new Error('Driver not found')
   }
@@ -109,17 +122,32 @@ const stopDriverOnlineSession = async (
     )
   }
 
-  driver.totalOnlineMinutes = (driver.totalOnlineMinutes || 0) + durationMinutes
-  driver.currentOnlineSessionStartedAt = null
-  driver.isOnline = false
-  driver.lastSeen = endedAt
-  if (socketId && driver.socketId === socketId) {
-    driver.socketId = undefined
+  const updatePayload = {
+    $set: {
+      currentOnlineSessionStartedAt: null,
+      isOnline: false,
+      lastSeen: endedAt
+    },
+    $inc: { totalOnlineMinutes: durationMinutes }
   }
-  await driver.save()
+
+  if (
+    socketId &&
+    driver.socketId &&
+    String(driver.socketId) === String(socketId)
+  ) {
+    updatePayload.$unset = { socketId: 1 }
+  }
+
+  const updated = await Driver.findByIdAndUpdate(driverId, updatePayload, {
+    new: true
+  })
+  if (!updated) {
+    throw new Error('Driver not found')
+  }
 
   await DriverOnlineSession.findOneAndUpdate(
-    { driver: driver._id, status: 'active' },
+    { driver: driverId, status: 'active' },
     {
       $set: {
         logoutAt: endedAt,
@@ -131,7 +159,7 @@ const stopDriverOnlineSession = async (
     { sort: { loginAt: -1 } }
   )
 
-  return driver
+  return updated
 }
 
 const getDriverOnlineHoursSummary = async (
