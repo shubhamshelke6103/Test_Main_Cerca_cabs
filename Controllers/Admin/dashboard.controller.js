@@ -4,26 +4,8 @@ const Ride = require('../../Models/Driver/ride.model');
 const Emergency = require('../../Models/User/emergency.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const Vendor = require('../../Models/vendor/vendor.models');
-const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model');
 const logger = require('../../utils/logger');
-
-/** Matches standalone UNDER_APPROVAL branch in fleetVehicle.controller listVehicleInventory */
-const standaloneUnderApprovalPendingDriverFilter = {
-  vendorId: null,
-  $or: [
-    { vehicleInfo: { $exists: true, $ne: null } },
-    { pendingVehicleInfo: { $exists: true, $ne: null } }
-  ],
-  $and: [
-    {
-      $or: [
-        { assignedFleetVehicleId: null },
-        { assignedFleetVehicleId: { $exists: false } }
-      ]
-    },
-    { 'pendingVehicleInfo.approvalStatus': 'UNDER_APPROVAL' }
-  ]
-};
+const { countUnderApprovalVehicleInventory } = require('./vehicleInventoryQueries');
 
 const buildDateFilter = (startDate, endDate) => {
   const filter = {};
@@ -55,12 +37,12 @@ const getDashboard = async (req, res) => {
       inactiveDrivers,
       pendingDriverApprovals,
       pendingVendorApprovals,
-      pendingFleetVehiclesUnderApproval,
-      pendingStandaloneVehiclesUnderApproval,
       totalRides,
       activeRides,
       completedRides,
+      cancelledRides,
       activeEmergencies,
+      pendingInventory,
     ] = await Promise.all([
       User.countDocuments({}),
       User.countDocuments({ isActive: true }),
@@ -74,16 +56,19 @@ const getDashboard = async (req, res) => {
         'approvalWorkflow.status': { $in: ['PENDING_VENDOR', 'PENDING_ADMIN'] }
       }),
       Vendor.countDocuments({ vendorReviewStatus: 'PENDING' }),
-      FleetVehicle.countDocuments({ approvalStatus: 'UNDER_APPROVAL' }),
-      Driver.countDocuments(standaloneUnderApprovalPendingDriverFilter),
       Ride.countDocuments({}),
       Ride.countDocuments({ status: { $in: ['requested', 'accepted', 'in_progress'] } }),
       Ride.countDocuments({ status: 'completed' }),
+      Ride.countDocuments({ status: 'cancelled' }),
       Emergency.countDocuments({ status: 'active' }),
+      countUnderApprovalVehicleInventory(),
     ]);
 
-    const pendingVehicles =
-      pendingFleetVehiclesUnderApproval + pendingStandaloneVehiclesUnderApproval;
+    const pendingVehicles = pendingInventory.pendingVehicles;
+    const pendingFleetVehiclesUnderApproval =
+      pendingInventory.pendingFleetVehiclesUnderApproval;
+    const pendingStandaloneVehiclesUnderApproval =
+      pendingInventory.pendingStandaloneVehiclesUnderApproval;
 
     const earningsMatch = dateRange ? { rideDate: dateRange } : {};
     const earningsAgg = await AdminEarnings.aggregate([
@@ -138,6 +123,7 @@ const getDashboard = async (req, res) => {
         totalRides,
         activeRides,
         completedRides,
+        cancelledRides,
         activeEmergencies,
       },
       revenue: {

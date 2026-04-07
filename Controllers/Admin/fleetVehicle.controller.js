@@ -1,6 +1,10 @@
 const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
 const Driver = require('../../Models/Driver/driver.model')
 const logger = require('../../utils/logger')
+const {
+  buildFleetVehicleFilterForInventory,
+  buildStandaloneDriverFilterForInventory
+} = require('./vehicleInventoryQueries')
 
 const DRIVER_SUMMARY_SELECT =
   'name email phone isVerified isActive isOnline vendorId assignedFleetVehicleId vehicleInfo pendingVehicleInfo updatedAt createdAt'
@@ -308,72 +312,13 @@ exports.listVehicleInventory = async (req, res) => {
       .trim()
       .toUpperCase()
 
-    const fleetVehicleFilter = {}
-    if (status) {
-      fleetVehicleFilter.approvalStatus = status
-    }
-    if (vendorId) {
-      fleetVehicleFilter.vendorId = vendorId
-    }
-    if (search) {
-      const regex = new RegExp(search, 'i')
-      fleetVehicleFilter.$or = [
-        { make: regex },
-        { model: regex },
-        { color: regex },
-        { licensePlate: regex },
-        { vehicleType: regex }
-      ]
-    }
-
-    const normalizedStatus = String(status || '').trim().toUpperCase()
-    const standaloneDriverFilter = {
-      vendorId: null,
-      $or: [
-        { vehicleInfo: { $exists: true, $ne: null } },
-        { pendingVehicleInfo: { $exists: true, $ne: null } }
-      ],
-      $and: [
-        {
-          $or: [
-            { assignedFleetVehicleId: null },
-            { assignedFleetVehicleId: { $exists: false } }
-          ]
-        }
-      ]
-    }
-
-    if (normalizedStatus === 'APPROVED') {
-      standaloneDriverFilter.$and.push({
-        vehicleInfo: { $exists: true, $ne: null }
-      })
-    } else if (normalizedStatus === 'UNDER_APPROVAL' || normalizedStatus === 'REJECTED') {
-      standaloneDriverFilter.$and.push({
-        'pendingVehicleInfo.approvalStatus': normalizedStatus
-      })
-    } else if (normalizedStatus) {
-      standaloneDriverFilter._id = { $in: [] }
-    }
-    if (search) {
-      const regex = new RegExp(search, 'i')
-      standaloneDriverFilter.$and.push({
-        $or: [
-          { 'vehicleInfo.make': regex },
-          { 'vehicleInfo.model': regex },
-          { 'vehicleInfo.color': regex },
-          { 'vehicleInfo.licensePlate': regex },
-          { 'vehicleInfo.vehicleType': regex },
-          { 'pendingVehicleInfo.make': regex },
-          { 'pendingVehicleInfo.model': regex },
-          { 'pendingVehicleInfo.color': regex },
-          { 'pendingVehicleInfo.licensePlate': regex },
-          { 'pendingVehicleInfo.vehicleType': regex },
-          { name: regex },
-          { email: regex },
-          { phone: regex }
-        ]
-      })
-    }
+    const fleetVehicleFilter = buildFleetVehicleFilterForInventory(status, {
+      vendorId,
+      search
+    })
+    const standaloneDriverFilter = buildStandaloneDriverFilterForInventory(status, {
+      search
+    })
 
     const shouldIncludeFleetVehicles =
       !normalizedOwnershipType || normalizedOwnershipType === 'VENDOR_FLEET'
