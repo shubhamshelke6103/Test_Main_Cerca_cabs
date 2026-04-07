@@ -1208,7 +1208,7 @@ const buildAccessibleVendorDriverQuery = ({
       baseQuery.vendorId = { $in: targetVendorIds }
     }
   } else {
-    baseQuery.$or = [{ vendorId: authenticatedVendorId }, { vendorId: null }]
+    baseQuery.vendorId = authenticatedVendorId
   }
 
   const hasVehicleFilter =
