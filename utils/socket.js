@@ -140,11 +140,17 @@ async function emitRideCancelledToClients (
     ioInstance.to(cancelledRide.driverSocketId).emit('rideCancelled', cancelledRide)
   }
   if (cancelledRide.rider) {
+    const reasonStr = String(cancellationReason || '')
+    const riderMessage =
+      serverCancelledBy === 'driver' &&
+      reasonStr.includes('DRIVER_WITHDREW_BEFORE_ARRIVAL')
+        ? 'The driver declined this ride before pickup.'
+        : `Ride cancelled by ${serverCancelledBy}`
     await createNotification({
       recipientId: cancelledRide.rider._id,
       recipientModel: 'User',
       title: 'Ride Cancelled',
-      message: `Ride cancelled by ${serverCancelledBy}`,
+      message: riderMessage,
       type: 'ride_cancelled',
       relatedRide: rideId
     })
@@ -3177,6 +3183,18 @@ function initializeSocket (server) {
         if (serverCancelledBy === 'driver') {
           if (rideForAuth.status === 'in_progress') {
             // allowed
+          } else if (rideForAuth.status === 'accepted') {
+            if (rideForAuth.driverArrivedAt) {
+              logger.warn(
+                `rideCancelled: Driver withdraw blocked — already marked arrived for ride ${rideId}`
+              )
+              socket.emit('rideError', {
+                message:
+                  'You already marked arrived. Use cancel at pickup if you need to cancel.'
+              })
+              return
+            }
+            // allowed: driver withdraws after accept, before arrival
           } else if (rideForAuth.status === 'arrived') {
             const {
               getPickupWaitPolicyFromSettings
