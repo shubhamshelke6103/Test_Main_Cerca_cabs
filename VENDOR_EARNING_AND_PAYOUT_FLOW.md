@@ -1,5 +1,7 @@
 # Vendor Earning And Payout Flow
 
+> **Cross-role overview:** For platform fee, driver share, vendor commission, and settlement rules in one place, see [EARNINGS_SYSTEM.md](./EARNINGS_SYSTEM.md).
+
 ## Overview
 
 Vendor earnings are now calculated only from `AdminEarnings` records whose `paymentStatus` is `completed`.

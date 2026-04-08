@@ -1,5 +1,7 @@
 # 💰 Driver Earnings Calculation - Complete Guide
 
+> **Cross-role overview:** For how admin, driver, and vendor earnings connect around `AdminEarnings` and `paymentStatus`, see [EARNINGS_SYSTEM.md](./EARNINGS_SYSTEM.md).
+
 ## Overview
 
 The driver earnings calculation now uses the **Admin Settings** schema to properly calculate platform fees and driver commissions based on configurable pricing rules.
