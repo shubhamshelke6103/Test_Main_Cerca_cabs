@@ -1,3 +1,4 @@
+const nodemailer = require('nodemailer')
 const Admin = require('../Models/User/admin.model')
 const Vendor = require('../Models/vendor/vendor.models')
 const ExternalAlert = require('../Models/System/externalAlert.model')
@@ -39,6 +40,35 @@ const sendEmail = async ({ to, subject, message }) => {
       throw new Error(`SendGrid failed: ${response.status} ${responseText}`)
     }
     return { provider: 'sendgrid', providerResponseCode: response.status }
+  }
+
+  if (provider === 'nodemailer') {
+    const host = process.env.SMTP_HOST
+    const port = parseInt(process.env.SMTP_PORT, 10)
+    const secure = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true'
+    const user = process.env.SMTP_USER
+    const pass = process.env.SMTP_PASS
+    const from = process.env.SMTP_FROM_EMAIL
+
+    if (!host || !port || Number.isNaN(port) || !user || !pass || !from) {
+      throw new Error('SMTP credentials are missing or incomplete')
+    }
+
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass }
+    })
+
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject: subject || 'Cerca Alert',
+      text: message
+    })
+
+    return { provider: 'nodemailer', providerResponseCode: info.messageId || 'sent' }
   }
 
   if (provider === 'webhook') {
