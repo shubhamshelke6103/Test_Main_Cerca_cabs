@@ -27,8 +27,82 @@ const {
   getSharedLiveLocationPayload
 } = require('../../utils/liveLocationShare.service')
 const { getSocketIO } = require('../../utils/socket')
+const Notification = require('../../Models/User/notification.model.js')
 
 const DEFAULT_CITY_SPEED_KMH = 35
+const MIN_DESTINATION_MOVE_KM = 0.05 // 50 m — ignore jitter / mis-taps
+const MAX_DESTINATION_CHANGES_PER_RIDE = 15
+
+const parseExpectedRevision = req => {
+  if (req.body && req.body.expectedRevision !== undefined && req.body.expectedRevision !== null) {
+    const n = Number(req.body.expectedRevision)
+    return Number.isFinite(n) ? n : undefined
+  }
+  const ifMatch = req.headers['if-match'] || req.headers['If-Match']
+  if (ifMatch && typeof ifMatch === 'string') {
+    const cleaned = ifMatch.replace(/^W\//, '').replace(/^"|"$/g, '').trim()
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
+const haversineKmBetweenPoints = (a, b) => {
+  if (!a?.coordinates || !b?.coordinates || a.coordinates.length < 2 || b.coordinates.length < 2) {
+    return Infinity
+  }
+  const [lng1, lat1] = a.coordinates
+  const [lng2, lat2] = b.coordinates
+  return calculateHaversineDistance(lat1, lng1, lat2, lng2)
+}
+
+const normalizeQueryLocation = (q, fieldName) => {
+  const lat = q.latitude ?? q.lat
+  const lng = q.longitude ?? q.lng ?? q.lon
+  if (lat === undefined || lng === undefined) {
+    throw new Error(`${fieldName}: latitude and longitude query params are required`)
+  }
+  return {
+    type: 'Point',
+    coordinates: [Number(lng), Number(lat)]
+  }
+}
+
+const notifyDestinationChangeAsync = (ride, userId, quote, refreshedRide) => {
+  const rideId = refreshedRide._id
+  const fareStr = quote.fare != null ? `₹${Number(quote.fare).toFixed(2)}` : ''
+  const addr = refreshedRide.dropoffAddress || 'Destination updated'
+  const msg = `New estimated fare ${fareStr}. ${addr}`
+
+  const tasks = [
+    Notification.create({
+      recipient: userId,
+      recipientModel: 'User',
+      title: 'Destination updated',
+      message: msg,
+      type: 'ride_destination_updated',
+      relatedRide: rideId,
+      data: { rideId: String(rideId), fare: quote.fare, role: 'rider' }
+    })
+  ]
+  const driverId = refreshedRide.driver?._id || refreshedRide.driver
+  if (driverId) {
+    tasks.push(
+      Notification.create({
+        recipient: driverId,
+        recipientModel: 'Driver',
+        title: 'Rider changed destination',
+        message: msg,
+        type: 'ride_destination_updated',
+        relatedRide: rideId,
+        data: { rideId: String(rideId), fare: quote.fare, role: 'driver' }
+      })
+    )
+  }
+  Promise.all(tasks).catch(err =>
+    logger.warn('Destination change in-app notifications failed:', err)
+  )
+}
 
 const normalizeLocationInput = (location, fieldName) => {
   if (!location) {
@@ -543,6 +617,106 @@ const updateRide = async (req, res) => {
 }
 
 /**
+ * Shared validation for destination change / quote (rider auth + ride state).
+ */
+const loadRideForDestinationChange = async (rideId, userId) => {
+  if (!userId) {
+    return { error: { status: 401, body: { success: false, message: 'Authentication required' } } }
+  }
+  if (!mongoose.Types.ObjectId.isValid(rideId)) {
+    return { error: { status: 404, body: { success: false, message: 'Ride not found' } } }
+  }
+  const ride = await Ride.findById(rideId).populate('driver rider')
+  if (!ride) {
+    return { error: { status: 404, body: { success: false, message: 'Ride not found' } } }
+  }
+  if (String(ride.rider?._id || ride.rider) !== String(userId)) {
+    return {
+      error: {
+        status: 403,
+        body: { success: false, message: 'You do not have permission to update this ride destination' }
+      }
+    }
+  }
+  if (ride.bookingType !== 'INSTANT') {
+    return {
+      error: {
+        status: 400,
+        body: { success: false, message: 'Destination updates are only supported for instant rides' }
+      }
+    }
+  }
+  const allowedStatuses = ['requested', 'accepted', 'arrived', 'in_progress']
+  if (!allowedStatuses.includes(ride.status)) {
+    return {
+      error: {
+        status: 400,
+        body: { success: false, message: 'Destination can only be updated for active rides' }
+      }
+    }
+  }
+  return { ride }
+}
+
+/**
+ * @desc    Preview fare for a new dropoff without persisting
+ * @route   GET /rides/:id/destination-quote
+ * @query   latitude, longitude (or lat, lng) — optional estimatedDuration (minutes)
+ */
+const getDestinationQuote = async (req, res) => {
+  try {
+    const rideId = req.params.id
+    const userId = getUserIdFromToken(req)
+    const gate = await loadRideForDestinationChange(rideId, userId)
+    if (gate.error) {
+      return res.status(gate.error.status).json(gate.error.body)
+    }
+    const { ride } = gate
+
+    const dropoffLocation = normalizeQueryLocation(req.query, 'destination-quote')
+    const moveKm = haversineKmBetweenPoints(ride.dropoffLocation, dropoffLocation)
+    if (moveKm < MIN_DESTINATION_MOVE_KM) {
+      return res.status(400).json({
+        success: false,
+        message: `New destination must be at least ${MIN_DESTINATION_MOVE_KM * 1000}m from the current drop-off`
+      })
+    }
+
+    const pricingOrigin = await resolveRidePricingOrigin(ride)
+    const quote = await buildDestinationUpdateQuote({
+      ride,
+      pricingOrigin,
+      dropoffLocation,
+      estimatedDuration: req.query.estimatedDuration
+    })
+
+    const previousFare = Number(ride.fare || 0)
+    return res.status(200).json({
+      success: true,
+      destinationRevision: ride.destinationRevision ?? 0,
+      pricing: {
+        previousFare,
+        newFare: quote.fare,
+        fareDifference: Math.round((quote.fare - previousFare) * 100) / 100,
+        previousDistanceInKm: Number(ride.distanceInKm || 0),
+        newDistanceInKm: quote.distanceInKm,
+        previousEstimatedDuration: Number(ride.estimatedDuration || 0),
+        newEstimatedDuration: quote.estimatedDuration,
+        pricingOriginSource: quote.pricingOriginSource,
+        earnings: quote.earnings
+      },
+      quotePreview: quote
+    })
+  } catch (error) {
+    logger.error('Error getting destination quote:', error)
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Error getting destination quote'
+    })
+  }
+}
+
+/**
  * @desc    Update active ride destination and recalculate fare
  * @route   PATCH /rides/:id/destination
  */
@@ -551,40 +725,27 @@ const updateRideDestination = async (req, res) => {
     const rideId = req.params.id
     const userId = getUserIdFromToken(req)
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      })
+    const gate = await loadRideForDestinationChange(rideId, userId)
+    if (gate.error) {
+      return res.status(gate.error.status).json(gate.error.body)
     }
+    const { ride } = gate
 
-    const ride = await Ride.findById(rideId).populate('driver rider')
-    if (!ride) {
-      return res.status(404).json({
-        success: false,
-        message: 'Ride not found'
-      })
-    }
-
-    if (String(ride.rider?._id || ride.rider) !== String(userId)) {
-      return res.status(403).json({
-        success: false,
-        message: 'You do not have permission to update this ride destination'
-      })
-    }
-
-    if (ride.bookingType !== 'INSTANT') {
+    const logLen = (ride.destinationChangeLog && ride.destinationChangeLog.length) || 0
+    if (logLen >= MAX_DESTINATION_CHANGES_PER_RIDE) {
       return res.status(400).json({
         success: false,
-        message: 'Destination updates are only supported for instant rides'
+        message: `Maximum of ${MAX_DESTINATION_CHANGES_PER_RIDE} destination changes per ride reached`
       })
     }
 
-    const allowedStatuses = ['requested', 'accepted', 'arrived', 'in_progress']
-    if (!allowedStatuses.includes(ride.status)) {
-      return res.status(400).json({
+    const expectedRevision = parseExpectedRevision(req)
+    const currentRev = ride.destinationRevision ?? 0
+    if (expectedRevision !== undefined && expectedRevision !== currentRev) {
+      return res.status(409).json({
         success: false,
-        message: 'Destination can only be updated for active rides'
+        message: 'Destination was updated by another action. Refresh and try again.',
+        destinationRevision: currentRev
       })
     }
 
@@ -592,13 +753,26 @@ const updateRideDestination = async (req, res) => {
       req.body.dropoffLocation,
       'dropoffLocation'
     )
+    const moveKm = haversineKmBetweenPoints(ride.dropoffLocation, dropoffLocation)
+    if (moveKm < MIN_DESTINATION_MOVE_KM) {
+      return res.status(400).json({
+        success: false,
+        message: `New destination must be at least ${MIN_DESTINATION_MOVE_KM * 1000}m from the current drop-off`
+      })
+    }
+
     const pricingOrigin = await resolveRidePricingOrigin(ride)
 
     const previousFare = Number(ride.fare || 0)
     const previousDistanceInKm = Number(ride.distanceInKm || 0)
     const previousEstimatedDuration = Number(ride.estimatedDuration || 0)
     const previousDropoffAddress = ride.dropoffAddress || null
-    const previousDropoffLocation = ride.dropoffLocation || null
+    const previousDropoffLocation = ride.dropoffLocation
+      ? {
+          type: ride.dropoffLocation.type || 'Point',
+          coordinates: [...ride.dropoffLocation.coordinates]
+        }
+      : null
 
     const quote = await buildDestinationUpdateQuote({
       ride,
@@ -606,6 +780,11 @@ const updateRideDestination = async (req, res) => {
       dropoffLocation,
       estimatedDuration: req.body.estimatedDuration
     })
+
+    const newDropoffAddress =
+      typeof req.body.dropoffAddress === 'string' && req.body.dropoffAddress.trim()
+        ? req.body.dropoffAddress.trim()
+        : ride.dropoffAddress
 
     ride.dropoffLocation = dropoffLocation
     if (typeof req.body.dropoffAddress === 'string' && req.body.dropoffAddress.trim()) {
@@ -616,6 +795,26 @@ const updateRideDestination = async (req, res) => {
     ride.discount = quote.discount
     ride.fare = quote.fare
     ride.fareBreakdown = quote.fareBreakdown
+
+    if (!ride.destinationChangeLog) {
+      ride.destinationChangeLog = []
+    }
+    ride.destinationChangeLog.push({
+      at: new Date(),
+      previousDropoffLocation,
+      previousDropoffAddress,
+      previousFare,
+      newDropoffLocation: {
+        type: dropoffLocation.type || 'Point',
+        coordinates: [...dropoffLocation.coordinates]
+      },
+      newDropoffAddress: newDropoffAddress || null,
+      newFare: quote.fare,
+      pricingOriginSource: quote.pricingOriginSource,
+      requestedBy: userId
+    })
+    ride.destinationRevision = currentRev + 1
+
     await ride.save()
 
     const refreshedRide = await Ride.findById(rideId).populate('driver rider')
@@ -624,6 +823,7 @@ const updateRideDestination = async (req, res) => {
       success: true,
       message: 'Ride destination updated successfully',
       ride: refreshedRide,
+      destinationRevision: refreshedRide.destinationRevision,
       pricing: {
         previousFare,
         newFare: quote.fare,
@@ -640,6 +840,8 @@ const updateRideDestination = async (req, res) => {
         earnings: quote.earnings
       }
     }
+
+    notifyDestinationChangeAsync(ride, userId, quote, refreshedRide)
 
     try {
       const io = getSocketIO()
@@ -1846,6 +2048,7 @@ module.exports = {
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
   updateRideDestination,
+  getDestinationQuote,
   acknowledgeDriverCancelSettlement,
   confirmCashDriverCancelSettlement,
   payWalletDriverCancelSettlement,

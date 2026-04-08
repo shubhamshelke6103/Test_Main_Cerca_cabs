@@ -316,6 +316,29 @@ const rideSchema = new mongoose.Schema(
 
     shareCreatedAt: Date,
 
+    // Destination edits while ride is active (audit / support)
+    destinationRevision: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    destinationChangeLog: [
+      {
+        at: { type: Date, default: Date.now },
+        previousDropoffLocation: { type: mongoose.Schema.Types.Mixed },
+        previousDropoffAddress: { type: String, default: null },
+        previousFare: { type: Number, default: null },
+        newDropoffLocation: { type: mongoose.Schema.Types.Mixed },
+        newDropoffAddress: { type: String, default: null },
+        newFare: { type: Number, default: null },
+        pricingOriginSource: { type: String, default: null },
+        requestedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User'
+        }
+      }
+    ],
+
     // Driver cancelled during in_progress — settlement + rider payment gate
     driverInProgressCancelSettlement: {
       partialDistanceKm: { type: Number, default: null },

@@ -852,6 +852,21 @@
       ],
       "functionality": "Automatic cleanup when socket disconnects. Clears user/driver socket, updates isOnline to false, updates driver status. Broadcasts disconnection to all clients."
     },
+    "rideDestinationUpdated": {
+      "event": "rideDestinationUpdated",
+      "type": "server_to_client",
+      "description": "Rider changed drop-off; fare and distance recalculated (PATCH /api/rides/:id/destination)",
+      "emittedBy": "Server",
+      "receivedBy": "Rider socket, driver socket, ride room, admin",
+      "data": {
+        "schema": {
+          "ride": "Full ride document (populated)",
+          "pricing": "Object with previousFare, newFare, fareDifference, newDistanceInKm, pricingOriginSource, earnings, etc."
+        }
+      },
+      "relatedEvents": ["rideUpdated (same payload)", "rideStatusUpdated (admin, includes ride)"],
+      "functionality": "Emitted after destination change for INSTANT rides in active statuses. Updates maps and fare in client apps."
+    },
     "errorEvent": {
       "event": "errorEvent",
       "type": "server_to_client",

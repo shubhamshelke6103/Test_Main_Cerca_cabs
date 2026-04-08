@@ -20,6 +20,7 @@ const {
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
   updateRideDestination,
+  getDestinationQuote,
   acknowledgeDriverCancelSettlement,
   confirmCashDriverCancelSettlement,
   payWalletDriverCancelSettlement,
@@ -31,6 +32,7 @@ const {
   verifyRidePayment,
   createDriverCancelSettlementOrder
 } = require('../Controllers/payment.controller');
+const { destinationChangeLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -107,13 +109,16 @@ router.get('/driver/:driverId', getRidesByDriverId);
 // POST /rides/search/:id
 router.post('/search/:id', searchRide);
 
+// GET /rides/:id/destination-quote — preview new fare (before /:id)
+router.get('/:id/destination-quote', destinationChangeLimiter, getDestinationQuote);
+
 // Get a single ride by ID - MUST come after all specific routes
 // GET /rides/:id
 router.get('/:id', getRideById);
 
 // Update ride destination
 // PATCH /rides/:id/destination
-router.patch('/:id/destination', updateRideDestination);
+router.patch('/:id/destination', destinationChangeLimiter, updateRideDestination);
 
 // Update a ride by ID
 // PUT /rides/:id

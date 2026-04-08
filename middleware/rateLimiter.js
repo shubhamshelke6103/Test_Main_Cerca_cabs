@@ -100,6 +100,7 @@ const readLimiterStore = createRedisStore('rl:read:', 60 * 1000) // 1 minute
 const uploadLimiterStore = createRedisStore('rl:upload:', 60 * 60 * 1000) // 1 hour
 const vendorForgotPasswordStore = createRedisStore('rl:vendor-forgot-pw:', 15 * 60 * 1000) // 15 min
 const vendorResetPasswordStore = createRedisStore('rl:vendor-reset-pw:', 15 * 60 * 1000) // 15 min
+const destinationChangeStore = createRedisStore('rl:destination-change:', 15 * 60 * 1000) // 15 min
 
 if (isRedisAvailable()) {
   logger.info('✅ Rate limiters using Redis stores (shared across instances)')
@@ -261,6 +262,35 @@ const vendorResetPasswordLimiter = createRateLimiter(
   'vendorResetPasswordLimiter'
 )
 
+// Destination change / quote: 30 requests per 15 min per IP (abuse protection)
+const destinationChangeLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many destination updates. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Destination change rate limit exceeded for IP: ${req.ip}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many destination updates. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const destinationChangeLimiter = createRateLimiter(
+  destinationChangeLimiterConfig,
+  destinationChangeStore,
+  'destinationChangeLimiter'
+)
+
 // Ensure all rate limiters are valid middleware functions
 // If any are undefined, replace with no-op middleware
 const ensureMiddleware = (middleware, name) => {
@@ -283,6 +313,10 @@ module.exports = {
   vendorResetPasswordLimiter: ensureMiddleware(
     vendorResetPasswordLimiter,
     'vendorResetPasswordLimiter'
+  ),
+  destinationChangeLimiter: ensureMiddleware(
+    destinationChangeLimiter,
+    'destinationChangeLimiter'
   ),
   createRateLimiter,
   createRedisStore

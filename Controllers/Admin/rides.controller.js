@@ -204,8 +204,29 @@ const getRideTimeline = async (req, res) => {
     }
 
     push('Start OTP verified / trip start', ride.startOtpVerifiedAt || ride.actualStartTime);
+
+    if (Array.isArray(ride.destinationChangeLog) && ride.destinationChangeLog.length > 0) {
+      for (const entry of ride.destinationChangeLog) {
+        if (!entry || !entry.at) continue;
+        push('Destination changed', entry.at, {
+          type: 'destination_change',
+          previousFare: entry.previousFare,
+          newFare: entry.newFare,
+          previousDropoffAddress: entry.previousDropoffAddress,
+          newDropoffAddress: entry.newDropoffAddress,
+          pricingOriginSource: entry.pricingOriginSource
+        });
+      }
+    }
+
     push('Ride completed (stop OTP)', ride.stopOtpVerifiedAt || ride.actualEndTime);
     push('Ride Cancelled', ride.status === 'cancelled' ? ride.updatedAt : null);
+
+    events.sort((a, b) => {
+      const ta = a.time ? new Date(a.time).getTime() : 0;
+      const tb = b.time ? new Date(b.time).getTime() : 0;
+      return ta - tb;
+    });
 
     res.status(200).json({
       events,
