@@ -25,8 +25,14 @@ const escapeHtml = text =>
 
 const buildEmailHtml = ({ subject, message }) => {
   const brandName = process.env.EMAIL_BRAND_NAME || 'Cerca Cars'
-  const logoUrl = process.env.SMTP_EMAIL_LOGO_URL || ''
+  const logoUrlRaw = process.env.SMTP_EMAIL_LOGO_URL || ''
+  const emailBaseUrl = String(process.env.EMAIL_PUBLIC_URL || '').replace(/\/$/, '')
+  const logoPath = String(process.env.EMAIL_LOGO_PATH || '').replace(/^\//, '')
+  const logoUrlFallback = emailBaseUrl && logoPath ? `${emailBaseUrl}/${logoPath}` : ''
+  const logoUrl = logoUrlRaw || logoUrlFallback || ''
   const escapedMessage = escapeHtml(message).replace(/\n/g, '<br />')
+  const otpMatch = message ? message.match(/\b(\d{4,8})\b/) : null
+  const otpCode = otpMatch ? otpMatch[1] : null
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -35,35 +41,44 @@ const buildEmailHtml = ({ subject, message }) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(subject || brandName)} | ${escapeHtml(brandName)}</title>
 </head>
-<body style="margin:0;padding:0;background-color:#f4f6fb;font-family:Arial, 'Helvetica Neue', Helvetica, sans-serif;">
+<body style="margin:0;padding:0;background-color:#f4f6fb;font-family:Arial, 'Helvetica Neue', Helvetica, sans-serif;color:#111827;">
   <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
     <tr>
-      <td align="center" style="padding:24px 12px;">
-        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(15,23,42,0.08);">
+      <td align="center" style="padding:32px 12px;">
+        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,0.1);">
           <tr>
-            <td style="background:#0f172a;padding:24px;text-align:center;">
-              ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brandName)} logo" width="140" style="display:block;margin:0 auto;" />` : `<span style="font-size:24px;font-weight:700;color:#ffffff;">${escapeHtml(brandName)}</span>`}
+            <td style="background:#111827;padding:28px 24px;text-align:center;">
+              ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brandName)} logo" width="140" style="display:block;margin:0 auto;" />` : `<span style="font-size:26px;font-weight:700;color:#ffffff;letter-spacing:0.06em;">${escapeHtml(brandName)}</span>`}
             </td>
           </tr>
           <tr>
-            <td style="padding:32px 32px 24px;color:#111827;">
-              <h1 style="margin:0 0 16px;font-size:24px;line-height:1.2;color:#111827;">${escapeHtml(subject || 'Important update')}</h1>
-              <p style="margin:0 0 24px;font-size:16px;line-height:1.75;color:#4b5563;">
-                ${escapedMessage}
+            <td style="padding:36px 36px 24px;">
+              <h1 style="margin:0 0 16px;font-size:26px;line-height:1.15;color:#111827;">Password Reset OTP</h1>
+              <p style="margin:0 0 24px;font-size:16px;line-height:1.8;color:#475569;">
+                Use the code below to reset your vendor account password. This code expires in 10 minutes for your security.
               </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:0 32px 32px;">
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px;">
-                <p style="margin:0;font-size:14px;line-height:1.7;color:#475569;">
-                  If you did not request this password reset, please contact support immediately.
+              ${otpCode ? `<div style="margin:0 0 24px;padding:22px 18px;border:1px solid #e2e8f0;border-radius:16px;background:#f8fafc;display:inline-flex;align-items:center;justify-content:center;min-width:280px;">
+                  <span style="font-size:32px;letter-spacing:0.15em;font-weight:700;color:#111827;">${escapeHtml(otpCode)}</span>
+                </div>` : ''}
+              <div style="padding:24px 22px;border-radius:20px;background:#f3f6ff;border:1px solid #dbeafe;">
+                <p style="margin:0;font-size:15px;line-height:1.75;color:#334155;">
+                  <strong style="color:#0f172a;">One-time password (OTP):</strong><br />
+                  ${escapedMessage}
                 </p>
               </div>
             </td>
           </tr>
           <tr>
-            <td style="background:#f8fafc;padding:20px 32px;text-align:center;font-size:12px;color:#94a3b8;">
+            <td style="padding:0 36px 32px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#475569;">
+                  If you did not request this password reset, please ignore this email or contact our support team immediately.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#eef2ff;padding:20px 36px;text-align:center;font-size:13px;color:#64748b;">
               © ${new Date().getFullYear()} ${escapeHtml(brandName)}. All rights reserved.
             </td>
           </tr>
