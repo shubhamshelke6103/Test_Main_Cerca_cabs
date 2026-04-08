@@ -15,6 +15,66 @@ const getProviderName = channel => {
   return 'none'
 }
 
+const escapeHtml = text =>
+  String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const buildEmailHtml = ({ subject, message }) => {
+  const brandName = process.env.EMAIL_BRAND_NAME || 'Cerca Cars'
+  const logoUrl = process.env.SMTP_EMAIL_LOGO_URL || ''
+  const escapedMessage = escapeHtml(message).replace(/\n/g, '<br />')
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(subject || brandName)} | ${escapeHtml(brandName)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f6fb;font-family:Arial, 'Helvetica Neue', Helvetica, sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px;background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(15,23,42,0.08);">
+          <tr>
+            <td style="background:#0f172a;padding:24px;text-align:center;">
+              ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(brandName)} logo" width="140" style="display:block;margin:0 auto;" />` : `<span style="font-size:24px;font-weight:700;color:#ffffff;">${escapeHtml(brandName)}</span>`}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 32px 24px;color:#111827;">
+              <h1 style="margin:0 0 16px;font-size:24px;line-height:1.2;color:#111827;">${escapeHtml(subject || 'Important update')}</h1>
+              <p style="margin:0 0 24px;font-size:16px;line-height:1.75;color:#4b5563;">
+                ${escapedMessage}
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 32px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#475569;">
+                  If you did not request this password reset, please contact support immediately.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f8fafc;padding:20px 32px;text-align:center;font-size:12px;color:#94a3b8;">
+              © ${new Date().getFullYear()} ${escapeHtml(brandName)}. All rights reserved.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`
+}
+
 const sendEmail = async ({ to, subject, message }) => {
   const provider = process.env.ALERT_EMAIL_PROVIDER || 'none'
 
@@ -61,11 +121,13 @@ const sendEmail = async ({ to, subject, message }) => {
       auth: { user, pass }
     })
 
+    const html = buildEmailHtml({ subject: subject || 'Cerca Alert', message })
     const info = await transporter.sendMail({
       from,
       to,
       subject: subject || 'Cerca Alert',
-      text: message
+      text: message,
+      html
     })
 
     return { provider: 'nodemailer', providerResponseCode: info.messageId || 'sent' }
