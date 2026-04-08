@@ -7,7 +7,10 @@ const vendorController = require("../../Controllers/Vendor/vendor.controller");
 const vendorPayoutController = require("../../Controllers/Vendor/vendorPayout.controller");
 const fleetVehicleController = require("../../Controllers/Vendor/fleetVehicle.controller");
 const { authenticateVendor } = require("../../utils/vendorAuth");
-const { authLimiter } = require("../../middleware/rateLimiter");
+const {
+  vendorForgotPasswordLimiter,
+  vendorResetPasswordLimiter,
+} = require("../../middleware/rateLimiter");
 
 const vendorDocsDir = path.join(__dirname, "../../uploads/vendorDocuments");
 if (!fs.existsSync(vendorDocsDir)) {
@@ -40,8 +43,16 @@ const fleetVehicleFileFields = fleetVehicleUpload.fields([
 // Public routes
 router.post("/register", vendorController.registerVendor);
 router.post("/login", vendorController.loginVendor);
-router.post("/forgot-password", authLimiter, vendorController.forgotVendorPassword);
-router.post("/reset-password", authLimiter, vendorController.resetVendorPassword);
+router.post(
+  "/forgot-password",
+  vendorForgotPasswordLimiter,
+  vendorController.forgotVendorPassword
+);
+router.post(
+  "/reset-password",
+  vendorResetPasswordLimiter,
+  vendorController.resetVendorPassword
+);
 // Post-registration Aadhaar upload (no login yet); body must include vendorId
 router.post("/register/upload-document", vendorUpload.single("document"), vendorController.uploadVendorDocumentPostRegister);
 router.post("/register/reupload-document", vendorUpload.single("document"), vendorController.uploadVendorDocumentPostRegister);

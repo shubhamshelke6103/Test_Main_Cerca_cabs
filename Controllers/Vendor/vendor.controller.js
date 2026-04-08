@@ -9,7 +9,7 @@ const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
 const mongoose = require('mongoose')
 const logger = require('../../utils/logger')
-const { dispatchExternalAlert } = require('../../utils/alerting.service')
+const { queueExternalAlertEmail } = require('../../utils/alerting.service')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
 const {
@@ -851,6 +851,10 @@ const buildDateRange = (period, startDate, endDate) => {
 }
 
 const VENDOR_RESET_OTP_EXPIRY_MINUTES = 10
+/** Min time between OTP emails for the same vendor when current OTP is still valid */
+const VENDOR_RESET_COOLDOWN_MS = 90 * 1000
+/** Wrong OTP attempts before invalidating the reset session */
+const VENDOR_RESET_MAX_OTP_ATTEMPTS = 5
 
 const generateVendorResetOtp = () =>
   crypto.randomInt(100000, 1000000).toString()
@@ -998,6 +1002,26 @@ exports.forgotVendorPassword = async (req, res) => {
       })
     }
 
+    const now = Date.now()
+    const requestedAt = vendor.passwordResetRequestedAt
+      ? new Date(vendor.passwordResetRequestedAt).getTime()
+      : 0
+    const expiresAt = vendor.passwordResetExpiresAt
+      ? new Date(vendor.passwordResetExpiresAt).getTime()
+      : 0
+    const hasValidOtp =
+      Boolean(vendor.passwordResetOtpHash) && expiresAt > now
+    if (
+      hasValidOtp &&
+      requestedAt > 0 &&
+      now - requestedAt < VENDOR_RESET_COOLDOWN_MS
+    ) {
+      return res.status(200).json({
+        message:
+          'If a vendor account exists with this email, an OTP has been sent.'
+      })
+    }
+
     const otp = generateVendorResetOtp()
     vendor.passwordResetOtpHash = hashResetOtp(otp)
     vendor.passwordResetExpiresAt = new Date(
@@ -1007,16 +1031,22 @@ exports.forgotVendorPassword = async (req, res) => {
     vendor.passwordResetAttempts = 0
     await vendor.save()
 
-    await dispatchExternalAlert({
-      channel: 'email',
-      to: vendor.email,
-      subject: 'Vendor password reset OTP',
-      message: `Your vendor password reset OTP is ${otp}. It expires in ${VENDOR_RESET_OTP_EXPIRY_MINUTES} minutes.`,
-      metadata: {
-        vendorId: vendor._id.toString(),
-        purpose: 'vendor_password_reset'
-      }
-    })
+    try {
+      await queueExternalAlertEmail({
+        channel: 'email',
+        to: vendor.email,
+        subject: 'Vendor password reset OTP',
+        message: `Your vendor password reset OTP is ${otp}. It expires in ${VENDOR_RESET_OTP_EXPIRY_MINUTES} minutes.`,
+        metadata: {
+          vendorId: vendor._id.toString(),
+          purpose: 'vendor_password_reset'
+        }
+      })
+    } catch (sendErr) {
+      logger.error(
+        `Vendor password reset email queue error for ${vendor.email}: ${sendErr.message}`
+      )
+    }
 
     return res.status(200).json({
       message:
@@ -1072,11 +1102,24 @@ exports.resetVendorPassword = async (req, res) => {
       })
     }
 
+    if ((vendor.passwordResetAttempts || 0) >= VENDOR_RESET_MAX_OTP_ATTEMPTS) {
+      vendor.passwordResetOtpHash = null
+      vendor.passwordResetExpiresAt = null
+      await vendor.save()
+      return res.status(400).json({
+        message: 'OTP is invalid or expired'
+      })
+    }
+
     const isOtpValid =
       vendor.passwordResetOtpHash === hashResetOtp(otp)
 
     if (!isOtpValid) {
       vendor.passwordResetAttempts = (vendor.passwordResetAttempts || 0) + 1
+      if (vendor.passwordResetAttempts >= VENDOR_RESET_MAX_OTP_ATTEMPTS) {
+        vendor.passwordResetOtpHash = null
+        vendor.passwordResetExpiresAt = null
+      }
       await vendor.save()
       return res.status(400).json({
         message: 'OTP is invalid or expired'

@@ -37,6 +37,7 @@ logger.info('✅ Socket.IO initialized')
 ======================= */
 // RUN ONLY ON ONE SERVER - Use distributed lock or run on single instance
 require('./src/workers/rideBooking.worker')
+require('./src/workers/externalAlertEmail.worker')
 
 const initScheduledRideWorker = require('./src/workers/scheduledRide.worker')
 const initRideAutoCancelWorker = require('./src/workers/rideAutoCancel.worker')

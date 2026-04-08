@@ -215,19 +215,17 @@ const sendSms = async ({ to, message }) => {
   return { provider: 'none', skipped: true, reason: 'sms_provider_not_configured' }
 }
 
-const dispatchExternalAlert = async payload => {
-  const { channel, to, subject, message } = payload
+/**
+ * Deliver an existing ExternalAlert row (retries, status updates).
+ * Used by synchronous dispatch and by the BullMQ worker.
+ */
+const deliverExternalAlertRecord = async alertRecord => {
+  const channel = alertRecord.channel
+  const to = alertRecord.to
+  const subject = alertRecord.subject
+  const message = alertRecord.message
   if (!to) return { channel, status: 'skipped', reason: 'missing_recipient' }
   const provider = getProviderName(channel)
-  const alertRecord = await ExternalAlert.create({
-    channel,
-    to,
-    subject: subject || null,
-    message,
-    provider,
-    status: 'queued',
-    metadata: payload.metadata || {}
-  })
 
   for (let attempt = 1; attempt <= ALERT_MAX_RETRIES; attempt++) {
     try {
@@ -282,6 +280,72 @@ const dispatchExternalAlert = async payload => {
   }
 
   return { channel, status: 'failed', reason: 'unknown_dispatch_failure' }
+}
+
+const deliverExternalAlertById = async alertId => {
+  const alertRecord = await ExternalAlert.findById(alertId)
+  if (!alertRecord) {
+    logger.error(`deliverExternalAlertById: ExternalAlert not found ${alertId}`)
+    return { status: 'missing' }
+  }
+  return deliverExternalAlertRecord(alertRecord)
+}
+
+const dispatchExternalAlert = async payload => {
+  const { channel, to, subject, message } = payload
+  if (!to) return { channel, status: 'skipped', reason: 'missing_recipient' }
+  const provider = getProviderName(channel)
+  const alertRecord = await ExternalAlert.create({
+    channel,
+    to,
+    subject: subject || null,
+    message,
+    provider,
+    status: 'queued',
+    metadata: payload.metadata || {}
+  })
+  return deliverExternalAlertRecord(alertRecord)
+}
+
+/**
+ * Create ExternalAlert and enqueue email delivery (BullMQ).
+ * Falls back to inline delivery if Redis/queue is unavailable.
+ */
+const queueExternalAlertEmail = async payload => {
+  const { channel, to, subject, message } = payload
+  if (channel !== 'email') {
+    return dispatchExternalAlert(payload)
+  }
+  if (!to) return { channel, status: 'skipped', reason: 'missing_recipient' }
+  const provider = getProviderName(channel)
+  const alertRecord = await ExternalAlert.create({
+    channel,
+    to,
+    subject: subject || null,
+    message,
+    provider,
+    status: 'queued',
+    metadata: payload.metadata || {}
+  })
+
+  try {
+    const { externalAlertEmailQueue } = require('../src/queues/externalAlertEmail.queue')
+    await externalAlertEmailQueue.add(
+      'deliver',
+      { alertId: String(alertRecord._id) },
+      { removeOnComplete: 200, removeOnFail: 100 }
+    )
+    return { channel, status: 'queued', alertId: alertRecord._id }
+  } catch (err) {
+    logger.warn(
+      `externalAlertEmail queue unavailable, delivering inline: ${err.message}`
+    )
+    const fresh = await ExternalAlert.findById(alertRecord._id)
+    if (!fresh) {
+      return { channel, status: 'failed', reason: 'alert_record_missing' }
+    }
+    return deliverExternalAlertRecord(fresh)
+  }
 }
 
 const notifyAdmins = async ({ title, message, type, data }) => {
@@ -353,6 +417,9 @@ const notifyVendor = async (vendorId, { title, message, type, data }) => {
 
 module.exports = {
   dispatchExternalAlert,
+  queueExternalAlertEmail,
+  deliverExternalAlertById,
+  deliverExternalAlertRecord,
   notifyAdmins,
   notifyVendor
 }

@@ -98,6 +98,8 @@ const apiLimiterStore = createRedisStore('rl:api:', 60 * 1000) // 1 minute
 const authLimiterStore = createRedisStore('rl:auth:', 60 * 1000) // 1 minute
 const readLimiterStore = createRedisStore('rl:read:', 60 * 1000) // 1 minute
 const uploadLimiterStore = createRedisStore('rl:upload:', 60 * 60 * 1000) // 1 hour
+const vendorForgotPasswordStore = createRedisStore('rl:vendor-forgot-pw:', 15 * 60 * 1000) // 15 min
+const vendorResetPasswordStore = createRedisStore('rl:vendor-reset-pw:', 15 * 60 * 1000) // 15 min
 
 if (isRedisAvailable()) {
   logger.info('✅ Rate limiters using Redis stores (shared across instances)')
@@ -204,6 +206,61 @@ const uploadLimiterConfig = {
 
 const uploadLimiter = createRateLimiter(uploadLimiterConfig, uploadLimiterStore, 'uploadLimiter')
 
+// Vendor password reset: count every request (no skipSuccessfulRequests) — mitigates email bombing
+const vendorForgotPasswordLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many password reset requests. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Vendor forgot-password rate limit exceeded for IP: ${req.ip}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many password reset requests. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const vendorForgotPasswordLimiter = createRateLimiter(
+  vendorForgotPasswordLimiterConfig,
+  vendorForgotPasswordStore,
+  'vendorForgotPasswordLimiter'
+)
+
+const vendorResetPasswordLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: 'Too many reset attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Vendor reset-password rate limit exceeded for IP: ${req.ip}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many reset attempts. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const vendorResetPasswordLimiter = createRateLimiter(
+  vendorResetPasswordLimiterConfig,
+  vendorResetPasswordStore,
+  'vendorResetPasswordLimiter'
+)
+
 // Ensure all rate limiters are valid middleware functions
 // If any are undefined, replace with no-op middleware
 const ensureMiddleware = (middleware, name) => {
@@ -219,6 +276,14 @@ module.exports = {
   authLimiter: ensureMiddleware(authLimiter, 'authLimiter'),
   readLimiter: ensureMiddleware(readLimiter, 'readLimiter'),
   uploadLimiter: ensureMiddleware(uploadLimiter, 'uploadLimiter'),
+  vendorForgotPasswordLimiter: ensureMiddleware(
+    vendorForgotPasswordLimiter,
+    'vendorForgotPasswordLimiter'
+  ),
+  vendorResetPasswordLimiter: ensureMiddleware(
+    vendorResetPasswordLimiter,
+    'vendorResetPasswordLimiter'
+  ),
   createRateLimiter,
   createRedisStore
 }
