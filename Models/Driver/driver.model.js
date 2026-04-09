@@ -200,14 +200,19 @@ const driverSchema = new mongoose.Schema({
     type: String,
     required: true,
     // unique: true,
-    lowercase: true
+    lowercase: true,
+    trim: true,
+    maxlength: [254, 'Email address must be at most 254 characters'],
+    match: [/.+@.+\..+/, 'Please enter a valid email address']
   },
   socketId: {
     type: String
   },
   phone: {
     type: String,
-    required: true
+    required: true,
+    trim: true,
+    match: [/^\d+$/, 'Phone number must contain digits only']
   },
   password: {
     type: String,
@@ -467,12 +472,15 @@ const driverSchema = new mongoose.Schema({
         phone: {
           type: String,
           trim: true,
+          match: [/^\d+$/, 'Phone number must contain digits only'],
           default: null
         },
         email: {
           type: String,
           trim: true,
           lowercase: true,
+          maxlength: [254, 'Email address must be at most 254 characters'],
+          match: [/.+@.+\..+/, 'Please enter a valid email address'],
           default: null
         }
       }

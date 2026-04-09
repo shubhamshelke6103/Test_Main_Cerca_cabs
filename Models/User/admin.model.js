@@ -20,6 +20,7 @@ const adminSchema = new Schema(
       unique: true,
       lowercase: true,
       trim: true,
+      maxlength: [254, 'Email address must be at most 254 characters'],
       match: [/.+@.+\..+/, 'Please enter a valid email address'],
     },
     phoneNumber: {
@@ -27,7 +28,7 @@ const adminSchema = new Schema(
       unique: true,
       sparse: true,
       trim: true,
-      match: [/^\+\d{10,15}$/, 'Please enter a valid international phone number'],
+      match: [/^\d+$/, 'Phone number must contain digits only'],
     },
 
     // Authentication

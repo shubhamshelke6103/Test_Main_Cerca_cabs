@@ -1,5 +1,6 @@
 const OfferSubmission = require('../../Models/User/offerSubmission.model');
 const logger = require('../../utils/logger');
+const { normalizeMobileDigits } = require('../../utils/contactValidation');
 
 /**
  * Generate unique discount code
@@ -36,12 +37,9 @@ const generateDiscountCode = async () => {
  * @param {string} countryCode - Country code (e.g., "+91")
  * @returns {object} { valid: boolean, error: string }
  */
-const validatePhoneNumber = (phone, countryCode) => {
-  // Remove spaces, dashes, parentheses
-  const cleaned = phone.replace(/[\s\-\(\)]/g, '');
-  
-  // Extract digits only
-  const digitsOnly = cleaned.replace(/\D/g, '');
+const validatePhoneNumber = (phone) => {
+  const normalized = normalizeMobileDigits(phone);
+  const digitsOnly = normalized.value || '';
   
   // Check length (10-15 digits after country code)
   const minLength = 10;
@@ -61,32 +59,21 @@ const validatePhoneNumber = (phone, countryCode) => {
     };
   }
   
-  // Validate country code format
-  if (!countryCode || !countryCode.startsWith('+')) {
-    return {
-      valid: false,
-      error: 'Invalid country code format. Must start with +'
-    };
-  }
-  
   return { valid: true, error: null };
 };
 
 /**
  * Format phone number with country code
  */
-const formatPhoneNumber = (phone, countryCode) => {
-  const cleaned = phone.replace(/[\s\-\(\)]/g, '').replace(/\D/g, '');
-  return `${countryCode} ${cleaned}`;
+const formatPhoneNumber = (phone) => {
+  return (normalizeMobileDigits(phone).value || '');
 };
 
 /**
  * Extract phone digits only (for duplicate checking)
  */
-const extractPhoneDigits = (phone, countryCode) => {
-  const cleaned = phone.replace(/[\s\-\(\)]/g, '').replace(/\D/g, '');
-  const countryDigits = countryCode.replace(/\D/g, '');
-  return `${countryDigits}${cleaned}`;
+const extractPhoneDigits = (phone) => {
+  return (normalizeMobileDigits(phone).value || '');
 };
 
 /**
@@ -96,19 +83,19 @@ const extractPhoneDigits = (phone, countryCode) => {
  */
 exports.claimOffer = async (req, res) => {
   try {
-    const { phone, countryCode, source } = req.body;
+    const { phone, source } = req.body;
     
     // Validate input
-    if (!phone || !countryCode) {
+    if (!phone) {
       return res.status(400).json({
         success: false,
-        message: 'Phone number and country code are required',
+        message: 'Phone number is required',
         error: 'Missing required fields'
       });
     }
     
     // Validate phone number format
-    const validation = validatePhoneNumber(phone, countryCode);
+    const validation = validatePhoneNumber(phone);
     if (!validation.valid) {
       return res.status(400).json({
         success: false,
@@ -118,8 +105,8 @@ exports.claimOffer = async (req, res) => {
     }
     
     // Format phone number
-    const formattedPhone = formatPhoneNumber(phone, countryCode);
-    const phoneDigits = extractPhoneDigits(phone, countryCode);
+    const formattedPhone = formatPhoneNumber(phone);
+    const phoneDigits = extractPhoneDigits(phone);
     
     // Check if phone number already has a discount code
     const existingSubmission = await OfferSubmission.findOne({
@@ -160,7 +147,7 @@ exports.claimOffer = async (req, res) => {
     // Create new offer submission
     const offerSubmission = new OfferSubmission({
       phoneNumber: formattedPhone,
-      countryCode: countryCode,
+      countryCode: req.body.countryCode || '+',
       phoneDigits: phoneDigits,
       discountCode: discountCode,
       source: source || 'landing-page',
@@ -197,7 +184,7 @@ exports.claimOffer = async (req, res) => {
       if (field === 'phoneNumber' || field === 'phoneDigits') {
         // Phone already exists, fetch and return existing code
         try {
-          const formattedPhone = formatPhoneNumber(req.body.phone, req.body.countryCode);
+          const formattedPhone = formatPhoneNumber(req.body.phone);
           const existing = await OfferSubmission.findOne({ phoneNumber: formattedPhone });
           
           if (existing) {
@@ -245,7 +232,6 @@ exports.claimOffer = async (req, res) => {
 exports.getOfferByPhone = async (req, res) => {
   try {
     const { phone } = req.params;
-    const { countryCode } = req.query;
     
     if (!phone) {
       return res.status(400).json({
@@ -255,13 +241,8 @@ exports.getOfferByPhone = async (req, res) => {
       });
     }
     
-    // Format phone number if country code provided
-    let formattedPhone = phone;
-    if (countryCode) {
-      formattedPhone = formatPhoneNumber(phone, countryCode);
-    }
-    
-    const phoneDigits = countryCode ? extractPhoneDigits(phone, countryCode) : phone.replace(/\D/g, '');
+    const formattedPhone = formatPhoneNumber(phone);
+    const phoneDigits = extractPhoneDigits(phone);
     
     // Find submission
     const submission = await OfferSubmission.findOne({

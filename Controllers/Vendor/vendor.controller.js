@@ -27,6 +27,10 @@ const {
   pickBankUpdate,
   assertVendorIdMatchesUser
 } = require('../../utils/vendorBank.util')
+const {
+  normalizeEmail,
+  normalizeMobileDigits
+} = require('../../utils/contactValidation')
 const VendorPayout = mongoose.model('VendorPayout')
 
 const roundCurrency = value => Math.round((Number(value) || 0) * 100) / 100
@@ -867,8 +871,18 @@ const hashResetOtp = otp =>
 // =============================
 exports.registerVendor = async (req, res) => {
   try {
-    const { businessName, ownerName, email, phone, password, address } =
+    const { businessName, ownerName, password, address } =
       req.body
+    const normalizedEmail = normalizeEmail(req.body.email)
+    if (normalizedEmail.error) {
+      return res.status(400).json({ message: normalizedEmail.error })
+    }
+    const normalizedPhone = normalizeMobileDigits(req.body.phone)
+    if (normalizedPhone.error || !normalizedPhone.value) {
+      return res.status(400).json({ message: normalizedPhone.error || 'Phone number is required' })
+    }
+    const email = normalizedEmail.value
+    const phone = normalizedPhone.value
 
     // Basic validation
     if (!businessName || !ownerName || !email || !phone || !password) {
@@ -917,7 +931,12 @@ exports.registerVendor = async (req, res) => {
 // =============================
 exports.loginVendor = async (req, res) => {
   try {
-    const { email, password } = req.body
+    const { password } = req.body
+    const normalizedEmail = normalizeEmail(req.body.email)
+    if (normalizedEmail.error || !normalizedEmail.value) {
+      return res.status(400).json({ message: normalizedEmail.error || 'Email is required' })
+    }
+    const email = normalizedEmail.value
 
     const vendor = await Vendor.findOne({ email })
 
@@ -987,7 +1006,11 @@ exports.loginVendor = async (req, res) => {
 // =============================
 exports.forgotVendorPassword = async (req, res) => {
   try {
-    const email = String(req.body.email || '').trim().toLowerCase()
+    const emailResult = normalizeEmail(req.body.email)
+    if (emailResult.error) {
+      return res.status(400).json({ message: emailResult.error })
+    }
+    const email = String(emailResult.value || '')
 
     if (!email) {
       return res.status(400).json({ message: 'Email is required' })
@@ -1062,7 +1085,11 @@ exports.forgotVendorPassword = async (req, res) => {
 // =============================
 exports.resetVendorPassword = async (req, res) => {
   try {
-    const email = String(req.body.email || '').trim().toLowerCase()
+    const emailResult = normalizeEmail(req.body.email)
+    if (emailResult.error) {
+      return res.status(400).json({ message: emailResult.error })
+    }
+    const email = String(emailResult.value || '')
     const otp = String(req.body.otp || '').trim()
     const newPassword = String(req.body.newPassword || '')
     const confirmNewPassword = String(req.body.confirmNewPassword || '')
@@ -2451,7 +2478,19 @@ exports.getVendorOnlineHoursReport = async (req, res) => {
 exports.addDriver = async (req, res) => {
   try {
     const vendorId = req.body.vendorId
-    const { name, email, phone, password, location } = req.body
+    const { name, password, location } = req.body
+    const normalizedPhone = normalizeMobileDigits(req.body.phone)
+    if (normalizedPhone.error || !normalizedPhone.value) {
+      return res.status(400).json({ message: normalizedPhone.error || 'Phone number is required' })
+    }
+    const phone = normalizedPhone.value
+    const emailResult = req.body.email
+      ? normalizeEmail(req.body.email)
+      : { value: `${phone}@vendor.local`, error: null }
+    if (emailResult.error) {
+      return res.status(400).json({ message: emailResult.error })
+    }
+    const email = emailResult.value
 
     if (!vendorId) {
       return res.status(400).json({ message: 'vendorId is required' })
@@ -2502,7 +2541,7 @@ exports.updateVendorDriver = async (req, res) => {
   try {
     const vendorId = req.user.id
     const { driverId } = req.params
-    const { name, email, phone, password } = req.body
+    const { name, password } = req.body
 
     if (!driverId) {
       return res.status(400).json({ message: 'driverId is required' })
@@ -2516,8 +2555,19 @@ exports.updateVendorDriver = async (req, res) => {
     }
 
     if (name !== undefined) driver.name = name
-    if (email !== undefined) driver.email = email
-    if (phone !== undefined) {
+    if (req.body.email !== undefined) {
+      const emailResult = normalizeEmail(req.body.email)
+      if (emailResult.error) {
+        return res.status(400).json({ message: emailResult.error })
+      }
+      driver.email = emailResult.value
+    }
+    if (req.body.phone !== undefined) {
+      const phoneResult = normalizeMobileDigits(req.body.phone)
+      if (phoneResult.error || !phoneResult.value) {
+        return res.status(400).json({ message: phoneResult.error || 'Phone number is required' })
+      }
+      const phone = phoneResult.value
       const existing = await Driver.findOne({ phone, _id: { $ne: driverId } })
       if (existing) {
         return res.status(400).json({ message: 'Another driver already has this phone number' })

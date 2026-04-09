@@ -39,6 +39,7 @@ const {
 } = require('../../utils/rideContactPrivacy.service.js');
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
+const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
 
 const buildDateRange = (period, startDate, endDate) => {
     const now = new Date();
@@ -604,7 +605,17 @@ const rejectPendingVehicleForDriver = async (
  */
 const addDriver = async (req, res) => {
     try {
-        const { name, email, phone, password, location } = req.body;
+        const { name, password, location } = req.body;
+        const phoneResult = normalizeMobileDigits(req.body.phone);
+        if (phoneResult.error || !phoneResult.value) {
+            return res.status(400).json({ message: phoneResult.error || 'Phone number is required' });
+        }
+        const phone = phoneResult.value;
+        const emailResult = normalizeEmail(req.body.email);
+        if (emailResult.error) {
+            return res.status(400).json({ message: emailResult.error });
+        }
+        const email = emailResult.value;
 
         console.log('Received driver data:');
         console.log(req.body);
@@ -687,7 +698,12 @@ const addDriverDocuments = async (req, res) => {
  * @route   POST /drivers/login
  */
 const loginDriver = async (req, res) => {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const emailResult = normalizeEmail(req.body.email);
+    if (emailResult.error || !emailResult.value) {
+        return res.status(400).json({ message: emailResult.error || 'Email is required' });
+    }
+    const email = emailResult.value;
 
     try {
         if (password == null || typeof password !== 'string') {

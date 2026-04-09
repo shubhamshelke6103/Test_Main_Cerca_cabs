@@ -53,6 +53,7 @@ const SupportMessage = require('../Models/support/supportMessage.model')
 const SupportFeedback = require('../Models/support/supportFeedback.model')
 const LiveLocationShare = require('../Models/Shared/liveLocationShare.model')
 const { notifyAdmins, notifyVendor } = require('./alerting.service')
+const { normalizeMobileDigits } = require('./contactValidation')
 const {
   startDriverOnlineSession,
   stopDriverOnlineSession
@@ -1311,6 +1312,15 @@ function initializeSocket (server) {
             })
             return
           }
+          const phoneResult = normalizeMobileDigits(data.passenger.phone)
+          if (phoneResult.error || !phoneResult.value) {
+            socket.emit('rideError', {
+              message: phoneResult.error || 'Passenger phone required',
+              code: 'PASSENGER_PHONE_INVALID'
+            })
+            return
+          }
+          data.passenger.phone = phoneResult.value
         }
 
         // ===== YOUR EXISTING CODE CONTINUES =====

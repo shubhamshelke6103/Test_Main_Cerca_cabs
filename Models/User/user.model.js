@@ -36,6 +36,7 @@ const userSchema = new Schema(
       required: [true, 'Email address is required'],
       lowercase: true,
       trim: true,
+      maxlength: [254, 'Email address must be at most 254 characters'],
       match: [/.+@.+\..+/, 'Please enter a valid email address'],
     },
     phoneNumber: {
@@ -43,6 +44,7 @@ const userSchema = new Schema(
       unique: true,
       sparse: true,
       trim: true,
+      match: [/^\d+$/, 'Phone number must contain digits only'],
     },
 
     // Authentication

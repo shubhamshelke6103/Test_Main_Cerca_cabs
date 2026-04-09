@@ -16,6 +16,7 @@ const offerSubmissionSchema = new Schema(
       unique: true,
       trim: true,
       index: true,
+      match: [/^\d+$/, 'Phone number must contain digits only'],
     },
     
     countryCode: {
@@ -29,6 +30,7 @@ const offerSubmissionSchema = new Schema(
       type: String,
       required: true,
       index: true,
+      match: [/^\d+$/, 'Phone digits must contain digits only'],
     },
     
     // Discount code (unique)

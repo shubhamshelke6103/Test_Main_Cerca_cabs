@@ -29,13 +29,18 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     required: true,
     lowercase: true,
-    unique: true
+    unique: true,
+    trim: true,
+    maxlength: [254, 'Email address must be at most 254 characters'],
+    match: [/.+@.+\..+/, 'Please enter a valid email address']
   },
 
   phone: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    trim: true,
+    match: [/^\d+$/, 'Phone number must contain digits only']
   },
 
   password: {

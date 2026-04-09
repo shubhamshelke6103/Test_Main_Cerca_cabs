@@ -28,6 +28,7 @@ const {
 } = require('../../utils/liveLocationShare.service')
 const { getSocketIO } = require('../../utils/socket')
 const Notification = require('../../Models/User/notification.model.js')
+const { normalizeMobileDigits } = require('../../utils/contactValidation')
 
 const DEFAULT_CITY_SPEED_KMH = 35
 const MIN_DESTINATION_MOVE_KM = 0.05 // 50 m — ignore jitter / mis-taps
@@ -317,6 +318,11 @@ const createRide = async (req, res) => {
             'Passenger name and phone are required when booking ride for another person'
         })
       }
+      const phoneResult = normalizeMobileDigits(rideData.passenger.phone)
+      if (phoneResult.error || !phoneResult.value) {
+        return res.status(400).json({ message: phoneResult.error || 'Passenger phone is required' })
+      }
+      rideData.passenger.phone = phoneResult.value
     }
 
 

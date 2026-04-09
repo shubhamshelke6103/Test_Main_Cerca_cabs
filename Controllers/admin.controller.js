@@ -4,6 +4,7 @@ const Driver = require('../Models/Driver/driver.model.js');
 const logger = require('../utils/logger.js');
 const bcrypt = require("bcryptjs");
 const jwt = require('jsonwebtoken');
+const { normalizeEmail, normalizeMobileDigits } = require('../utils/contactValidation.js');
 
 /**
  * @desc    Create a new admin (main admin)
@@ -12,7 +13,17 @@ const jwt = require('jsonwebtoken');
  */
 const createAdmin = async (req, res) => {
     try {
-        const { fullName, email, phoneNumber, password } = req.body;
+        const { fullName, password } = req.body;
+        const normalizedEmail = normalizeEmail(req.body.email);
+        if (normalizedEmail.error) {
+            return res.status(400).json({ message: normalizedEmail.error });
+        }
+        const email = normalizedEmail.value;
+        const normalizedPhone = req.body.phoneNumber ? normalizeMobileDigits(req.body.phoneNumber) : { value: undefined, error: null };
+        if (normalizedPhone.error) {
+            return res.status(400).json({ message: normalizedPhone.error });
+        }
+        const phoneNumber = normalizedPhone.value;
 
         // Validate required fields
         if (!fullName || !email || !password) {
@@ -23,7 +34,7 @@ const createAdmin = async (req, res) => {
         }
 
         // Check if admin with this email already exists
-        const existingAdmin = await Admin.findOne({ email: email.toLowerCase() });
+        const existingAdmin = await Admin.findOne({ email });
         if (existingAdmin) {
             return res.status(409).json({ 
                 message: 'Admin with this email already exists' 
@@ -46,7 +57,7 @@ const createAdmin = async (req, res) => {
         // Create a new admin
         const admin = new Admin({
             fullName,
-            email: email.toLowerCase(),
+            email,
             phoneNumber: phoneNumber || undefined,
             password: hashedPassword,
             role: 'ADMIN',
@@ -99,7 +110,15 @@ const createAdmin = async (req, res) => {
  */
 const createSubAdmin = async (req, res) => {
     try {
-        const { fullName, email, phoneNumber, password, level } = req.body;
+        const { fullName, password, level } = req.body;
+        const normalizedEmail = normalizeEmail(req.body.email);
+        if (normalizedEmail.error) {
+            return res.status(400).json({ message: normalizedEmail.error });
+        }
+        const normalizedPhone = req.body.phoneNumber ? normalizeMobileDigits(req.body.phoneNumber) : { value: undefined, error: null };
+        if (normalizedPhone.error) {
+            return res.status(400).json({ message: normalizedPhone.error });
+        }
 
         // Hash the password
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -107,8 +126,8 @@ const createSubAdmin = async (req, res) => {
         // Create a new sub-admin
         const subAdmin = new Admin({
             fullName,
-            email,
-            phoneNumber,
+            email: normalizedEmail.value,
+            phoneNumber: normalizedPhone.value,
             password: hashedPassword,
             role: 'SUB_ADMIN',
             level,
@@ -166,7 +185,12 @@ const deleteSubAdmin = async (req, res) => {
  * @route   POST /admins/login
  */
 const adminLogin = async (req, res) => {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const normalizedEmail = normalizeEmail(req.body.email);
+    if (normalizedEmail.error || !normalizedEmail.value) {
+        return res.status(400).json({ message: normalizedEmail.error || 'Email is required' });
+    }
+    const email = normalizedEmail.value;
 
     try {
         // Explicitly select password field since it has select: false in schema

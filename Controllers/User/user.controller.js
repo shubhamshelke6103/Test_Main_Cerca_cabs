@@ -12,6 +12,10 @@ const {
 } = require('../../utils/ride_booking_functions.js');
 const fs = require('fs');
 const path = require('path');
+const {
+    normalizeEmail,
+    normalizeMobileDigits,
+} = require('../../utils/contactValidation');
 
 const PRIVACY_POLICY_VERSION = process.env.PRIVACY_POLICY_VERSION || '2026-03-23';
 const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL || '/privacy-policy';
@@ -116,6 +120,18 @@ const createUser = async (req, res) => {
     try {
         // Extract user data from the request body
         const userData = { ...req.body };
+        const normalizedEmail = normalizeEmail(userData.email);
+        if (normalizedEmail.error) {
+            return res.status(400).json({ message: normalizedEmail.error });
+        }
+        userData.email = normalizedEmail.value;
+        if (userData.phoneNumber !== undefined) {
+            const normalizedPhone = normalizeMobileDigits(userData.phoneNumber);
+            if (normalizedPhone.error) {
+                return res.status(400).json({ message: normalizedPhone.error });
+            }
+            userData.phoneNumber = normalizedPhone.value;
+        }
         const acceptance = buildPrivacyPolicyAcceptance(userData);
 
         if (acceptance.error) {
@@ -162,6 +178,21 @@ const createUser = async (req, res) => {
  */
 const updateUser = async (req, res) => {
     try {
+        const payload = { ...req.body };
+        if (payload.email !== undefined) {
+            const normalizedEmail = normalizeEmail(payload.email);
+            if (normalizedEmail.error) {
+                return res.status(400).json({ message: normalizedEmail.error });
+            }
+            payload.email = normalizedEmail.value;
+        }
+        if (payload.phoneNumber !== undefined) {
+            const normalizedPhone = normalizeMobileDigits(payload.phoneNumber);
+            if (normalizedPhone.error) {
+                return res.status(400).json({ message: normalizedPhone.error });
+            }
+            payload.phoneNumber = normalizedPhone.value;
+        }
         const user = await User.findById(req.params.id);
 
         if (!user) {
@@ -189,11 +220,11 @@ const updateUser = async (req, res) => {
             }
 
             // Update the profile picture URL in the request body
-            req.body.profilePic = profilePicUrl;
+            payload.profilePic = profilePicUrl;
         }
 
         // Update the user with the new data
-        const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, {
+        const updatedUser = await User.findByIdAndUpdate(req.params.id, payload, {
             new: true,
             runValidators: true,
         });
@@ -324,7 +355,11 @@ const validateToken = async (req, res) => {
  */
 const getUserByEmail = async (req, res) => {
     try {
-        const user = await User.findOne({ email: req.params.email });
+        const normalizedEmail = normalizeEmail(req.params.email);
+        if (normalizedEmail.error) {
+            return res.status(400).json({ message: normalizedEmail.error });
+        }
+        const user = await User.findOne({ email: normalizedEmail.value });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -340,7 +375,11 @@ const getUserByEmail = async (req, res) => {
  * @route   POST /users/login
  */
 const loginUserByMobile = async (req, res) => {
-    const { phoneNumber } = req.body;
+    const normalizedPhone = normalizeMobileDigits(req.body.phoneNumber);
+    if (normalizedPhone.error || !normalizedPhone.value) {
+        return res.status(400).json({ message: normalizedPhone.error || 'Phone number is required' });
+    }
+    const phoneNumber = normalizedPhone.value;
 
     try {
         // Check if the phone number exists in the database
