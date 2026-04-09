@@ -636,6 +636,7 @@ const addDriver = async (req, res) => {
             location,
             documents: [], // Initialize with an empty array
             approvalWorkflow: buildInitialApprovalWorkflow(null),
+            vendorDriverCategory: 'SELF',
         });
 
         await driverObj.save();

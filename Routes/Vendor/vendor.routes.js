@@ -72,6 +72,7 @@ router.get("/driver/:driverId", vendorController.getVendorDriverById);
 
 router.post("/assign-driver", vendorController.assignDriverToVendor);
 
+router.post("/drivers/lookup", vendorController.lookupDriverByPhoneForVendor);
 router.post("/drivers", vendorController.addDriver);
 router.patch("/drivers/:driverId", vendorController.updateVendorDriver);
 router.patch("/block-driver", vendorController.blockDriver);

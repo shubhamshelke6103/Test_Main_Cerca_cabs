@@ -728,6 +728,37 @@ const clearDriverVehicleState = driver => {
   return removed
 }
 
+/**
+ * Clears vendor fleet car assignment from driver so the FleetVehicle can be reused.
+ * Only affects fleet assigned by this vendor (matches assignDriverFleetVehicle null-branch).
+ */
+const detachVendorFleetFromDriver = async (driver, vendorId) => {
+  if (!driver?.assignedFleetVehicleId) return
+  const fv = await FleetVehicle.findById(driver.assignedFleetVehicleId).lean()
+  if (!fv || String(fv.vendorId) !== String(vendorId)) return
+
+  const currentlyAssignedFleetVehicle = await FleetVehicle.findOne({
+    _id: driver.assignedFleetVehicleId,
+    vendorId
+  }).lean()
+
+  if (matchesVehicleSnapshot(driver.vehicleInfo, currentlyAssignedFleetVehicle)) {
+    driver.vehicleInfo = null
+  }
+
+  driver.assignedFleetVehicleId = null
+  const fallbackApprovedVehicle = getLatestDriverVehicleRecord(
+    driver,
+    vehicle => vehicle.approvalStatus === 'APPROVED'
+  )
+  getDriverVehicleRecords(driver).forEach(vehicle => {
+    vehicle.isActive =
+      Boolean(fallbackApprovedVehicle) &&
+      String(vehicle._id) === String(fallbackApprovedVehicle._id)
+  })
+  syncDriverLegacyVehicleState(driver)
+}
+
 const getDriverVehicleOwnershipContext = async driver => {
   const driverVendorId = toObjectIdString(driver?.vendorId)
   let fleetVehicleVendorId = null
@@ -1265,7 +1296,8 @@ const buildAccessibleVendorDriverQuery = ({
   selfRegisteredOnly,
   targetVendorIds,
   vehiclePending,
-  vehicleStatus
+  vehicleStatus,
+  vendorDriverCategory
 }) => {
   let baseQuery = {}
 
@@ -1279,6 +1311,10 @@ const buildAccessibleVendorDriverQuery = ({
     }
   } else {
     baseQuery.vendorId = authenticatedVendorId
+  }
+
+  if (vendorDriverCategory && ['OWN', 'OTHER', 'SELF'].includes(vendorDriverCategory)) {
+    baseQuery.vendorDriverCategory = vendorDriverCategory
   }
 
   const hasVehicleFilter =
@@ -1309,13 +1345,21 @@ const buildAccessibleVendorDriverQuery = ({
 
 exports.getVendorDrivers = async (req, res) => {
   try {
-    const { vehiclePending, vehicleStatus, vendorName, selfRegistered } = req.query
+    const { vehiclePending, vehicleStatus, vendorName, selfRegistered, vendorDriverCategory } = req.query
     const authenticatedVendorId = req.user?.id
     const normalizedVendorName =
       typeof vendorName === 'string' ? vendorName.trim() : ''
     const vs = typeof vehicleStatus === 'string' ? vehicleStatus.toUpperCase() : ''
     const vehiclePendingTrue = parseBooleanQuery(vehiclePending) === true
     const selfRegisteredOnly = parseBooleanQuery(selfRegistered) === true
+    const categoryFilter =
+      typeof vendorDriverCategory === 'string'
+        ? vendorDriverCategory.toUpperCase()
+        : ''
+    const validCategory =
+      categoryFilter && ['OWN', 'OTHER', 'SELF'].includes(categoryFilter)
+        ? categoryFilter
+        : undefined
     let targetVendorIds
 
     if (normalizedVendorName && !selfRegisteredOnly) {
@@ -1333,7 +1377,8 @@ exports.getVendorDrivers = async (req, res) => {
       selfRegisteredOnly,
       targetVendorIds,
       vehiclePending: vehiclePendingTrue,
-      vehicleStatus: vs
+      vehicleStatus: vs,
+      vendorDriverCategory: validCategory
     })
 
     const drivers = await Driver.find(mongoQuery).populate(
@@ -1450,6 +1495,14 @@ exports.assignDriverToVendor = async (req, res) => {
       return res.status(400).json({ message: vehicleRemovalMessage })
     }
 
+    const cat = String(req.body.vendorDriverCategory || '').toUpperCase()
+    if (!['OWN', 'OTHER'].includes(cat)) {
+      return res.status(400).json({
+        message: 'vendorDriverCategory is required and must be OWN or OTHER'
+      })
+    }
+    driver.vendorDriverCategory = cat
+
     driver.vendorId = vendorId
     if (!driver.isVerified) {
       setDriverPendingApproval(driver)
@@ -1493,6 +1546,8 @@ exports.removeDriverFromVendor = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' })
     }
 
+    await detachVendorFleetFromDriver(driver, vendorId)
+
     if (hasDriverVehicleState(driver)) {
       return res.status(400).json({
         message: 'Please remove the driver vehicle first before removing this driver from the vendor'
@@ -1500,6 +1555,7 @@ exports.removeDriverFromVendor = async (req, res) => {
     }
 
     driver.vendorId = null
+    driver.vendorDriverCategory = 'SELF'
     if (!driver.isVerified) {
       setDriverPendingApproval(driver)
     }
@@ -1510,10 +1566,124 @@ exports.removeDriverFromVendor = async (req, res) => {
     })
 
     res.json({
-      message: 'Driver removed from vendor'
+      message: 'Driver removed from vendor',
+      driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
+  }
+}
+
+// Driver JWT: leave current vendor (same rules as vendor remove + fleet detach)
+exports.leaveVendorAsDriver = async (req, res) => {
+  try {
+    const driver = await Driver.findById(req.driverId)
+    if (!driver) {
+      return res.status(404).json({ message: 'Driver not found' })
+    }
+    if (!driver.vendorId) {
+      return res.status(400).json({ message: 'You are not assigned to a vendor' })
+    }
+    const vendorId = String(driver.vendorId)
+
+    await detachVendorFleetFromDriver(driver, vendorId)
+
+    if (hasDriverVehicleState(driver)) {
+      return res.status(400).json({
+        message:
+          'Please remove your vehicle first before leaving the vendor. If you use a vendor-assigned vehicle, contact your vendor.'
+      })
+    }
+
+    driver.vendorId = null
+    driver.vendorDriverCategory = 'SELF'
+    if (!driver.isVerified) {
+      setDriverPendingApproval(driver)
+    }
+    await driver.save()
+
+    await Vendor.findByIdAndUpdate(vendorId, {
+      $inc: { totalDrivers: -1 }
+    })
+
+    return res.json({
+      success: true,
+      message: 'You have left the vendor',
+      driver: serializeDriverForResponse(driver, req)
+    })
+  } catch (error) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
+exports.lookupDriverByPhoneForVendor = async (req, res) => {
+  try {
+    const normalizedPhone = normalizeMobileDigits(req.body.phone)
+    if (normalizedPhone.error || !normalizedPhone.value) {
+      return res.status(400).json({
+        message: normalizedPhone.error || 'Phone number is required'
+      })
+    }
+    const phone = normalizedPhone.value
+    const vendorId = req.user.id
+
+    const driver = await Driver.findOne({ phone })
+      .select(
+        'name phone email vendorId isVerified approvalWorkflow assignedFleetVehicleId vehicleInfo pendingVehicleInfo vehicles'
+      )
+      .populate('vendorId', 'businessName')
+
+    if (!driver) {
+      return res.json({ exists: false })
+    }
+
+    const summary = {
+      name: driver.name,
+      phoneMasked:
+        phone.length > 4
+          ? `${phone.slice(0, 2)}****${phone.slice(-2)}`
+          : '****',
+      approvalStatus: getDriverApprovalSummary(driver).status
+    }
+
+    const otherVendorId = driver.vendorId?._id || driver.vendorId
+    if (otherVendorId && String(otherVendorId) !== String(vendorId)) {
+      return res.json({
+        exists: true,
+        canAssign: false,
+        reason: 'ASSIGNED_ELSEWHERE',
+        message: 'Driver is assigned to another vendor',
+        summary: {
+          ...summary,
+          vendorName: driver.vendorId?.businessName || 'Another vendor'
+        }
+      })
+    }
+
+    const ctx = await getDriverVehicleOwnershipContext(driver)
+    const msg = buildVehicleRemovalRequiredMessage({
+      hasVehicleState: ctx.hasVehicleState,
+      owningVendorId: ctx.owningVendorId,
+      requestingVendorId: String(vendorId)
+    })
+    if (msg) {
+      return res.json({
+        exists: true,
+        canAssign: false,
+        reason: 'VEHICLE_BLOCK',
+        message: msg,
+        summary
+      })
+    }
+
+    return res.json({
+      exists: true,
+      canAssign: true,
+      driverId: driver._id,
+      summary
+    })
+  } catch (error) {
+    return res.status(500).json({ message: error.message })
   }
 }
 
@@ -2505,9 +2675,12 @@ exports.addDriver = async (req, res) => {
     // prevent duplicate phone
     const existing = await Driver.findOne({ phone })
     if (existing) {
-      return res
-        .status(400)
-        .json({ message: 'Driver with this phone already exists' })
+      return res.status(409).json({
+        success: false,
+        code: 'DRIVER_EXISTS',
+        message: 'Driver with this phone already exists',
+        driverId: existing._id
+      })
     }
 
     const hashedPassword = await bcrypt.hash(password, 10)
@@ -2520,6 +2693,7 @@ exports.addDriver = async (req, res) => {
       location: location && location.coordinates ? location : { type: 'Point', coordinates: [0, 0] },
       documents: [],
       vendorId: vendorId,
+      vendorDriverCategory: 'OWN',
       isVerified: false,
       isActive: false,
       approvalWorkflow: buildInitialApprovalWorkflow(vendorId)

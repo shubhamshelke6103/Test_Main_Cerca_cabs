@@ -515,6 +515,13 @@ const driverSchema = new mongoose.Schema({
   default: null
 },
 
+  /** OWN = created by vendor; OTHER = linked existing driver; SELF = self-registered / no vendor */
+  vendorDriverCategory: {
+    type: String,
+    enum: ['OWN', 'OTHER', 'SELF'],
+    default: null
+  },
+
   assignedFleetVehicleId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'FleetVehicle',
@@ -551,6 +558,7 @@ driverSchema.pre('save', function (next) {
 })
 // Add 2dsphere index for geospatial queries
 driverSchema.index({ location: '2dsphere' })
+driverSchema.index({ vendorId: 1, vendorDriverCategory: 1 })
 const Driver = mongoose.model('Driver', driverSchema)
 
 module.exports = Driver

@@ -37,6 +37,7 @@ const {
     deleteDriverLocationShare,
     getSharedDriverLocation
 } = require('../../Controllers/Driver/driver.controller.js');
+const vendorController = require('../../Controllers/Vendor/vendor.controller.js');
 const { authenticateDriver } = require('../../utils/driverAuth');
 const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.middleware');
 
@@ -85,6 +86,7 @@ const driverIdentityUpload = upload.fields([
 ]);
 
 // Routes for driver management
+router.post('/me/leave-vendor', authenticateDriver, vendorController.leaveVendorAsDriver);
 router.post('/', addDriver); // Add a new driver with documents
 router.post('/login', loginDriver); // Login driver
 router.get('/', getAllDrivers); // Get all drivers
