@@ -56,6 +56,11 @@ function normalizeJwtError(error) {
 
 function normalizeMulterError(error) {
   const errorMap = {
+    LIMIT_FILE_SIZE: {
+      statusCode: 413,
+      message: 'File size exceeds the allowed limit',
+      code: 'FILE_TOO_LARGE',
+    },
     FILE_TOO_LARGE: {
       statusCode: 413,
       message: 'File size exceeds the allowed limit',
