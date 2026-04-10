@@ -1,11 +1,16 @@
 const jwt = require('jsonwebtoken');
 const Admin = require('../Models/User/admin.model.js');
+const AppError = require('./errors/AppError');
 
 const authenticateAdmin = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || '';
     if (!authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'Missing or invalid authorization header' });
+      return next(
+        new AppError('Missing or invalid authorization header', 401, {
+          code: 'AUTH_HEADER_INVALID',
+        })
+      );
     }
 
     const token = authHeader.split(' ')[1];
@@ -13,7 +18,11 @@ const authenticateAdmin = async (req, res, next) => {
 
     const admin = await Admin.findById(decoded.id);
     if (!admin || admin.isActive === false) {
-      return res.status(403).json({ message: 'Admin access denied' });
+      return next(
+        new AppError('Admin access denied', 403, {
+          code: 'ADMIN_ACCESS_DENIED',
+        })
+      );
     }
 
     req.adminId = admin._id;
@@ -21,7 +30,11 @@ const authenticateAdmin = async (req, res, next) => {
     req.adminRole = admin.role;
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Invalid or expired token' });
+    return next(
+      new AppError('Invalid or expired token', 401, {
+        code: 'INVALID_OR_EXPIRED_TOKEN',
+      })
+    );
   }
 };
 
@@ -31,7 +44,11 @@ const requireRole = (roles = []) => {
     if (!roleList.length || roleList.includes(req.adminRole)) {
       return next();
     }
-    return res.status(403).json({ message: 'Insufficient permissions' });
+    return next(
+      new AppError('Insufficient permissions', 403, {
+        code: 'INSUFFICIENT_PERMISSIONS',
+      })
+    );
   };
 };
 

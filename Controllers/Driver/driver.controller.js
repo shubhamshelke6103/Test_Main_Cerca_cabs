@@ -40,6 +40,8 @@ const {
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
+const AppError = require('../../utils/errors/AppError.js');
+const asyncHandler = require('../../utils/errors/asyncHandler.js');
 
 const buildDateRange = (period, startDate, endDate) => {
     const now = new Date();
@@ -603,17 +605,20 @@ const rejectPendingVehicleForDriver = async (
  * @desc    Add a new driver
  * @route   POST /drivers
  */
-const addDriver = async (req, res) => {
-    try {
+const addDriver = asyncHandler(async (req, res) => {
         const { name, password, location } = req.body;
         const phoneResult = normalizeMobileDigits(req.body.phone);
         if (phoneResult.error || !phoneResult.value) {
-            return res.status(400).json({ message: phoneResult.error || 'Phone number is required' });
+            throw new AppError(phoneResult.error || 'Phone number is required', 400, {
+                code: 'INVALID_PHONE_NUMBER',
+            });
         }
         const phone = phoneResult.value;
         const emailResult = normalizeEmail(req.body.email);
         if (emailResult.error) {
-            return res.status(400).json({ message: emailResult.error });
+            throw new AppError(emailResult.error, 400, {
+                code: 'INVALID_EMAIL',
+            });
         }
         const email = emailResult.value;
 
@@ -622,7 +627,9 @@ const addDriver = async (req, res) => {
         
         let driver = await Driver.findOne({ phone });
         if (driver) {
-            return res.status(400).json({ message: 'Driver with this phone number already exists' });
+            throw new AppError('Driver with this phone number already exists', 400, {
+                code: 'DRIVER_ALREADY_EXISTS',
+            });
         }
         // Hash the password
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -643,29 +650,28 @@ const addDriver = async (req, res) => {
 
         logger.info(`Driver added successfully: ${driverObj.email}`);
         res.status(201).json({ id: driverObj, message: 'Driver added successfully' });
-    } catch (error) {
-        logger.error('Error adding driver:', error);
-        res.status(400).json({ message: 'Error adding driver', error });
-    }
-};
+});
 
 /**
  * @desc    Add documents to a driver's documents array
  * @route   POST /drivers/:id/documents
  */
-const addDriverDocuments = async (req, res) => {
-    try {
+const addDriverDocuments = asyncHandler(async (req, res) => {
         const driverId = req.params.id;
 
         const { error, entries: documentEntries } = collectDriverIdentityUploads(req);
         if (error) {
-            return res.status(400).json({ message: error });
+            throw new AppError(error, 400, {
+                code: 'INVALID_DRIVER_DOCUMENTS',
+            });
         }
 
         const driver = await Driver.findById(driverId);
 
         if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
+            throw new AppError('Driver not found', 404, {
+                code: 'DRIVER_NOT_FOUND',
+            });
         }
 
         const approvalSummary = getDriverApprovalSummary(driver);
@@ -688,46 +694,51 @@ const addDriverDocuments = async (req, res) => {
                 normalizeStoredDocumentEntry(req, document, index)
             )
         });
-    } catch (error) {
-        logger.error('Error adding documents to driver:', error);
-        res.status(500).json({ message: 'Error adding documents to driver', error });
-    }
-};
+});
 
 /**
  * @desc    Login driver by email and password
  * @route   POST /drivers/login
  */
-const loginDriver = async (req, res) => {
+const loginDriver = asyncHandler(async (req, res) => {
     const { password } = req.body;
     const emailResult = normalizeEmail(req.body.email);
     if (emailResult.error || !emailResult.value) {
-        return res.status(400).json({ message: emailResult.error || 'Email is required' });
+        throw new AppError(emailResult.error || 'Email is required', 400, {
+            code: 'INVALID_EMAIL',
+        });
     }
     const email = emailResult.value;
 
-    try {
-        if (password == null || typeof password !== 'string') {
-            return res.status(400).json({ message: 'Password is required' });
-        }
+    if (password == null || typeof password !== 'string') {
+        throw new AppError('Password is required', 400, {
+            code: 'PASSWORD_REQUIRED',
+        });
+    }
 
-        const driver = await Driver.findOne({ email });
+    const driver = await Driver.findOne({ email });
 
-        if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
-        }
+    if (!driver) {
+        throw new AppError('Driver not found', 404, {
+            code: 'DRIVER_NOT_FOUND',
+        });
+    }
 
-        if (typeof driver.password !== 'string' || !driver.password) {
-            logger.warn(`Driver login rejected: missing password hash on record for ${driver.email}`);
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
+    if (typeof driver.password !== 'string' || !driver.password) {
+        logger.warn(`Driver login rejected: missing password hash on record for ${driver.email}`);
+        throw new AppError('Invalid credentials', 401, {
+            code: 'INVALID_CREDENTIALS',
+        });
+    }
 
         // Check password (guarded above so bcrypt does not throw on bad hash field)
         const isMatch = await bcrypt.compare(password, driver.password);
 
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
+    if (!isMatch) {
+        throw new AppError('Invalid credentials', 401, {
+            code: 'INVALID_CREDENTIALS',
+        });
+    }
 
         // Generate JWT token
         const token = jwt.sign(
@@ -744,49 +755,35 @@ const loginDriver = async (req, res) => {
         const approvalSummary = getDriverApprovalSummary(driver);
         const missingDocuments = getMissingDriverApprovalDocuments(driver);
 
-        logger.info(`Driver logged in: ${driver.email}`);
-        res.status(200).json({
-            message: 'Login successful',
-            token,
-            id: driver._id,
-            approvalStatus: approvalSummary.status,
-            missingDocuments,
-        });
-    } catch (error) {
-        logger.error('Error during driver login:', {
-            message: error?.message,
-            stack: error?.stack,
-        });
-        res.status(500).json({
-            message: 'An error occurred during login',
-            error: error?.message || String(error),
-        });
-    }
-};
+    logger.info(`Driver logged in: ${driver.email}`);
+    res.status(200).json({
+        message: 'Login successful',
+        token,
+        id: driver._id,
+        approvalStatus: approvalSummary.status,
+        missingDocuments,
+    });
+});
 
 /**
  * @desc    Get all drivers
  * @route   GET /drivers
  */
-const getAllDrivers = async (req, res) => {
-    try {
-        const drivers = await Driver.find();
-        res.status(200).json(drivers);
-    } catch (error) {
-        logger.error('Error fetching drivers:', error);
-        res.status(500).json({ message: 'Error fetching drivers', error });
-    }
-};
+const getAllDrivers = asyncHandler(async (req, res) => {
+    const drivers = await Driver.find();
+    res.status(200).json(drivers);
+});
 
 /**
  * @desc    Get a driver by ID
  * @route   GET /drivers/:id
  */
-const getDriverById = async (req, res) => {
-    try {
+const getDriverById = asyncHandler(async (req, res) => {
         const driver = await Driver.findById(req.params.id);
         if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
+            throw new AppError('Driver not found', 404, {
+                code: 'DRIVER_NOT_FOUND',
+            });
         }
         
         // Compute total earnings from AdminEarnings
@@ -816,46 +813,42 @@ const getDriverById = async (req, res) => {
         Object.assign(driverObj, serializeDriverApprovalState(driver));
 
         res.status(200).json(driverObj);
-    } catch (error) {
-        logger.error('Error fetching driver:', error);
-        res.status(500).json({ message: 'Error fetching driver', error });
-    }
-};
+});
 
 /**
  * @desc    Delete a driver by ID
  * @route   DELETE /drivers/:id
  */
-const deleteDriver = async (req, res) => {
-    try {
+const deleteDriver = asyncHandler(async (req, res) => {
         const driver = await Driver.findByIdAndDelete(req.params.id);
 
         if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
+            throw new AppError('Driver not found', 404, {
+                code: 'DRIVER_NOT_FOUND',
+            });
         }
 
         logger.info(`Driver deleted successfully: ${driver.email}`);
         res.status(200).json({ message: 'Driver deleted successfully' });
-    } catch (error) {
-        logger.error('Error deleting driver:', error);
-        res.status(500).json({ message: 'Error deleting driver', error });
-    }
-};
+});
 
 /**
  * @desc    Update a driver by ID
  * @route   PUT /drivers/:id
  */
-const updateDriver = async (req, res) => {
-    try {
+const updateDriver = asyncHandler(async (req, res) => {
         const driver = await Driver.findById(req.params.id);
 
         if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
+            throw new AppError('Driver not found', 404, {
+                code: 'DRIVER_NOT_FOUND',
+            });
         }
 
         if (Array.isArray(req.body?.trustedContacts) && req.body.trustedContacts.length > 5) {
-            return res.status(400).json({ message: 'Driver can add up to 5 emergency contacts only' });
+            throw new AppError('Driver can add up to 5 emergency contacts only', 400, {
+                code: 'TRUSTED_CONTACT_LIMIT_EXCEEDED',
+            });
         }
 
         if (req.body.vendorId !== undefined && !driver.isVerified && req.body.approvalWorkflow === undefined) {
@@ -873,27 +866,26 @@ const updateDriver = async (req, res) => {
             ...updatedDriver.toObject(),
             ...serializeDriverApprovalState(updatedDriver),
         });
-    } catch (error) {
-        logger.error('Error updating driver:', error);
-        res.status(400).json({ message: 'Error updating driver', error });
-    }
-};
+});
 
 /**
  * @desc    Update a driver's documents
  * @route   PUT /drivers/:id/documents
  */
-const updateDriverDocuments = async (req, res) => {
-    try {
+const updateDriverDocuments = asyncHandler(async (req, res) => {
         const driver = await Driver.findById(req.params.id);
 
         if (!driver) {
-            return res.status(404).json({ message: 'Driver not found' });
+            throw new AppError('Driver not found', 404, {
+                code: 'DRIVER_NOT_FOUND',
+            });
         }
 
         const { error, entries: documentEntries, mode } = collectDriverIdentityUploads(req);
         if (error) {
-            return res.status(400).json({ message: error });
+            throw new AppError(error, 400, {
+                code: 'INVALID_DRIVER_DOCUMENTS',
+            });
         }
 
         if (mode === 'legacy') {
@@ -913,11 +905,7 @@ const updateDriverDocuments = async (req, res) => {
                 normalizeStoredDocumentEntry(req, document, index)
             )
         });
-    } catch (error) {
-        logger.error('Error updating driver documents:', error);
-        res.status(500).json({ message: 'Error updating driver documents', error });
-    }
-};
+});
 
 const uploadPriorityDocument = async (req, res) => {
     try {

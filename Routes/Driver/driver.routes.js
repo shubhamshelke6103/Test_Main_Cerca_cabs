@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const AppError = require('../../utils/errors/AppError');
 const {
     addDriver,
     loginDriver,
@@ -44,7 +45,9 @@ const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.m
 const router = express.Router();
 const requireOwnDriver = (req, res, next) => {
     if (req.driverId !== req.params.id) {
-        return res.status(403).json({ message: 'You are not authorized to access this driver resource' });
+        return next(new AppError('You are not authorized to access this driver resource', 403, {
+            code: 'DRIVER_RESOURCE_FORBIDDEN',
+        }));
     }
     return next();
 };
@@ -118,7 +121,9 @@ router.patch(
     authenticateDriver,
     (req, res, next) => {
         if (req.driverId !== req.params.driverId) {
-            return res.status(403).json({ message: 'You are not authorized to reject this ride' });
+            return next(new AppError('You are not authorized to reject this ride', 403, {
+                code: 'RIDE_REJECTION_FORBIDDEN',
+            }));
         }
         return next();
     },
@@ -223,30 +228,7 @@ router.patch('/:driverId/rides/:rideId/mark-cash-collected', markCashCollected);
 // Multer error handler for file upload errors (must be after all routes)
 router.use((error, req, res, next) => {
     if (error instanceof multer.MulterError) {
-        if (error.code === 'FILE_TOO_LARGE') {
-            return res.status(413).json({
-                message: 'File size exceeds 5 MB limit. Please upload smaller files.',
-                maxFileSize: '5 MB',
-                error: error.message,
-            });
-        }
-        if (error.code === 'LIMIT_FILE_COUNT') {
-            return res.status(413).json({
-                message: 'Too many files. Maximum 10 files allowed per request.',
-                error: error.message,
-            });
-        }
-        if (error.code === 'LIMIT_PART_COUNT') {
-            return res.status(413).json({
-                message: 'Too many fields in request.',
-                error: error.message,
-            });
-        }
-        // Generic multer error
-        return res.status(400).json({
-            message: 'File upload error',
-            error: error.message,
-        });
+        return next(error);
     }
     // If it's not a multer error, pass to next handler
     next(error);

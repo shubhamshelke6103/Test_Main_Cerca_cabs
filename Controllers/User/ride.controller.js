@@ -29,6 +29,8 @@ const {
 const { getSocketIO } = require('../../utils/socket')
 const Notification = require('../../Models/User/notification.model.js')
 const { normalizeMobileDigits } = require('../../utils/contactValidation')
+const AppError = require('../../utils/errors/AppError')
+const asyncHandler = require('../../utils/errors/asyncHandler')
 
 const DEFAULT_CITY_SPEED_KMH = 35
 const MIN_DESTINATION_MOVE_KM = 0.05 // 50 m — ignore jitter / mis-taps
@@ -288,8 +290,7 @@ const resolveRidePricingOrigin = async ride => {
  * @desc    Create a new ride
  * @route   POST /rides
  */
-const createRide = async (req, res) => {
-  try {
+const createRide = asyncHandler(async (req, res) => {
     const rideData = req.body
 
     // ============================
@@ -299,7 +300,9 @@ const createRide = async (req, res) => {
       getUserIdFromToken(req) || rideData.rider || rideData.riderId
 
     if (!riderId) {
-      return res.status(401).json({ message: 'Rider authentication required' })
+      throw new AppError('Rider authentication required', 401, {
+        code: 'RIDER_AUTH_REQUIRED'
+      })
     }
 
     rideData.rider = riderId
@@ -313,14 +316,17 @@ const createRide = async (req, res) => {
 
     if (rideData.rideFor === 'OTHER') {
       if (!rideData.passenger?.name || !rideData.passenger?.phone) {
-        return res.status(400).json({
-          message:
-            'Passenger name and phone are required when booking ride for another person'
-        })
+        throw new AppError(
+          'Passenger name and phone are required when booking ride for another person',
+          400,
+          { code: 'PASSENGER_DETAILS_REQUIRED' }
+        )
       }
       const phoneResult = normalizeMobileDigits(rideData.passenger.phone)
       if (phoneResult.error || !phoneResult.value) {
-        return res.status(400).json({ message: phoneResult.error || 'Passenger phone is required' })
+        throw new AppError(phoneResult.error || 'Passenger phone is required', 400, {
+          code: 'INVALID_PASSENGER_PHONE'
+        })
       }
       rideData.passenger.phone = phoneResult.value
     }
@@ -333,11 +339,10 @@ const createRide = async (req, res) => {
       !rideData.pickupLocation?.coordinates ||
       !rideData.dropoffLocation?.coordinates
     ) {
-      return res.status(400).json({
-        message: 'Pickup and dropoff coordinates are required'
+      throw new AppError('Pickup and dropoff coordinates are required', 400, {
+        code: 'RIDE_COORDINATES_REQUIRED'
       })
     }
-
 
     // ============================
     // Prevent Duplicate Active Ride
@@ -361,11 +366,14 @@ const createRide = async (req, res) => {
     })
 
     if (existingActiveRide) {
-      return res.status(409).json({
-        message:
-          'You already have an active ride. Please cancel it before booking a new one.',
-        activeRideId: existingActiveRide._id
-      })
+      throw new AppError(
+        'You already have an active ride. Please cancel it before booking a new one.',
+        409,
+        {
+          code: 'ACTIVE_RIDE_EXISTS',
+          details: { activeRideId: existingActiveRide._id }
+        }
+      )
     }
 
 
@@ -374,7 +382,9 @@ const createRide = async (req, res) => {
     // ============================
     const settings = await Settings.findOne()
     if (!settings) {
-      return res.status(500).json({ message: 'Admin settings not found' })
+      throw new AppError('Admin settings not found', 500, {
+        code: 'ADMIN_SETTINGS_NOT_FOUND'
+      })
     }
 
     const { perKmRate, minimumFare } = settings.pricingConfigurations
@@ -406,8 +416,10 @@ const createRide = async (req, res) => {
     )
 
     if (!service) {
-      return res.status(400).json({ message: 'Invalid service selected' })
-    }1
+      throw new AppError('Invalid service selected', 400, {
+        code: 'INVALID_SERVICE_SELECTED'
+      })
+    }
 
 
     // ============================
@@ -460,17 +472,7 @@ const createRide = async (req, res) => {
       startOtp,
       stopOtp
     })
-
-  } catch (error) {
-
-    logger.error('Error creating ride:', error)
-
-    res.status(400).json({
-      message: 'Error creating ride',
-      error: error.message
-    })
-  }
-}
+})
 
 
 /**
@@ -503,124 +505,105 @@ function calculateDistance (lat1, lon1, lat2, lon2) {
  * @desc    Get all rides
  * @route   GET /rides
  */
-const getAllRides = async (req, res) => {
-  try {
-    const rides = await Ride.find()
-    res.status(200).json(rides)
-  } catch (error) {
-    logger.error('Error fetching rides:', error)
-    res.status(500).json({ message: 'Error fetching rides', error })
-  }
-}
+const getAllRides = asyncHandler(async (req, res) => {
+  const rides = await Ride.find()
+  res.status(200).json(rides)
+})
 
 /**
  * @desc    Get a single ride by ID
  * @route   GET /rides/:id
  */
-const getRideById = async (req, res) => {
-  try {
-    const rideId = req.params.id
+const getRideById = asyncHandler(async (req, res) => {
+  const rideId = req.params.id
 
-    // Reject non-ObjectId values (like favicon.ico, robots.txt, etc.)
-    if (!mongoose.Types.ObjectId.isValid(rideId)) {
-      return res.status(404).json({ message: 'Ride not found' })
-    }
-
-    const ride = await Ride.findById(rideId).populate('driver rider')
-    if (!ride) {
-      return res.status(404).json({ message: 'Ride not found' })
-    }
-    res.status(200).json(ride)
-  } catch (error) {
-    logger.error('Error fetching ride:', error)
-    res.status(500).json({ message: 'Error fetching ride', error })
+  // Reject non-ObjectId values (like favicon.ico, robots.txt, etc.)
+  if (!mongoose.Types.ObjectId.isValid(rideId)) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
   }
-}
+
+  const ride = await Ride.findById(rideId).populate('driver rider')
+  if (!ride) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
+  }
+  res.status(200).json(ride)
+})
 
 /**
  * @desc    Update a ride by ID
  * @route   PUT /rides/:id
  */
-const updateRide = async (req, res) => {
-  try {
+const updateRide = asyncHandler(async (req, res) => {
 
-    const rideId = req.params.id
-    const updateData = req.body
+  const rideId = req.params.id
+  const updateData = req.body
 
     // ============================
     // Fetch Existing Ride
     // ============================
-    const existingRide = await Ride.findById(rideId)
+  const existingRide = await Ride.findById(rideId)
 
-    if (!existingRide) {
-      return res.status(404).json({ message: 'Ride not found' })
-    }
+  if (!existingRide) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
+  }
 
     // ============================
     // SECURITY RULES
     // ============================
 
     // ❌ Prevent rider change
-    if (updateData.rider && updateData.rider.toString() !== existingRide.rider.toString()) {
-      return res.status(400).json({
-        message: 'Rider cannot be changed'
-      })
-    }
-
-    // ❌ Prevent rideFor change after driver accepted ride
-    if (
-      updateData.rideFor &&
-      updateData.rideFor !== existingRide.rideFor &&
-      ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
-    ) {
-      return res.status(400).json({
-        message: 'rideFor cannot be changed after ride is accepted'
-      })
-    }
-
-    // ❌ Prevent passenger modification after acceptance
-    if (
-      updateData.passenger &&
-      ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
-    ) {
-      return res.status(400).json({
-        message: 'Passenger details cannot be modified after ride is accepted'
-      })
-    }
-
-    // ❌ Prevent OTP tampering
-    if (updateData.startOtp || updateData.stopOtp) {
-      return res.status(400).json({
-        message: 'OTP values cannot be updated'
-      })
-    }
-
-    // ============================
-    // Perform Update
-    // ============================
-    const updatedRide = await Ride.findByIdAndUpdate(
-      rideId,
-      updateData,
-      {
-        new: true,
-        runValidators: true
-      }
-    )
-
-    logger.info(`Ride updated successfully: ${updatedRide._id}`)
-
-    res.status(200).json(updatedRide)
-
-  } catch (error) {
-
-    logger.error('Error updating ride:', error)
-
-    res.status(400).json({
-      message: 'Error updating ride',
-      error: error.message
+  if (updateData.rider && updateData.rider.toString() !== existingRide.rider.toString()) {
+    throw new AppError('Rider cannot be changed', 400, {
+      code: 'RIDER_CHANGE_NOT_ALLOWED'
     })
   }
-}
+
+  if (
+    updateData.rideFor &&
+    updateData.rideFor !== existingRide.rideFor &&
+    ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+  ) {
+    throw new AppError('rideFor cannot be changed after ride is accepted', 400, {
+      code: 'RIDE_FOR_CHANGE_NOT_ALLOWED'
+    })
+  }
+
+  if (
+    updateData.passenger &&
+    ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+  ) {
+    throw new AppError('Passenger details cannot be modified after ride is accepted', 400, {
+      code: 'PASSENGER_UPDATE_NOT_ALLOWED'
+    })
+  }
+
+  if (updateData.startOtp || updateData.stopOtp) {
+    throw new AppError('OTP values cannot be updated', 400, {
+      code: 'OTP_UPDATE_NOT_ALLOWED'
+    })
+  }
+
+  const updatedRide = await Ride.findByIdAndUpdate(
+    rideId,
+    updateData,
+    {
+      new: true,
+      runValidators: true
+    }
+  )
+
+  logger.info(`Ride updated successfully: ${updatedRide._id}`)
+
+  res.status(200).json(updatedRide)
+})
+
+
 
 /**
  * Shared validation for destination change / quote (rider auth + ride state).

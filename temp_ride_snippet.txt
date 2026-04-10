@@ -1,0 +1,122 @@
+  const rideId = req.params.id
+  const updateData = req.body
+
+    // ============================
+    // Fetch Existing Ride
+    // ============================
+  const existingRide = await Ride.findById(rideId)
+
+  if (!existingRide) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
+  }
+
+    // ============================
+    // SECURITY RULES
+    // ============================
+
+    // ❌ Prevent rider change
+  if (updateData.rider && updateData.rider.toString() !== existingRide.rider.toString()) {
+    throw new AppError('Rider cannot be changed', 400, {
+      code: 'RIDER_CHANGE_NOT_ALLOWED'
+    })
+  }
+
+  if (
+    updateData.rideFor &&
+    updateData.rideFor !== existingRide.rideFor &&
+    ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+  ) {
+    throw new AppError('rideFor cannot be changed after ride is accepted', 400, {
+      code: 'RIDE_FOR_CHANGE_NOT_ALLOWED'
+    })
+  }
+
+  if (
+    updateData.passenger &&
+    ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+  ) {
+    throw new AppError('Passenger details cannot be modified after ride is accepted', 400, {
+      code: 'PASSENGER_UPDATE_NOT_ALLOWED'
+    })
+  }
+
+  if (updateData.startOtp || updateData.stopOtp) {
+    throw new AppError('OTP values cannot be updated', 400, {
+      code: 'OTP_UPDATE_NOT_ALLOWED'
+    })
+  }
+
+  const updatedRide = await Ride.findByIdAndUpdate(
+    rideId,
+    updateData,
+    {
+      new: true,
+      runValidators: true
+    }
+  )
+
+  logger.info(`Ride updated successfully: ${updatedRide._id}`)
+
+  res.status(200).json(updatedRide)
+})
+      })
+    }
+
+    // ❌ Prevent rideFor change after driver accepted ride
+    if (
+      updateData.rideFor &&
+      updateData.rideFor !== existingRide.rideFor &&
+      ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+    ) {
+      return res.status(400).json({
+        message: 'rideFor cannot be changed after ride is accepted'
+      })
+    }
+
+    // ❌ Prevent passenger modification after acceptance
+    if (
+      updateData.passenger &&
+      ['accepted', 'in_progress', 'completed'].includes(existingRide.status)
+    ) {
+      return res.status(400).json({
+        message: 'Passenger details cannot be modified after ride is accepted'
+      })
+    }
+
+    // ❌ Prevent OTP tampering
+    if (updateData.startOtp || updateData.stopOtp) {
+      return res.status(400).json({
+        message: 'OTP values cannot be updated'
+      })
+    }
+
+    // ============================
+    // Perform Update
+    // ============================
+    const updatedRide = await Ride.findByIdAndUpdate(
+      rideId,
+      updateData,
+      {
+        new: true,
+        runValidators: true
+      }
+    )
+
+    logger.info(`Ride updated successfully: ${updatedRide._id}`)
+
+    res.status(200).json(updatedRide)
+
+  } catch (error) {
+
+    logger.error('Error updating ride:', error)
+
+    res.status(400).json({
+      message: 'Error updating ride',
+      error: error.message
+    })
+  }
+}
+
+/**

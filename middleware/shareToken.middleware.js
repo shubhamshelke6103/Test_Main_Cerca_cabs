@@ -2,6 +2,7 @@ const { validateShareToken } = require('../utils/shareToken.service')
 const Ride = require('../Models/Driver/ride.model')
 const logger = require('../utils/logger')
 const { createRateLimiter, createRedisStore } = require('./rateLimiter')
+const AppError = require('../utils/errors/AppError')
 
 // Create Redis store for shared ride rate limiter
 const sharedRideStore = createRedisStore('rl:sharedRide:', 60 * 1000) // 1 minute window
@@ -66,10 +67,11 @@ const validateShareTokenMiddleware = async (req, res, next) => {
     const { shareToken } = req.params
 
     if (!shareToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Share token is required'
-      })
+      return next(
+        new AppError('Share token is required', 400, {
+          code: 'SHARE_TOKEN_REQUIRED',
+        })
+      )
     }
 
     // Find ride by share token
@@ -78,10 +80,11 @@ const validateShareTokenMiddleware = async (req, res, next) => {
       .populate('rider', 'fullName')
 
     if (!ride) {
-      return res.status(404).json({
-        success: false,
-        message: 'Ride not found or link is invalid'
-      })
+      return next(
+        new AppError('Ride not found or link is invalid', 404, {
+          code: 'SHARED_RIDE_NOT_FOUND',
+        })
+      )
     }
 
     // Validate token
@@ -93,11 +96,12 @@ const validateShareTokenMiddleware = async (req, res, next) => {
         await ride.save()
       }
 
-      return res.status(400).json({
-        success: false,
-        message: validation.message,
-        reason: validation.reason
-      })
+      return next(
+        new AppError(validation.message, 400, {
+          code: validation.reason || 'SHARE_TOKEN_INVALID',
+          details: { reason: validation.reason },
+        })
+      )
     }
 
     // Check if ride is completed or cancelled (expire share)
@@ -106,11 +110,12 @@ const validateShareTokenMiddleware = async (req, res, next) => {
       ride.shareTokenExpiresAt = new Date()
       await ride.save()
 
-      return res.status(400).json({
-        success: false,
-        message: 'This ride has ended',
-        reason: 'RIDE_ENDED'
-      })
+      return next(
+        new AppError('This ride has ended', 400, {
+          code: 'RIDE_ENDED',
+          details: { reason: 'RIDE_ENDED' },
+        })
+      )
     }
 
     // Attach ride to request (will be sanitized in controller)
@@ -118,11 +123,13 @@ const validateShareTokenMiddleware = async (req, res, next) => {
     next()
   } catch (error) {
     logger.error('Error validating share token:', error)
-    res.status(500).json({
-      success: false,
-      message: 'Error validating share token',
-      error: error.message
-    })
+    next(
+      new AppError('Error validating share token', 500, {
+        code: 'SHARE_TOKEN_VALIDATION_ERROR',
+        details: { originalMessage: error.message },
+        isOperational: false,
+      })
+    )
   }
 }
 

@@ -1,581 +1,478 @@
-// import User from '../../Models/User/user.model.js';
-// import jwt from 'jsonwebtoken';
-// import logger from '../../utils/logger.js';
-// import fs from 'fs';
-// import path from 'path';
-
-const User = require('../../Models/User/user.model');
-const jwt = require('jsonwebtoken');
-const logger = require('../../utils/logger');
-const {
-  getPendingDriverInProgressCancelSettlements
-} = require('../../utils/ride_booking_functions.js');
 const fs = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
+
+const User = require('../../Models/User/user.model');
+const logger = require('../../utils/logger');
 const {
-    normalizeEmail,
-    normalizeMobileDigits,
+  getPendingDriverInProgressCancelSettlements,
+} = require('../../utils/ride_booking_functions.js');
+const {
+  normalizeEmail,
+  normalizeMobileDigits,
 } = require('../../utils/contactValidation');
+const AppError = require('../../utils/errors/AppError');
+const asyncHandler = require('../../utils/errors/asyncHandler');
 
 const PRIVACY_POLICY_VERSION = process.env.PRIVACY_POLICY_VERSION || '2026-03-23';
 const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL || '/privacy-policy';
 const JWT_SECRET =
-    process.env.JWT_SECRET ||
-    "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%";
+  process.env.JWT_SECRET ||
+  '@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%';
 
 const parseBoolean = (value) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-        const normalized = value.trim().toLowerCase();
-        if (normalized === 'true') return true;
-        if (normalized === 'false') return false;
-    }
-    return false;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return false;
 };
 
 const getPrivacyPolicyMetadata = () => ({
-    version: PRIVACY_POLICY_VERSION,
-    url: PRIVACY_POLICY_URL,
+  version: PRIVACY_POLICY_VERSION,
+  url: PRIVACY_POLICY_URL,
 });
 
 const buildPrivacyPolicyAcceptance = (payload = {}) => {
-    const accepted = parseBoolean(payload.privacyPolicyAccepted);
+  const accepted = parseBoolean(payload.privacyPolicyAccepted);
 
-    if (!accepted) {
-        return {
-            error: {
-                message: 'Privacy policy acceptance is required during registration',
-                privacyPolicy: getPrivacyPolicyMetadata(),
-            },
-        };
-    }
-
+  if (!accepted) {
     return {
-        privacyPolicyAccepted: true,
-        privacyPolicyAcceptedAt: new Date(),
-        privacyPolicyVersion: payload.privacyPolicyVersion || PRIVACY_POLICY_VERSION,
-        privacyPolicyUrl: payload.privacyPolicyUrl || PRIVACY_POLICY_URL,
-    };
-};
-
-const getPrivacyPolicy = async (req, res) => {
-    return res.status(200).json({
-        success: true,
+      error: {
+        message: 'Privacy policy acceptance is required during registration',
         privacyPolicy: getPrivacyPolicyMetadata(),
-    });
+      },
+    };
+  }
+
+  return {
+    privacyPolicyAccepted: true,
+    privacyPolicyAcceptedAt: new Date(),
+    privacyPolicyVersion: payload.privacyPolicyVersion || PRIVACY_POLICY_VERSION,
+    privacyPolicyUrl: payload.privacyPolicyUrl || PRIVACY_POLICY_URL,
+  };
 };
 
-const acceptPrivacyPolicy = async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization || req.headers.Authorization || '';
-        if (!authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
-        const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id || decoded.userId;
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const acceptance = buildPrivacyPolicyAcceptance(req.body);
-        if (acceptance.error) {
-            return res.status(400).json(acceptance.error);
-        }
-        Object.assign(user, acceptance);
-        await user.save();
-        return res.status(200).json({
-            success: true,
-            message: 'Privacy policy accepted successfully',
-            privacyPolicy: getPrivacyPolicyMetadata(),
-        });
-    } catch (error) {
-        logger.error('Error accepting privacy policy:', error);
-        return res.status(500).json({ message: 'Error accepting privacy policy', error: error.message });
-    }
-};
-
-/**
- * @desc    Get a single user by ID
- * @route   GET /users/:id
- */
-const getUserById = async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(user);
-    } catch (error) {
-        logger.error('Error fetching user:', error);
-        res.status(500).json({ message: 'Error fetching user', error });
-    }
-};
-
-/**
- * @desc    Create a new user with optional profile picture
- * @route   POST /users
- */
-const createUser = async (req, res) => {
-    try {
-        // Extract user data from the request body
-        const userData = { ...req.body };
-        const normalizedEmail = normalizeEmail(userData.email);
-        if (normalizedEmail.error) {
-            return res.status(400).json({ message: normalizedEmail.error });
-        }
-        userData.email = normalizedEmail.value;
-        if (userData.phoneNumber !== undefined) {
-            const normalizedPhone = normalizeMobileDigits(userData.phoneNumber);
-            if (normalizedPhone.error) {
-                return res.status(400).json({ message: normalizedPhone.error });
-            }
-            userData.phoneNumber = normalizedPhone.value;
-        }
-        const acceptance = buildPrivacyPolicyAcceptance(userData);
-
-        if (acceptance.error) {
-            return res.status(400).json(acceptance.error);
-        }
-
-        // Check if a file (profile picture) is uploaded
-        if (req.file) {
-            // Generate the URL for the uploaded profile picture
-            const profilePicUrl = `${req.protocol}://${req.get('host')}/uploads/profilePics/${req.file.filename}`;
-            userData.profilePic = profilePicUrl; // Save the URL in the user data
-        }
-
-        Object.assign(userData, acceptance);
-
-        // Create a new user
-        const user = new User(userData);
-        await user.save();
-
-        logger.info(`User created successfully: ${user.email}`);
-
-        // Assign new user gift automatically
-        try {
-            const { checkAndAssignNewUserGift } = require('../../utils/giftAssignment');
-            const giftResult = await checkAndAssignNewUserGift(user._id.toString());
-            if (giftResult.assigned) {
-                logger.info(`New user gift assigned to ${user.email}: ${giftResult.couponCode}`);
-            }
-        } catch (giftError) {
-            logger.error(`Error assigning new user gift to ${user.email}:`, giftError);
-            // Don't fail user creation if gift assignment fails
-        }
-
-        res.status(201).json(user);
-    } catch (error) {
-        logger.error('Error creating user:', error);
-        res.status(400).json({ message: 'Error creating user', error });
-    }
-};
-
-/**
- * @desc    Update a user by ID
- * @route   PUT /users/:id
- */
-const updateUser = async (req, res) => {
-    try {
-        const payload = { ...req.body };
-        if (payload.email !== undefined) {
-            const normalizedEmail = normalizeEmail(payload.email);
-            if (normalizedEmail.error) {
-                return res.status(400).json({ message: normalizedEmail.error });
-            }
-            payload.email = normalizedEmail.value;
-        }
-        if (payload.phoneNumber !== undefined) {
-            const normalizedPhone = normalizeMobileDigits(payload.phoneNumber);
-            if (normalizedPhone.error) {
-                return res.status(400).json({ message: normalizedPhone.error });
-            }
-            payload.phoneNumber = normalizedPhone.value;
-        }
-        const user = await User.findById(req.params.id);
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-
-        // Check if a new profile picture is uploaded
-        if (req.file) {
-            // Generate the URL for the new profile picture
-            const profilePicUrl = `${req.protocol}://${req.get('host')}/uploads/profilePics/${req.file.filename}`;
-
-            // Delete the previous profile picture if it exists
-            if (user.profilePic) {
-                const previousPicPath = path.join(
-                    'uploads/profilePics',
-                    path.basename(user.profilePic)
-                );
-                fs.unlink(previousPicPath, (err) => {
-                    if (err) {
-                        logger.warn(`Failed to delete previous profile picture: ${previousPicPath}`);
-                    } else {
-                        logger.info(`Deleted previous profile picture: ${previousPicPath}`);
-                    }
-                });
-            }
-
-            // Update the profile picture URL in the request body
-            payload.profilePic = profilePicUrl;
-        }
-
-        // Update the user with the new data
-        const updatedUser = await User.findByIdAndUpdate(req.params.id, payload, {
-            new: true,
-            runValidators: true,
-        });
-
-        res.status(200).json(updatedUser);
-    } catch (error) {
-        logger.error('Error updating user:', error);
-        res.status(400).json({ message: 'Error updating user', error });
-    }
-};
-
-/**
- * @desc    Delete a user by ID
- * @route   DELETE /users/:id
- */
-const deleteUser = async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-
-        // Delete the profile picture if it exists
-        if (user.profilePic) {
-            const profilePicPath = path.join(
-                'uploads/profilePics',
-                path.basename(user.profilePic)
-            );
-            fs.unlink(profilePicPath, (err) => {
-                if (err) {
-                    logger.warn(`Failed to delete profile picture: ${profilePicPath}`);
-                } else {
-                    logger.info(`Deleted profile picture: ${profilePicPath}`);
-                }
-            });
-        }
-
-        // Delete the user
-        await User.findByIdAndDelete(req.params.id);
-
-        res.status(200).json({ message: 'User deleted successfully' });
-    } catch (error) {
-        logger.error('Error deleting user:', error);
-        res.status(500).json({ message: 'Error deleting user', error });
-    }
-};
-
-/**
- * @desc    Validate JWT token
- * @route   GET /users/validate-token
- */
-const validateToken = async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization || req.headers.Authorization || '';
-        
-        if (!authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({
-                success: false,
-                valid: false,
-                message: 'No token provided'
-            });
-        }
-
-        const token = authHeader.split(' ')[1];
-        
-        try {
-            const decoded = jwt.verify(
-                token,
-                JWT_SECRET
-            );
-            
-            const userId = decoded.id || decoded.userId;
-            if (!userId) {
-                return res.status(401).json({
-                    success: false,
-                    valid: false,
-                    message: 'Invalid token format'
-                });
-            }
-
-            // Optionally verify user still exists
-            const user = await User.findById(userId);
-            if (!user) {
-                return res.status(401).json({
-                    success: false,
-                    valid: false,
-                    message: 'User not found'
-                });
-            }
-
-            // Check if user is blocked
-            if (user.isActive === false) {
-                return res.status(403).json({
-                    success: false,
-                    valid: false,
-                    message: 'User account is blocked'
-                });
-            }
-
-            return res.status(200).json({
-                success: true,
-                valid: true,
-                message: 'Token is valid',
-                userId: user._id
-            });
-        } catch (jwtError) {
-            logger.warn('Token validation failed:', jwtError.message);
-            return res.status(401).json({
-                success: false,
-                valid: false,
-                message: 'Invalid or expired token'
-            });
-        }
-    } catch (error) {
-        logger.error('Error validating token:', error);
-        res.status(500).json({
-            success: false,
-            valid: false,
-            message: 'Error validating token',
-            error: error.message
-        });
-    }
-};
-
-/**
- * @desc    Get user by email
- * @route   GET /users/email/:email
- */
-const getUserByEmail = async (req, res) => {
-    try {
-        const normalizedEmail = normalizeEmail(req.params.email);
-        if (normalizedEmail.error) {
-            return res.status(400).json({ message: normalizedEmail.error });
-        }
-        const user = await User.findOne({ email: normalizedEmail.value });
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(user);
-    } catch (error) {
-        logger.error('Error fetching user by email:', error);
-        res.status(500).json({ message: 'Error fetching user by email', error });
-    }
-};
-
-/**
- * @desc    Login user by mobile number
- * @route   POST /users/login
- */
-const loginUserByMobile = async (req, res) => {
-    const normalizedPhone = normalizeMobileDigits(req.body.phoneNumber);
-    if (normalizedPhone.error || !normalizedPhone.value) {
-        return res.status(400).json({ message: normalizedPhone.error || 'Phone number is required' });
-    }
-    const phoneNumber = normalizedPhone.value;
-
-    try {
-        // Check if the phone number exists in the database
-        const user = await User.findOne({ phoneNumber });
-
-        if (user) {
-            // Check if user is blocked
-            if (user.isActive === false) {
-                logger.warn(`Blocked user attempted login: ${user.phoneNumber}`);
-                return res.status(403).json({
-                    message: 'Your account has been blocked',
-                    isBlocked: true,
-                });
-            }
-
-            // Generate a JWT token
-            if (!user.privacyPolicyAccepted) {
-                const acceptance = buildPrivacyPolicyAcceptance(req.body);
-                if (acceptance.error) {
-                    return res.status(428).json({
-                        ...acceptance.error,
-                        code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
-                    });
-                }
-                Object.assign(user, acceptance);
-                await user.save();
-            }
-
-            const token = jwt.sign(
-                { id: user._id, phoneNumber: user.phoneNumber },
-                JWT_SECRET,
-                { expiresIn: '7d' } // Token expiration time
-            );
-
-            logger.info(`User logged in: ${user.phoneNumber}`);
-            return res.status(200).json({
-                message: 'Login successful',
-                token,
-                userId: user._id,
-                phoneNumber: user.phoneNumber,
-                isNewUser: false,
-            });
-        } else {
-            // Auto-create user if not found
-            try {
-                logger.info(`Auto-creating new user with phone number: ${phoneNumber}`);
-                const acceptance = buildPrivacyPolicyAcceptance(req.body);
-
-                if (acceptance.error) {
-                    return res.status(400).json(acceptance.error);
-                }
-                
-                // Create new user with minimal data
-                // Using placeholder values for required fields that will be updated in profile-details
-                const newUser = new User({
-                    phoneNumber: phoneNumber,
-                    fullName: 'Pending', // Placeholder - will be updated in profile-details
-                    email: `temp_${phoneNumber}@cerca.temp`, // Temporary email, will be updated
-                    isActive: true,
-                    lastLogin: new Date(),
-                    isVerified: false,
-                    ...acceptance,
-                });
-
-                await newUser.save();
-                logger.info(`New user created successfully: ${newUser._id}`);
-
-                // Generate JWT token for the newly created user
-                const token = jwt.sign(
-                    { id: newUser._id, phoneNumber: newUser.phoneNumber },
-                    JWT_SECRET,
-                    { expiresIn: '7d' }
-                );
-
-                logger.info(`New user logged in: ${newUser.phoneNumber}`);
-                return res.status(200).json({
-                    message: 'Login successful',
-                    token,
-                    userId: newUser._id,
-                    phoneNumber: newUser.phoneNumber,
-                    isNewUser: true, // true for newly created users
-                });
-            } catch (createError) {
-                logger.error('Error auto-creating user:', createError);
-                // If user creation fails (e.g., duplicate phone number), return error
-                return res.status(500).json({
-                    message: 'An error occurred during user creation',
-                    error: createError.message,
-                });
-            }
-        }
-    } catch (error) {
-        logger.error('Error during login:', error);
-        return res.status(500).json({
-            message: 'An error occurred during login',
-            error: error.message,
-        });
-    }
-};
-
-// Add wallet-related controller functions
-
-/**
- * @desc    List pending driver in-progress cancellation amounts owed by rider (JWT must match :id)
- * @route   GET /users/:id/outstanding-driver-cancel-settlements
- */
-const getOutstandingDriverCancelSettlements = async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || req.headers.Authorization || '';
-    if (!authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, message: 'Authentication required' });
-    }
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const authUserId = decoded.id || decoded.userId;
-    if (String(authUserId) !== String(req.params.id)) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
-    }
-
-    const { items, totalAdditionalDue } =
-      await getPendingDriverInProgressCancelSettlements(req.params.id);
-
-    return res.status(200).json({
-      success: true,
-      data: { items, totalAdditionalDue }
-    });
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
-    }
-    logger.error('getOutstandingDriverCancelSettlements:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Error fetching outstanding settlements',
-      error: error.message
+const getAuthUserIdOrThrow = (req) => {
+  const authHeader = req.headers.authorization || req.headers.Authorization || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    throw new AppError('Authentication required', 401, {
+      code: 'AUTHENTICATION_REQUIRED',
     });
   }
+
+  const token = authHeader.split(' ')[1];
+  const decoded = jwt.verify(token, JWT_SECRET);
+  return decoded.id || decoded.userId;
 };
 
-/**
- * @desc    Get the wallet balance of a user by ID
- * @route   GET /users/:id/wallet
- */
-const getUserWallet = async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json({ walletBalance: user.walletBalance });
-    } catch (error) {
-        logger.error('Error fetching wallet balance:', error);
-        res.status(500).json({ message: 'Error fetching wallet balance', error });
+const getPrivacyPolicy = asyncHandler(async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    privacyPolicy: getPrivacyPolicyMetadata(),
+  });
+});
+
+const acceptPrivacyPolicy = asyncHandler(async (req, res) => {
+  const userId = getAuthUserIdOrThrow(req);
+  const user = await User.findById(userId);
+
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  const acceptance = buildPrivacyPolicyAcceptance(req.body);
+  if (acceptance.error) {
+    throw new AppError(acceptance.error.message, 400, {
+      code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
+      details: {
+        privacyPolicy: acceptance.error.privacyPolicy,
+      },
+    });
+  }
+
+  Object.assign(user, acceptance);
+  await user.save();
+
+  return res.status(200).json({
+    success: true,
+    message: 'Privacy policy accepted successfully',
+    privacyPolicy: getPrivacyPolicyMetadata(),
+  });
+});
+
+const getUserById = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  res.status(200).json(user);
+});
+
+const createUser = asyncHandler(async (req, res) => {
+  const userData = { ...req.body };
+  const normalizedEmail = normalizeEmail(userData.email);
+  if (normalizedEmail.error) {
+    throw new AppError(normalizedEmail.error, 400, {
+      code: 'INVALID_EMAIL',
+    });
+  }
+  userData.email = normalizedEmail.value;
+
+  if (userData.phoneNumber !== undefined) {
+    const normalizedPhone = normalizeMobileDigits(userData.phoneNumber);
+    if (normalizedPhone.error) {
+      throw new AppError(normalizedPhone.error, 400, {
+        code: 'INVALID_PHONE_NUMBER',
+      });
     }
-};
+    userData.phoneNumber = normalizedPhone.value;
+  }
 
-/**
- * @desc    Update the wallet balance of a user by ID and type add or deduct
- * @route   PUT /users/:id/wallet
- */
-const updateUserWallet = async (req, res) => {
-    try {
-        const { amount, type } = req.body; // type = 'add' or 'deduct'
+  const acceptance = buildPrivacyPolicyAcceptance(userData);
+  if (acceptance.error) {
+    throw new AppError(acceptance.error.message, 400, {
+      code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
+      details: {
+        privacyPolicy: acceptance.error.privacyPolicy,
+      },
+    });
+  }
 
-        if (typeof amount !== 'number' || amount <= 0) {
-            return res.status(400).json({ message: 'Invalid wallet amount' });
-        }
+  if (req.file) {
+    const profilePicUrl = `${req.protocol}://${req.get('host')}/uploads/profilePics/${req.file.filename}`;
+    userData.profilePic = profilePicUrl;
+  }
 
-        const user = await User.findById(req.params.id);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
+  Object.assign(userData, acceptance);
 
-        if (type === 'deduct') {
-            if (user.walletBalance < amount) {
-                return res.status(400).json({ message: 'Insufficient wallet balance' });
-            }
-            user.walletBalance -= amount;
-        } else if (type === 'add') {
-            user.walletBalance += amount;
+  const user = new User(userData);
+  await user.save();
+
+  logger.info(`User created successfully: ${user.email}`);
+
+  try {
+    const { checkAndAssignNewUserGift } = require('../../utils/giftAssignment');
+    const giftResult = await checkAndAssignNewUserGift(user._id.toString());
+    if (giftResult.assigned) {
+      logger.info(`New user gift assigned to ${user.email}: ${giftResult.couponCode}`);
+    }
+  } catch (giftError) {
+    logger.error(`Error assigning new user gift to ${user.email}:`, giftError);
+  }
+
+  res.status(201).json(user);
+});
+
+const updateUser = asyncHandler(async (req, res) => {
+  const payload = { ...req.body };
+  if (payload.email !== undefined) {
+    const normalizedEmail = normalizeEmail(payload.email);
+    if (normalizedEmail.error) {
+      throw new AppError(normalizedEmail.error, 400, {
+        code: 'INVALID_EMAIL',
+      });
+    }
+    payload.email = normalizedEmail.value;
+  }
+
+  if (payload.phoneNumber !== undefined) {
+    const normalizedPhone = normalizeMobileDigits(payload.phoneNumber);
+    if (normalizedPhone.error) {
+      throw new AppError(normalizedPhone.error, 400, {
+        code: 'INVALID_PHONE_NUMBER',
+      });
+    }
+    payload.phoneNumber = normalizedPhone.value;
+  }
+
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  if (req.file) {
+    const profilePicUrl = `${req.protocol}://${req.get('host')}/uploads/profilePics/${req.file.filename}`;
+
+    if (user.profilePic) {
+      const previousPicPath = path.join(
+        'uploads/profilePics',
+        path.basename(user.profilePic)
+      );
+      fs.unlink(previousPicPath, (err) => {
+        if (err) {
+          logger.warn(`Failed to delete previous profile picture: ${previousPicPath}`);
         } else {
-            return res.status(400).json({ message: 'Invalid transaction type' });
+          logger.info(`Deleted previous profile picture: ${previousPicPath}`);
         }
-
-        await user.save();
-
-        res.status(200).json({
-            message: `Wallet ${type === 'add' ? 'credited' : 'debited'} successfully`,
-            walletBalance: user.walletBalance,
-        });
-    } catch (error) {
-        logger.error('Error updating wallet balance:', error);
-        res.status(500).json({ message: 'Error updating wallet balance', error });
+      });
     }
-};
 
+    payload.profilePic = profilePicUrl;
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(req.params.id, payload, {
+    new: true,
+    runValidators: true,
+  });
+
+  res.status(200).json(updatedUser);
+});
+
+const deleteUser = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  if (user.profilePic) {
+    const profilePicPath = path.join(
+      'uploads/profilePics',
+      path.basename(user.profilePic)
+    );
+    fs.unlink(profilePicPath, (err) => {
+      if (err) {
+        logger.warn(`Failed to delete profile picture: ${profilePicPath}`);
+      } else {
+        logger.info(`Deleted profile picture: ${profilePicPath}`);
+      }
+    });
+  }
+
+  await User.findByIdAndDelete(req.params.id);
+
+  res.status(200).json({ message: 'User deleted successfully' });
+});
+
+const validateToken = asyncHandler(async (req, res) => {
+  const authHeader = req.headers.authorization || req.headers.Authorization || '';
+
+  if (!authHeader.startsWith('Bearer ')) {
+    throw new AppError('No token provided', 401, {
+      code: 'TOKEN_MISSING',
+      details: { valid: false },
+    });
+  }
+
+  const token = authHeader.split(' ')[1];
+  const decoded = jwt.verify(token, JWT_SECRET);
+  const userId = decoded.id || decoded.userId;
+
+  if (!userId) {
+    throw new AppError('Invalid token format', 401, {
+      code: 'INVALID_TOKEN_FORMAT',
+      details: { valid: false },
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new AppError('User not found', 401, {
+      code: 'TOKEN_USER_NOT_FOUND',
+      details: { valid: false },
+    });
+  }
+
+  if (user.isActive === false) {
+    throw new AppError('User account is blocked', 403, {
+      code: 'USER_BLOCKED',
+      details: { valid: false, isBlocked: true },
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    valid: true,
+    message: 'Token is valid',
+    userId: user._id,
+  });
+});
+
+const getUserByEmail = asyncHandler(async (req, res) => {
+  const normalizedEmail = normalizeEmail(req.params.email);
+  if (normalizedEmail.error) {
+    throw new AppError(normalizedEmail.error, 400, {
+      code: 'INVALID_EMAIL',
+    });
+  }
+
+  const user = await User.findOne({ email: normalizedEmail.value });
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  res.status(200).json(user);
+});
+
+const loginUserByMobile = asyncHandler(async (req, res) => {
+  const normalizedPhone = normalizeMobileDigits(req.body.phoneNumber);
+  if (normalizedPhone.error || !normalizedPhone.value) {
+    throw new AppError(normalizedPhone.error || 'Phone number is required', 400, {
+      code: 'INVALID_PHONE_NUMBER',
+    });
+  }
+  const phoneNumber = normalizedPhone.value;
+
+  const user = await User.findOne({ phoneNumber });
+
+  if (user) {
+    if (user.isActive === false) {
+      logger.warn(`Blocked user attempted login: ${user.phoneNumber}`);
+      throw new AppError('Your account has been blocked', 403, {
+        code: 'USER_BLOCKED',
+        details: { isBlocked: true },
+      });
+    }
+
+    if (!user.privacyPolicyAccepted) {
+      const acceptance = buildPrivacyPolicyAcceptance(req.body);
+      if (acceptance.error) {
+        throw new AppError(acceptance.error.message, 428, {
+          code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
+          details: {
+            privacyPolicy: acceptance.error.privacyPolicy,
+          },
+        });
+      }
+      Object.assign(user, acceptance);
+      await user.save();
+    }
+
+    const token = jwt.sign(
+      { id: user._id, phoneNumber: user.phoneNumber },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    logger.info(`User logged in: ${user.phoneNumber}`);
+    return res.status(200).json({
+      message: 'Login successful',
+      token,
+      userId: user._id,
+      phoneNumber: user.phoneNumber,
+      isNewUser: false,
+    });
+  }
+
+  logger.info(`Auto-creating new user with phone number: ${phoneNumber}`);
+  const acceptance = buildPrivacyPolicyAcceptance(req.body);
+  if (acceptance.error) {
+    throw new AppError(acceptance.error.message, 400, {
+      code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
+      details: {
+        privacyPolicy: acceptance.error.privacyPolicy,
+      },
+    });
+  }
+
+  const newUser = new User({
+    phoneNumber,
+    fullName: 'Pending',
+    email: `temp_${phoneNumber}@cerca.temp`,
+    isActive: true,
+    lastLogin: new Date(),
+    isVerified: false,
+    ...acceptance,
+  });
+
+  await newUser.save();
+  logger.info(`New user created successfully: ${newUser._id}`);
+
+  const token = jwt.sign(
+    { id: newUser._id, phoneNumber: newUser.phoneNumber },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+
+  logger.info(`New user logged in: ${newUser.phoneNumber}`);
+  return res.status(200).json({
+    message: 'Login successful',
+    token,
+    userId: newUser._id,
+    phoneNumber: newUser.phoneNumber,
+    isNewUser: true,
+  });
+});
+
+const getOutstandingDriverCancelSettlements = asyncHandler(async (req, res) => {
+  const authUserId = getAuthUserIdOrThrow(req);
+  if (String(authUserId) !== String(req.params.id)) {
+    throw new AppError('Forbidden', 403, {
+      code: 'FORBIDDEN',
+    });
+  }
+
+  const { items, totalAdditionalDue } =
+    await getPendingDriverInProgressCancelSettlements(req.params.id);
+
+  return res.status(200).json({
+    success: true,
+    data: { items, totalAdditionalDue },
+  });
+});
+
+const getUserWallet = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  res.status(200).json({ walletBalance: user.walletBalance });
+});
+
+const updateUserWallet = asyncHandler(async (req, res) => {
+  const { amount, type } = req.body;
+
+  if (typeof amount !== 'number' || amount <= 0) {
+    throw new AppError('Invalid wallet amount', 400, {
+      code: 'INVALID_WALLET_AMOUNT',
+    });
+  }
+
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  if (type === 'deduct') {
+    if (user.walletBalance < amount) {
+      throw new AppError('Insufficient wallet balance', 400, {
+        code: 'INSUFFICIENT_WALLET_BALANCE',
+      });
+    }
+    user.walletBalance -= amount;
+  } else if (type === 'add') {
+    user.walletBalance += amount;
+  } else {
+    throw new AppError('Invalid transaction type', 400, {
+      code: 'INVALID_TRANSACTION_TYPE',
+    });
+  }
+
+  await user.save();
+
+  res.status(200).json({
+    message: `Wallet ${type === 'add' ? 'credited' : 'debited'} successfully`,
+    walletBalance: user.walletBalance,
+  });
+});
 
 module.exports = {
   getPrivacyPolicy,
