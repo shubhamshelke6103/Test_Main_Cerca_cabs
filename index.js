@@ -12,6 +12,8 @@ const logger = require('./utils/logger')
 const { initializeSocket } = require('./utils/socket')
 const { connectDB } = require('./db')
 const mongoose = require('mongoose')
+const notFoundHandler = require('./middleware/notFound.middleware')
+const errorHandler = require('./middleware/error.middleware')
 
 const app = express()
 const port = process.env.PORT || 8000
@@ -229,6 +231,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use(notFoundHandler)
+app.use(errorHandler)
 
 // Configure HTTP server socket timeout
 server.timeout = 65000; // 65 seconds (includes 60s request processing + 5s buffer)
