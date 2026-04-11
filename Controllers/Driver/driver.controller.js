@@ -38,6 +38,7 @@ const {
     sanitizeRideListContactsForDriver,
 } = require('../../utils/rideContactPrivacy.service.js');
 const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions.js');
+const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
 const AppError = require('../../utils/errors/AppError.js');
@@ -513,6 +514,30 @@ const serializeDriverApprovalState = (driver) => ({
     approvalWorkflow: getDriverApprovalSummary(driver),
     missingDocuments: getMissingDriverApprovalDocuments(driver),
 });
+
+const queueDriverVehicleApprovedEmail = (driver, approvedBy = 'ADMIN') => {
+    if (!driver?.email) return;
+
+    setImmediate(async () => {
+        try {
+            await queueExternalAlertEmail({
+                channel: 'email',
+                to: driver.email,
+                subject: 'Vehicle approved',
+                message: `Hi ${driver.name || 'Driver'}, your vehicle has been approved by ${approvedBy === 'VENDOR' ? 'your vendor' : 'Cerca admin'}. You can now use the approved vehicle for rides.`,
+                metadata: {
+                    purpose: 'driver_vehicle_approved',
+                    driverId: driver._id,
+                    approvedBy,
+                },
+            });
+        } catch (emailErr) {
+            logger.error(
+                `Driver vehicle approval email queue error for ${driver.email}: ${emailErr.message}`
+            );
+        }
+    });
+};
 
 const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN', vehicleSubdocId = null) => {
     let pendingVehicleRecord;
@@ -1732,6 +1757,7 @@ const approveDriverVehicle = async (req, res) => {
         }
 
         await approvePendingVehicleForDriver(driver, 'ADMIN');
+        queueDriverVehicleApprovedEmail(driver, 'ADMIN');
 
         return res.status(200).json({
             message: 'Driver vehicle approved successfully',
@@ -1790,6 +1816,7 @@ const approveDriverVehicleBySubdoc = async (req, res) => {
         }
 
         await approvePendingVehicleForDriver(driver, 'ADMIN', req.params.vehicleId);
+        queueDriverVehicleApprovedEmail(driver, 'ADMIN');
 
         return res.status(200).json({
             message: 'Driver vehicle approved successfully',

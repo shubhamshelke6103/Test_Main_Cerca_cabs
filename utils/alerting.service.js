@@ -33,6 +33,15 @@ const buildEmailHtml = ({ subject, message }) => {
   const escapedMessage = escapeHtml(message).replace(/\n/g, '<br />')
   const otpMatch = message ? message.match(/\b(\d{4,8})\b/) : null
   const otpCode = otpMatch ? otpMatch[1] : null
+  const isPasswordReset = /password reset|reset otp|otp/i.test(`${subject || ''} ${message || ''}`)
+  const title = isPasswordReset ? 'Password Reset OTP' : subject || 'Cerca Alert'
+  const intro = isPasswordReset
+    ? 'Use the code below to reset your vendor account password. This code expires in 10 minutes for your security.'
+    : 'Please review the update below.'
+  const messageLabel = isPasswordReset ? 'One-time password (OTP):' : 'Message:'
+  const footerMessage = isPasswordReset
+    ? 'If you did not request this password reset, please ignore this email or contact our support team immediately.'
+    : 'This is an automated notification from Cerca Cars.'
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -53,16 +62,16 @@ const buildEmailHtml = ({ subject, message }) => {
           </tr>
           <tr>
             <td style="padding:36px 36px 24px;">
-              <h1 style="margin:0 0 16px;font-size:26px;line-height:1.15;color:#111827;">Password Reset OTP</h1>
+              <h1 style="margin:0 0 16px;font-size:26px;line-height:1.15;color:#111827;">${escapeHtml(title)}</h1>
               <p style="margin:0 0 24px;font-size:16px;line-height:1.8;color:#475569;">
-                Use the code below to reset your vendor account password. This code expires in 10 minutes for your security.
+                ${escapeHtml(intro)}
               </p>
-              ${otpCode ? `<div style="margin:0 0 24px;padding:22px 18px;border:1px solid #e2e8f0;border-radius:16px;background:#f8fafc;display:inline-flex;align-items:center;justify-content:center;min-width:280px;">
+              ${otpCode && isPasswordReset ? `<div style="margin:0 0 24px;padding:22px 18px;border:1px solid #e2e8f0;border-radius:16px;background:#f8fafc;display:inline-flex;align-items:center;justify-content:center;min-width:280px;">
                   <span style="font-size:32px;letter-spacing:0.15em;font-weight:700;color:#111827;">${escapeHtml(otpCode)}</span>
                 </div>` : ''}
               <div style="padding:24px 22px;border-radius:20px;background:#f3f6ff;border:1px solid #dbeafe;">
                 <p style="margin:0;font-size:15px;line-height:1.75;color:#334155;">
-                  <strong style="color:#0f172a;">One-time password (OTP):</strong><br />
+                  <strong style="color:#0f172a;">${escapeHtml(messageLabel)}</strong><br />
                   ${escapedMessage}
                 </p>
               </div>
@@ -72,7 +81,7 @@ const buildEmailHtml = ({ subject, message }) => {
             <td style="padding:0 36px 32px;">
               <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:20px;">
                 <p style="margin:0;font-size:14px;line-height:1.7;color:#475569;">
-                  If you did not request this password reset, please ignore this email or contact our support team immediately.
+                  ${escapeHtml(footerMessage)}
                 </p>
               </div>
             </td>
@@ -338,13 +347,23 @@ const queueExternalAlertEmail = async payload => {
     return { channel, status: 'queued', alertId: alertRecord._id }
   } catch (err) {
     logger.warn(
-      `externalAlertEmail queue unavailable, delivering inline: ${err.message}`
+      `externalAlertEmail queue unavailable, scheduling background delivery: ${err.message}`
     )
-    const fresh = await ExternalAlert.findById(alertRecord._id)
-    if (!fresh) {
-      return { channel, status: 'failed', reason: 'alert_record_missing' }
-    }
-    return deliverExternalAlertRecord(fresh)
+    setImmediate(async () => {
+      try {
+        const fresh = await ExternalAlert.findById(alertRecord._id)
+        if (!fresh) {
+          logger.error(`externalAlertEmail background delivery missing alert ${alertRecord._id}`)
+          return
+        }
+        await deliverExternalAlertRecord(fresh)
+      } catch (backgroundErr) {
+        logger.error(
+          `externalAlertEmail background delivery failed for ${alertRecord._id}: ${backgroundErr.message}`
+        )
+      }
+    })
+    return { channel, status: 'queued', alertId: alertRecord._id, backgroundFallback: true }
   }
 }
 

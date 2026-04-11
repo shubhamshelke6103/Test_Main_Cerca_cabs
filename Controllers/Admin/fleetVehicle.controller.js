@@ -1,6 +1,8 @@
 const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
 const Driver = require('../../Models/Driver/driver.model')
+const Vendor = require('../../Models/vendor/vendor.models')
 const logger = require('../../utils/logger')
+const { queueExternalAlertEmail } = require('../../utils/alerting.service')
 const {
   buildFleetVehicleFilterForInventory,
   buildStandaloneDriverFilterForInventory
@@ -216,6 +218,28 @@ exports.approveFleetVehicle = async (req, res) => {
     fv.rejectionReason = null
     fv.allowDocumentResubmit = false
     await fv.save()
+
+    setImmediate(async () => {
+      try {
+        const vendor = await Vendor.findById(fv.vendorId).select('businessName ownerName email')
+        await queueExternalAlertEmail({
+          channel: 'email',
+          to: vendor?.email,
+          subject: 'Fleet vehicle approved',
+          message: `Hi ${vendor?.businessName || vendor?.ownerName || 'Vendor'}, your fleet vehicle ${fv.make} ${fv.model} (${fv.licensePlate}) has been approved by Cerca admin.`,
+          metadata: {
+            purpose: 'vendor_fleet_vehicle_approved',
+            vendorId: fv.vendorId,
+            fleetVehicleId: fv._id,
+            approvedBy: 'ADMIN'
+          }
+        })
+      } catch (emailErr) {
+        logger.error(
+          `Fleet vehicle approval email queue error for ${fv._id}: ${emailErr.message}`
+        )
+      }
+    })
 
     logger.info('Fleet vehicle approved by admin', {
       fleetVehicleId: fv._id.toString(),

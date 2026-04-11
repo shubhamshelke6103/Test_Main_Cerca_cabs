@@ -1829,6 +1829,27 @@ exports.approveDriverVehicle = async (req, res) => {
     syncDriverLegacyVehicleState(driver)
     await driver.save()
 
+    setImmediate(async () => {
+      try {
+        const vendor = await Vendor.findById(req.user.id).select('businessName ownerName email')
+        await queueExternalAlertEmail({
+          channel: 'email',
+          to: vendor?.email,
+          subject: 'Driver vehicle approved',
+          message: `Hi ${vendor?.businessName || vendor?.ownerName || 'Vendor'}, you approved ${driver.name || 'the driver'}'s vehicle and forwarded it to Cerca admin for final approval.`,
+          metadata: {
+            purpose: 'vendor_driver_vehicle_approved',
+            vendorId: req.user.id,
+            driverId: driver._id
+          }
+        })
+      } catch (emailErr) {
+        logger.error(
+          `Vendor driver vehicle approval email queue error for vendor ${req.user.id}: ${emailErr.message}`
+        )
+      }
+    })
+
     logger.info('Vendor forwarded driver vehicle to admin', {
       vendorId: req.user.id,
       driverId: driver._id.toString()
