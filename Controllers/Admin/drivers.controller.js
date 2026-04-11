@@ -6,6 +6,7 @@ const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const logger = require('../../utils/logger');
 const { deleteDriverDocuments } = require('../../utils/driverDocument.service');
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service');
+const { queueExternalAlertEmail } = require('../../utils/alerting.service');
 const {
   REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
   getMissingDriverApprovalDocuments,
@@ -62,6 +63,50 @@ const parseBoolean = (value) => {
   if (value === 'true' || value === true) return true;
   if (value === 'false' || value === false) return false;
   return undefined;
+};
+
+const queueDriverApprovalEmail = (driver) => {
+  if (!driver?.email) return;
+
+  setImmediate(async () => {
+    try {
+      await queueExternalAlertEmail({
+        channel: 'email',
+        to: driver.email,
+        subject: 'Driver account approved',
+        message: `Hi ${driver.name || 'Driver'}, your driver account has been approved by Cerca admin. You can now access the driver app and start accepting rides.`,
+        metadata: {
+          purpose: 'driver_account_approved',
+          driverId: driver._id,
+          actor: 'ADMIN',
+        },
+      });
+    } catch (emailErr) {
+      logger.error(`Driver approval email queue error for ${driver.email}: ${emailErr.message}`);
+    }
+  });
+};
+
+const queueDriverRejectionEmail = (driver, reason) => {
+  if (!driver?.email) return;
+
+  setImmediate(async () => {
+    try {
+      await queueExternalAlertEmail({
+        channel: 'email',
+        to: driver.email,
+        subject: 'Driver account rejected',
+        message: `Hi ${driver.name || 'Driver'}, your driver account application has been rejected by Cerca admin. Reason: ${reason || 'No reason provided'}. Please contact support to resolve any issues.`,
+        metadata: {
+          purpose: 'driver_account_rejected',
+          driverId: driver._id,
+          actor: 'ADMIN',
+        },
+      });
+    } catch (emailErr) {
+      logger.error(`Driver rejection email queue error for ${driver.email}: ${emailErr.message}`);
+    }
+  });
 };
 
 const DOCUMENT_TYPE_LABELS = {
@@ -474,6 +519,7 @@ const approveDriver = async (req, res) => {
 
     adminApproveDriver(driver);
     await driver.save();
+    queueDriverApprovalEmail(driver);
 
     res.status(200).json({
       message: 'Driver approved',
@@ -503,6 +549,7 @@ const rejectDriver = async (req, res) => {
     driver.documents = [];
     rejectDriverApproval(driver, DRIVER_APPROVAL_ACTOR.ADMIN, reason.trim());
     await driver.save();
+    queueDriverRejectionEmail(driver, reason.trim());
 
     res.status(200).json({
       message: 'Driver rejected',
@@ -569,6 +616,7 @@ const verifyDriver = async (req, res) => {
 
       adminApproveDriver(driver);
       await driver.save();
+      queueDriverApprovalEmail(driver);
     } else {
       setDriverPendingApproval(driver);
       await driver.save();
