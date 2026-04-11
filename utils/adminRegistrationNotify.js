@@ -9,7 +9,7 @@ const SOCKET_FLAG = 'ADMIN_REGISTRATION_SOCKET_ALERTS'
  * Does not send email/SMS (unlike notifyAdmins in alerting.service).
  *
  * @param {object} params
- * @param {'admin_new_driver'|'admin_new_vendor'|'admin_vehicle_pending'} params.type
+ * @param {'admin_new_driver'|'admin_new_vendor'|'admin_vehicle_pending'|'admin_driver_linked_vendor'} params.type
  * @param {string} params.title
  * @param {string} params.message
  * @param {'driver'|'vendor'|'vehicle'} params.entityKind

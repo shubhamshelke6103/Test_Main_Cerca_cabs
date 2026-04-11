@@ -12,7 +12,10 @@ const logger = require('../../utils/logger')
 const { queueExternalAlertEmail } = require('../../utils/alerting.service')
 const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
-const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
+const {
+  getFleetOnlineHoursSummary,
+  stopDriverOnlineSession
+} = require('../../utils/driverSession.service')
 const {
   REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
   getMissingDriverApprovalDocuments,
@@ -797,6 +800,82 @@ const buildVehicleRemovalRequiredMessage = ({
   return "Please remove the driver's existing vehicle first."
 }
 
+/** Standalone driver (no vendor) who may be linked without clearing personal vehicles. */
+const isEligibleStandaloneDriverForVendorLink = driver => {
+  if (!driver) return false
+  const vid = driver.vendorId
+  if (vid != null && String(vid).trim() !== '') return false
+  if (driver.isVerified !== true) return false
+  if (getMissingDriverApprovalDocuments(driver).length > 0) return false
+  if (driver.assignedFleetVehicleId) return false
+  return true
+}
+
+async function assertNoActiveRideForVendorLink (driverId) {
+  const activeRide = await Ride.findOne({
+    driver: driverId,
+    status: { $in: ['requested', 'accepted', 'arrived', 'in_progress'] }
+  })
+    .select('_id')
+    .lean()
+  if (activeRide) {
+    const err = new Error(
+      'Driver has an active ride. Finish or cancel the ride before linking to a vendor.'
+    )
+    err.statusCode = 409
+    throw err
+  }
+}
+
+/**
+ * Force offline if needed; re-fetch driver. Throws on active ride.
+ */
+async function prepareDriverForVendorLinkSession (driverId) {
+  let driver = await Driver.findById(driverId)
+  if (!driver) {
+    const err = new Error('Driver not found')
+    err.statusCode = 404
+    throw err
+  }
+  await assertNoActiveRideForVendorLink(driver._id)
+  if (driver.isOnline) {
+    await stopDriverOnlineSession(driver._id, 'vendor_link')
+    driver = await Driver.findById(driverId)
+    if (!driver) {
+      const err = new Error('Driver not found')
+      err.statusCode = 404
+      throw err
+    }
+  }
+  return driver
+}
+
+async function queueAdminNotifyDriverLinkedVendor (driver, vendorId) {
+  try {
+    const v = await Vendor.findById(vendorId).select('businessName').lean()
+    const businessName = v?.businessName || 'Vendor'
+    setImmediate(() => {
+      notifyAdminsRegistrationEvent({
+        type: 'admin_driver_linked_vendor',
+        title: 'Driver linked to vendor',
+        message: `${driver.name} (${driver.phone}) linked to ${businessName}.`,
+        entityKind: 'driver',
+        entityId: driver._id,
+        data: {
+          driverName: driver.name,
+          phone: driver.phone,
+          vendorId: String(vendorId),
+          businessName
+        }
+      }).catch(e =>
+        logger.error('admin notify driver linked vendor:', e)
+      )
+    })
+  } catch (e) {
+    logger.error('queueAdminNotifyDriverLinkedVendor:', e)
+  }
+}
+
 const buildDriverVehicleInfoFromFleetVehicle = fleetVehicle => {
   if (!fleetVehicle) return null
 
@@ -1486,22 +1565,30 @@ exports.assignDriverToVendor = async (req, res) => {
       return res.status(403).json({ message: 'You can assign drivers only to your own vendor account' })
     }
 
-    const driver = await Driver.findById(driverId)
+    let driver = await Driver.findById(driverId)
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' })
     }
 
-    const {
-      driverVendorId,
-      owningVendorId,
-      hasVehicleState
-    } = await getDriverVehicleOwnershipContext(driver)
+    const wasStandalone = !toObjectIdString(driver.vendorId)
+    const driverVendorIdBefore = toObjectIdString(driver.vendorId)
 
-    const vehicleRemovalMessage = buildVehicleRemovalRequiredMessage({
-      hasVehicleState,
-      owningVendorId,
-      requestingVendorId: String(vendorId)
-    })
+    try {
+      driver = await prepareDriverForVendorLinkSession(driverId)
+    } catch (prepErr) {
+      const code = prepErr.statusCode || 500
+      return res.status(code).json({ message: prepErr.message })
+    }
+
+    const ctx = await getDriverVehicleOwnershipContext(driver)
+    let vehicleRemovalMessage = null
+    if (!isEligibleStandaloneDriverForVendorLink(driver)) {
+      vehicleRemovalMessage = buildVehicleRemovalRequiredMessage({
+        hasVehicleState: ctx.hasVehicleState,
+        owningVendorId: ctx.owningVendorId,
+        requestingVendorId: String(vendorId)
+      })
+    }
 
     if (vehicleRemovalMessage) {
       return res.status(400).json({ message: vehicleRemovalMessage })
@@ -1521,21 +1608,25 @@ exports.assignDriverToVendor = async (req, res) => {
     }
     await driver.save()
 
-    if (driverVendorId && driverVendorId !== String(vendorId)) {
-      await Vendor.findByIdAndUpdate(driverVendorId, {
+    if (driverVendorIdBefore && driverVendorIdBefore !== String(vendorId)) {
+      await Vendor.findByIdAndUpdate(driverVendorIdBefore, {
         $inc: { totalDrivers: -1 }
       })
     }
 
-    if (driverVendorId !== String(vendorId)) {
+    if (driverVendorIdBefore !== String(vendorId)) {
       await Vendor.findByIdAndUpdate(vendorId, {
         $inc: { totalDrivers: 1 }
       })
     }
 
+    if (wasStandalone) {
+      await queueAdminNotifyDriverLinkedVendor(driver, vendorId)
+    }
+
     res.json({
       message: 'Driver assigned to vendor successfully',
-      driver
+      driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -1586,10 +1677,10 @@ exports.removeDriverFromVendor = async (req, res) => {
   }
 }
 
-// Driver JWT: leave current vendor (same rules as vendor remove + fleet detach)
+// Driver JWT: leave current vendor (fleet unassigned; personal garage may remain)
 exports.leaveVendorAsDriver = async (req, res) => {
   try {
-    const driver = await Driver.findById(req.driverId)
+    let driver = await Driver.findById(req.driverId)
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' })
     }
@@ -1598,14 +1689,30 @@ exports.leaveVendorAsDriver = async (req, res) => {
     }
     const vendorId = String(driver.vendorId)
 
-    await detachVendorFleetFromDriver(driver, vendorId)
+    const activeRide = await Ride.findOne({
+      driver: driver._id,
+      status: { $in: ['requested', 'accepted', 'arrived', 'in_progress'] }
+    })
+      .select('_id status')
+      .lean()
 
-    if (hasDriverVehicleState(driver)) {
-      return res.status(400).json({
+    if (activeRide) {
+      return res.status(409).json({
+        success: false,
         message:
-          'Please remove your vehicle first before leaving the vendor. If you use a vendor-assigned vehicle, contact your vendor.'
+          'Finish or cancel your active ride before leaving your vendor.'
       })
     }
+
+    if (driver.isOnline) {
+      await stopDriverOnlineSession(driver._id, 'leave_vendor')
+      driver = await Driver.findById(req.driverId)
+      if (!driver) {
+        return res.status(404).json({ message: 'Driver not found' })
+      }
+    }
+
+    await detachVendorFleetFromDriver(driver, vendorId)
 
     driver.vendorId = null
     driver.vendorDriverCategory = 'SELF'
@@ -1630,18 +1737,52 @@ exports.leaveVendorAsDriver = async (req, res) => {
 
 exports.lookupDriverByPhoneForVendor = async (req, res) => {
   try {
-    const normalizedPhone = normalizeMobileDigits(req.body.phone)
-    if (normalizedPhone.error || !normalizedPhone.value) {
+    const vendorId = req.user.id
+    let phone = null
+    let email = null
+
+    if (
+      req.body.phone !== undefined &&
+      req.body.phone !== null &&
+      String(req.body.phone).trim() !== ''
+    ) {
+      const normalizedPhone = normalizeMobileDigits(req.body.phone)
+      if (normalizedPhone.error || !normalizedPhone.value) {
+        return res.status(400).json({
+          message: normalizedPhone.error || 'Invalid phone number'
+        })
+      }
+      phone = normalizedPhone.value
+    }
+
+    if (
+      req.body.email !== undefined &&
+      req.body.email !== null &&
+      String(req.body.email).trim() !== ''
+    ) {
+      const normalizedEmail = normalizeEmail(req.body.email)
+      if (normalizedEmail.error) {
+        return res.status(400).json({ message: normalizedEmail.error })
+      }
+      email = normalizedEmail.value
+    }
+
+    if (!phone && !email) {
       return res.status(400).json({
-        message: normalizedPhone.error || 'Phone number is required'
+        message: 'phone or email is required'
       })
     }
-    const phone = normalizedPhone.value
-    const vendorId = req.user.id
 
-    const driver = await Driver.findOne({ phone })
+    const query =
+      phone && email
+        ? { $or: [{ phone }, { email }] }
+        : phone
+          ? { phone }
+          : { email }
+
+    const driver = await Driver.findOne(query)
       .select(
-        'name phone email vendorId isVerified approvalWorkflow assignedFleetVehicleId vehicleInfo pendingVehicleInfo vehicles'
+        'name phone email vendorId isVerified approvalWorkflow assignedFleetVehicleId vehicleInfo pendingVehicleInfo vehicles complianceDocuments isOnline'
       )
       .populate('vendorId', 'businessName')
 
@@ -1649,16 +1790,27 @@ exports.lookupDriverByPhoneForVendor = async (req, res) => {
       return res.json({ exists: false })
     }
 
+    const p = driver.phone || phone || ''
     const summary = {
       name: driver.name,
       phoneMasked:
-        phone.length > 4
-          ? `${phone.slice(0, 2)}****${phone.slice(-2)}`
+        p.length > 4
+          ? `${p.slice(0, 2)}****${p.slice(-2)}`
           : '****',
       approvalStatus: getDriverApprovalSummary(driver).status
     }
 
     const otherVendorId = driver.vendorId?._id || driver.vendorId
+    if (otherVendorId && String(otherVendorId) === String(vendorId)) {
+      return res.json({
+        exists: true,
+        canAssign: false,
+        reason: 'ALREADY_ON_VENDOR',
+        message: 'This driver is already linked to your vendor account.',
+        summary
+      })
+    }
+
     if (otherVendorId && String(otherVendorId) !== String(vendorId)) {
       return res.json({
         exists: true,
@@ -1672,20 +1824,22 @@ exports.lookupDriverByPhoneForVendor = async (req, res) => {
       })
     }
 
-    const ctx = await getDriverVehicleOwnershipContext(driver)
-    const msg = buildVehicleRemovalRequiredMessage({
-      hasVehicleState: ctx.hasVehicleState,
-      owningVendorId: ctx.owningVendorId,
-      requestingVendorId: String(vendorId)
-    })
-    if (msg) {
-      return res.json({
-        exists: true,
-        canAssign: false,
-        reason: 'VEHICLE_BLOCK',
-        message: msg,
-        summary
+    if (!isEligibleStandaloneDriverForVendorLink(driver)) {
+      const ctx = await getDriverVehicleOwnershipContext(driver)
+      const msg = buildVehicleRemovalRequiredMessage({
+        hasVehicleState: ctx.hasVehicleState,
+        owningVendorId: ctx.owningVendorId,
+        requestingVendorId: String(vendorId)
       })
+      if (msg) {
+        return res.json({
+          exists: true,
+          canAssign: false,
+          reason: 'VEHICLE_BLOCK',
+          message: msg,
+          summary
+        })
+      }
     }
 
     return res.json({
@@ -2705,12 +2859,31 @@ exports.addDriver = async (req, res) => {
   try {
     const vendorId = req.body.vendorId
     const { name, password, location } = req.body
+
+    if (!vendorId) {
+      return res.status(400).json({ message: 'vendorId is required' })
+    }
+    if (String(vendorId) !== String(req.user.id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'vendorId must match your authenticated vendor account'
+      })
+    }
+
     const normalizedPhone = normalizeMobileDigits(req.body.phone)
     if (normalizedPhone.error || !normalizedPhone.value) {
-      return res.status(400).json({ message: normalizedPhone.error || 'Phone number is required' })
+      return res.status(400).json({
+        message: normalizedPhone.error || 'Phone number is required'
+      })
     }
     const phone = normalizedPhone.value
-    const emailResult = req.body.email
+
+    const explicitEmailInput =
+      req.body.email !== undefined &&
+      req.body.email !== null &&
+      String(req.body.email).trim() !== ''
+
+    const emailResult = explicitEmailInput
       ? normalizeEmail(req.body.email)
       : { value: `${phone}@vendor.local`, error: null }
     if (emailResult.error) {
@@ -2718,25 +2891,103 @@ exports.addDriver = async (req, res) => {
     }
     const email = emailResult.value
 
-    if (!vendorId) {
-      return res.status(400).json({ message: 'vendorId is required' })
+    const existingQuery = explicitEmailInput
+      ? { $or: [{ phone }, { email }] }
+      : { phone }
+
+    const existing = await Driver.findOne(existingQuery)
+    if (existing) {
+      const ev = existing.vendorId ? String(existing.vendorId) : null
+      if (ev && ev !== String(vendorId)) {
+        return res.status(409).json({
+          success: false,
+          code: 'DRIVER_EXISTS',
+          message:
+            'Driver with this phone or email is already linked to another vendor',
+          driverId: existing._id
+        })
+      }
+      if (ev === String(vendorId)) {
+        return res.status(400).json({
+          success: false,
+          code: 'ALREADY_ON_VENDOR',
+          message: 'This driver is already linked to your vendor account.'
+        })
+      }
+
+      let driver = existing
+      try {
+        driver = await prepareDriverForVendorLinkSession(existing._id)
+      } catch (prepErr) {
+        const code = prepErr.statusCode || 500
+        return res.status(code).json({
+          success: false,
+          message: prepErr.message
+        })
+      }
+
+      if (!isEligibleStandaloneDriverForVendorLink(driver)) {
+        const missing = getMissingDriverApprovalDocuments(driver)
+        const reasons = []
+        if (driver.isVerified !== true) {
+          reasons.push('driver is not verified by admin')
+        }
+        if (missing.length) {
+          reasons.push(`missing compliance: ${missing.join(', ')}`)
+        }
+        if (driver.assignedFleetVehicleId) {
+          reasons.push(
+            'fleet vehicle still assigned; driver must clear vendor fleet assignment first'
+          )
+        }
+        return res.status(400).json({
+          success: false,
+          code: 'DRIVER_NOT_ELIGIBLE_FOR_LINK',
+          message: `Cannot link this driver: ${reasons.join('; ')}`,
+          driverId: driver._id
+        })
+      }
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'name is required'
+        })
+      }
+
+      const cat = String(req.body.vendorDriverCategory || 'OWN').toUpperCase()
+      if (!['OWN', 'OTHER'].includes(cat)) {
+        return res.status(400).json({
+          message: 'vendorDriverCategory must be OWN or OTHER'
+        })
+      }
+
+      driver.name = String(name).trim()
+      driver.vendorId = vendorId
+      driver.vendorDriverCategory = cat
+      if (!driver.isVerified) {
+        setDriverPendingApproval(driver)
+      }
+      await driver.save()
+
+      await Vendor.findByIdAndUpdate(vendorId, {
+        $inc: { totalDrivers: 1 }
+      })
+
+      await queueAdminNotifyDriverLinkedVendor(driver, vendorId)
+
+      return res.status(200).json({
+        success: true,
+        linkedExisting: true,
+        message: 'Existing driver linked to your vendor',
+        driver: serializeDriverForResponse(driver, req)
+      })
     }
 
-    if (!name || !phone || !password) {
+    if (!name || !password) {
       return res
         .status(400)
         .json({ message: 'name, phone and password are required' })
-    }
-
-    // prevent duplicate phone
-    const existing = await Driver.findOne({ phone })
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        code: 'DRIVER_EXISTS',
-        message: 'Driver with this phone already exists',
-        driverId: existing._id
-      })
     }
 
     const hashedPassword = await bcrypt.hash(password, 10)
@@ -2755,7 +3006,6 @@ exports.addDriver = async (req, res) => {
       approvalWorkflow: buildInitialApprovalWorkflow(vendorId)
     })
 
-    // increment vendor's driver count
     await Vendor.findByIdAndUpdate(vendorId, { $inc: { totalDrivers: 1 } })
 
     setImmediate(() => {
@@ -2769,9 +3019,11 @@ exports.addDriver = async (req, res) => {
       }).catch((e) => logger.error('admin registration notify (vendor addDriver):', e))
     })
 
-    res
-      .status(201)
-      .json({ success: true, message: 'Driver created under vendor', driver: serializeDriverForResponse(driver, req) })
+    res.status(201).json({
+      success: true,
+      message: 'Driver created under vendor',
+      driver: serializeDriverForResponse(driver, req)
+    })
   } catch (error) {
     res.status(500).json({ success: false, message: error.message })
   }
