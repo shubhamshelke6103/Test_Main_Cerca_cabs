@@ -835,13 +835,54 @@ const updateRideDestination = async (req, res) => {
     try {
       const io = getSocketIO()
       if (io) {
-        const destinationUpdateEvent = {
-          ride: refreshedRide,
-          pricing: responsePayload.pricing
+        const rideIdStr = String(refreshedRide._id || rideId)
+        const ridePlain =
+          refreshedRide && typeof refreshedRide.toObject === 'function'
+            ? refreshedRide.toObject({ flattenMaps: true })
+            : refreshedRide
+        let destinationUpdateEvent
+        try {
+          destinationUpdateEvent = JSON.parse(
+            JSON.stringify({
+              ride: ridePlain,
+              pricing: responsePayload.pricing
+            })
+          )
+        } catch (serializeErr) {
+          logger.warn('rideDestinationUpdated: JSON serialize failed, using lean payload', serializeErr)
+          destinationUpdateEvent = {
+            ride: ridePlain,
+            pricing: responsePayload.pricing
+          }
         }
 
-        io.to(`ride_${rideId}`).emit('rideDestinationUpdated', destinationUpdateEvent)
-        io.to(`ride_${rideId}`).emit('rideUpdated', destinationUpdateEvent)
+        const riderIdentifier =
+          refreshedRide && refreshedRide.rider
+            ? refreshedRide.rider._id || refreshedRide.rider
+            : null
+        const driverIdentifier =
+          refreshedRide && refreshedRide.driver
+            ? refreshedRide.driver._id || refreshedRide.driver
+            : null
+        const riderIdStr =
+          riderIdentifier != null ? String(riderIdentifier) : null
+        const driverIdStr =
+          driverIdentifier != null ? String(driverIdentifier) : null
+        const roomName = `ride_${rideIdStr}`
+
+        try {
+          if (riderIdStr) {
+            io.in(`user_${riderIdStr}`).socketsJoin(roomName)
+          }
+          if (driverIdStr) {
+            io.in(`driver_${driverIdStr}`).socketsJoin(roomName)
+          }
+        } catch (joinErr) {
+          logger.warn('Destination update: auto-join ride room failed', { err: joinErr.message })
+        }
+
+        io.to(roomName).emit('rideDestinationUpdated', destinationUpdateEvent)
+        io.to(roomName).emit('rideUpdated', destinationUpdateEvent)
 
         if (refreshedRide.userSocketId) {
           io.to(refreshedRide.userSocketId).emit(
@@ -857,10 +898,32 @@ const updateRideDestination = async (req, res) => {
           )
         }
 
+        if (riderIdStr) {
+          io.to(`user_${riderIdStr}`).emit(
+            'rideDestinationUpdated',
+            destinationUpdateEvent
+          )
+        }
+        if (driverIdStr) {
+          io.to(`driver_${driverIdStr}`).emit(
+            'rideDestinationUpdated',
+            destinationUpdateEvent
+          )
+        }
+
+        logger.info('rideDestinationUpdated emitted', {
+          rideId: rideIdStr,
+          roomName,
+          riderIdStr,
+          driverIdStr,
+          hasUserSocket: Boolean(refreshedRide.userSocketId),
+          hasDriverSocket: Boolean(refreshedRide.driverSocketId)
+        })
+
         io.to('admin').emit('rideStatusUpdated', {
-          rideId,
+          rideId: rideIdStr,
           status: refreshedRide.status,
-          ride: refreshedRide
+          ride: destinationUpdateEvent.ride
         })
         io.to('admin').emit('rideDestinationUpdated', destinationUpdateEvent)
 

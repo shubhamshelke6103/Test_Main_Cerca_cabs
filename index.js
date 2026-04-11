@@ -30,7 +30,7 @@ connectDB()
 ======================= */
 const server = http.createServer(app)
 
-// Initialize Socket.IO FIRST
+// Initialize Socket.IO FIRST (Redis adapter inside enables multi-node emit fan-out)
 initializeSocket(server)
 logger.info('✅ Socket.IO initialized')
 
