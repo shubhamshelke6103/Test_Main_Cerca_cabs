@@ -27,6 +27,7 @@ const {
     sanitizeGoToResponse,
 } = require('../../utils/goToRoute.service.js');
 const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPersistence.js');
+const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify.js');
 const {
     buildInitialApprovalWorkflow,
     getDriverApprovalSummary,
@@ -674,6 +675,16 @@ const addDriver = asyncHandler(async (req, res) => {
         await driverObj.save();
 
         logger.info(`Driver added successfully: ${driverObj.email}`);
+        setImmediate(() => {
+            notifyAdminsRegistrationEvent({
+                type: 'admin_new_driver',
+                title: 'New driver registered',
+                message: `${name} (${phone}) registered and is pending admin approval.`,
+                entityKind: 'driver',
+                entityId: driverObj._id,
+                data: { driverName: name, phone },
+            }).catch((e) => logger.error('admin registration notify (new driver):', e));
+        });
         res.status(201).json({ id: driverObj, message: 'Driver added successfully' });
 });
 
@@ -1472,6 +1483,25 @@ const updateDriverVehicle = async (req, res) => {
         }
 
         logger.info(`Driver vehicle info updated: ${driver.email}`);
+        if (!driver.vendorId) {
+            setImmediate(() => {
+                notifyAdminsRegistrationEvent({
+                    type: 'admin_vehicle_pending',
+                    title: 'Vehicle pending approval',
+                    message: `Driver ${driver.email || driverId}: vehicle ${licensePlate} submitted for admin approval.`,
+                    entityKind: 'vehicle',
+                    entityId: driverId,
+                    path: '/folder/drivers',
+                    data: {
+                        licensePlate,
+                        driverId: String(driverId),
+                        source: 'driver_vehicle',
+                    },
+                }).catch((e) =>
+                    logger.error('admin registration notify (driver vehicle):', e)
+                );
+            });
+        }
         res.status(200).json({ 
             message: `Vehicle submitted for ${driver.vendorId ? 'vendor' : 'admin'} approval successfully`,
             routedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',

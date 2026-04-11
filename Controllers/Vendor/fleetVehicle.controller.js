@@ -1,4 +1,6 @@
 const FleetVehicle = require('../../Models/Vendor/fleetVehicle.model')
+const logger = require('../../utils/logger')
+const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify')
 
 const VEHICLE_DOCUMENT_FIELDS = [
   { field: 'vehicleRc', type: 'RC' },
@@ -105,6 +107,23 @@ exports.createFleetVehicle = async (req, res) => {
       rejectedAt: null,
       rejectionReason: null,
       allowDocumentResubmit: false
+    })
+
+    setImmediate(() => {
+      notifyAdminsRegistrationEvent({
+        type: 'admin_vehicle_pending',
+        title: 'Fleet vehicle pending approval',
+        message: `Fleet vehicle ${fv.make} ${fv.model} (${fv.licensePlate}) submitted for admin approval.`,
+        entityKind: 'vehicle',
+        entityId: fv._id,
+        path: '/folder/vehicles',
+        data: {
+          licensePlate: fv.licensePlate,
+          vendorId: String(vendorId),
+          fleetVehicleId: String(fv._id),
+          source: 'fleet_vehicle',
+        },
+      }).catch((e) => logger.error('admin registration notify (fleet vehicle):', e))
     })
 
     return res.status(201).json({

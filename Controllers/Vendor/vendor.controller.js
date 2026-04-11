@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken')
 const mongoose = require('mongoose')
 const logger = require('../../utils/logger')
 const { queueExternalAlertEmail } = require('../../utils/alerting.service')
+const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
 const { getFleetOnlineHoursSummary } = require('../../utils/driverSession.service')
 const {
@@ -944,6 +945,17 @@ exports.registerVendor = async (req, res) => {
       vendorReviewStatus: 'PENDING'
     })
 
+    setImmediate(() => {
+      notifyAdminsRegistrationEvent({
+        type: 'admin_new_vendor',
+        title: 'New vendor registered',
+        message: `${businessName} (${email}) registered and awaits admin approval.`,
+        entityKind: 'vendor',
+        entityId: vendor._id,
+        data: { businessName, ownerName, email },
+      }).catch((e) => logger.error('admin registration notify (vendor register):', e))
+    })
+
     res.status(201).json({
       success: true,
       message: 'Vendor registered successfully. Awaiting admin approval.',
@@ -1855,6 +1867,29 @@ exports.approveDriverVehicle = async (req, res) => {
       driverId: driver._id.toString()
     })
 
+    const pendingPlate =
+      driver.pendingVehicleInfo?.licensePlate ||
+      pendingVehicle?.licensePlate ||
+      ''
+    setImmediate(() => {
+      notifyAdminsRegistrationEvent({
+        type: 'admin_vehicle_pending',
+        title: 'Vehicle forwarded for admin approval',
+        message: `Driver ${driver.name || driver._id}: vehicle ${pendingPlate || '(pending)'} forwarded by vendor.`,
+        entityKind: 'vehicle',
+        entityId: driver._id,
+        path: '/folder/drivers',
+        data: {
+          licensePlate: pendingPlate,
+          driverId: String(driver._id),
+          vendorId: String(req.user.id),
+          source: 'driver_vehicle_vendor_forwarded',
+        },
+      }).catch((e) =>
+        logger.error('admin registration notify (vendor forward vehicle):', e)
+      )
+    })
+
     return res.status(200).json({
       success: true,
       message: 'Vehicle forwarded to Cerca admin for final approval',
@@ -2722,6 +2757,17 @@ exports.addDriver = async (req, res) => {
 
     // increment vendor's driver count
     await Vendor.findByIdAndUpdate(vendorId, { $inc: { totalDrivers: 1 } })
+
+    setImmediate(() => {
+      notifyAdminsRegistrationEvent({
+        type: 'admin_new_driver',
+        title: 'New vendor driver',
+        message: `${name} (${phone}) was added under a vendor and is in the approval flow.`,
+        entityKind: 'driver',
+        entityId: driver._id,
+        data: { driverName: name, phone, vendorId: String(vendorId) },
+      }).catch((e) => logger.error('admin registration notify (vendor addDriver):', e))
+    })
 
     res
       .status(201)

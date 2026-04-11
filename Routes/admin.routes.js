@@ -36,6 +36,11 @@ const {
     validateTotals,
 } = require('../Controllers/Admin/earningsVerification.controller.js');
 const { listVehicleInventory } = require('../Controllers/Admin/fleetVehicle.controller');
+const {
+  listAdminNotifications,
+  markAdminNotificationRead,
+  markAllAdminNotificationsRead,
+} = require('../Controllers/Admin/adminNotifications.controller.js');
 
 const { authenticateAdmin, requireRole } = require('../utils/adminAuth');
 
@@ -88,5 +93,10 @@ router.post('/earnings/find-missing', findMissingEarningsRecords);
 router.post('/earnings/backfill', triggerBackfill);
 router.post('/earnings/find-incorrect', findIncorrectEarningsRecords);
 router.post('/earnings/validate-totals', validateTotals);
+
+// In-app notifications (JWT admin only; scoped to authenticated admin)
+router.get('/notifications', listAdminNotifications);
+router.patch('/notifications/:id/read', markAdminNotificationRead);
+router.patch('/notifications/read-all', markAllAdminNotificationsRead);
 
 module.exports = router;

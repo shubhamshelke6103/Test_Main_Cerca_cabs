@@ -21,7 +21,7 @@ const notificationSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['ride_request', 'ride_accepted', 'ride_started', 'ride_completed', 'ride_cancelled', 'driver_arrived', 'rating_received', 'emergency', 'system', 'compliance_alert', 'driver_rejection_alert', 'live_location_share', 'ride_destination_updated'],
+        enum: ['ride_request', 'ride_accepted', 'ride_started', 'ride_completed', 'ride_cancelled', 'driver_arrived', 'rating_received', 'emergency', 'system', 'compliance_alert', 'driver_rejection_alert', 'live_location_share', 'ride_destination_updated', 'admin_new_driver', 'admin_new_vendor', 'admin_vehicle_pending'],
         required: true,
     },
     relatedRide: {
