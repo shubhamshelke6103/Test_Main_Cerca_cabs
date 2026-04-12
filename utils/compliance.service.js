@@ -20,11 +20,30 @@ const getStatusForExpiry = expiryDate => {
   return 'valid'
 }
 
+const normalizeComplianceTypeKey = documentType =>
+  String(documentType || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s/g, '_')
+
+/** Aadhaar and PAN are not treated as expiring documents in product or alerts. */
+const isNonExpiringComplianceType = documentType => {
+  const u = normalizeComplianceTypeKey(documentType)
+  return (
+    u === 'AADHAAR' ||
+    u === 'AADHAAR_CARD' ||
+    u === 'PAN' ||
+    u === 'PAN_CARD'
+  )
+}
+
 const syncComplianceStatuses = documents =>
   (documents || []).map(document => {
+    const noExpiry = isNonExpiringComplianceType(document.documentType)
+    const status = noExpiry ? 'valid' : getStatusForExpiry(document.expiryDate)
     const normalized = {
       ...document,
-      status: getStatusForExpiry(document.expiryDate)
+      status
     }
     const baselineDate = document.verifiedAt
       ? new Date(document.verifiedAt)
@@ -73,7 +92,8 @@ const processComplianceAlerts = async () => {
   for (const driver of drivers) {
     let hasChanges = false
     for (const document of driver.complianceDocuments) {
-      const status = getStatusForExpiry(document.expiryDate)
+      const noExpiry = isNonExpiringComplianceType(document.documentType)
+      const status = noExpiry ? 'valid' : getStatusForExpiry(document.expiryDate)
       if (document.status !== status) {
         document.status = status
         hasChanges = true
@@ -105,6 +125,7 @@ const processComplianceAlerts = async () => {
       }
 
       if (
+        !noExpiry &&
         status === 'expiring_soon' &&
         !document.alertSentBeforeExpiryAt
       ) {
@@ -127,7 +148,11 @@ const processComplianceAlerts = async () => {
         hasChanges = true
       }
 
-      if (status === 'expired' && !document.alertSentAfterExpiryAt) {
+      if (
+        !noExpiry &&
+        status === 'expired' &&
+        !document.alertSentAfterExpiryAt
+      ) {
         const message = `${document.documentType} for driver ${driver.name} has expired`
         await notifyAdmins({
           title: 'Driver document expired',
@@ -200,7 +225,8 @@ const processComplianceAlerts = async () => {
   for (const vendor of vendors) {
     let hasChanges = false
     for (const document of vendor.complianceDocuments) {
-      const status = getStatusForExpiry(document.expiryDate)
+      const noExpiry = isNonExpiringComplianceType(document.documentType)
+      const status = noExpiry ? 'valid' : getStatusForExpiry(document.expiryDate)
       if (document.status !== status) {
         document.status = status
         hasChanges = true
@@ -231,7 +257,11 @@ const processComplianceAlerts = async () => {
         }
       }
 
-      if (status === 'expiring_soon' && !document.alertSentBeforeExpiryAt) {
+      if (
+        !noExpiry &&
+        status === 'expiring_soon' &&
+        !document.alertSentBeforeExpiryAt
+      ) {
         const message = `${document.documentType} for vendor ${vendor.businessName} is expiring soon`
         await notifyAdmins({
           title: 'Vendor document expiring soon',
@@ -249,7 +279,11 @@ const processComplianceAlerts = async () => {
         hasChanges = true
       }
 
-      if (status === 'expired' && !document.alertSentAfterExpiryAt) {
+      if (
+        !noExpiry &&
+        status === 'expired' &&
+        !document.alertSentAfterExpiryAt
+      ) {
         const message = `${document.documentType} for vendor ${vendor.businessName} has expired`
         await notifyAdmins({
           title: 'Vendor document expired',

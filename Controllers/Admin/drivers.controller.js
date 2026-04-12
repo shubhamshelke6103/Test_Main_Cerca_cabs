@@ -17,6 +17,7 @@ const {
   DRIVER_APPROVAL_ACTOR,
   setDriverPendingApproval,
 } = require('../../utils/driverApproval.service');
+const { resolveAggregateVehicleStatus: resolveVehicleStatus } = require('../../utils/driverVehicleAggregateStatus.js');
 
 const normalizeStoredDocumentUrl = (req, url) => {
   const rawUrl = String(url || '').trim();
@@ -201,11 +202,6 @@ const normalizeStoredDocumentEntry = (req, document, index = 0) => {
     documentUrl,
   };
 };
-
-const resolveVehicleStatus = (driver) => (
-  driver.pendingVehicleInfo?.approvalStatus ||
-  (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
-);
 
 const buildVehicleSummaryKey = (snapshot) => {
   if (!snapshot) return 'UNKNOWN_VEHICLE';

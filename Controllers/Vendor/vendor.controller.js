@@ -19,6 +19,7 @@ const {
   getFleetOnlineHoursSummary,
   stopDriverOnlineSession
 } = require('../../utils/driverSession.service')
+const { resolveAggregateVehicleStatus: resolveDriverVehicleStatus } = require('../../utils/driverVehicleAggregateStatus.js')
 const {
   REQUIRED_DRIVER_APPROVAL_DOCUMENT_TYPES,
   getMissingDriverApprovalDocuments,
@@ -781,11 +782,6 @@ const normalizeVehicleDocuments = (vehicleInfo, req) => {
     }))
   }
 }
-
-const resolveDriverVehicleStatus = driver => (
-  driver.pendingVehicleInfo?.approvalStatus ||
-  (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
-)
 
 const toPlainDriverVehicleRecord = vehicle =>
   vehicle?.toObject ? vehicle.toObject() : vehicle
@@ -2462,6 +2458,7 @@ exports.deleteVendorDriverVehicle = async (req, res) => {
 exports.rejectDriverVehicle = async (req, res) => {
   try {
     const { reason } = req.body
+    const allowDocumentResubmit = req.body?.allowDocumentResubmit !== false
 
     if (typeof reason !== 'string' || !reason.trim()) {
       return res.status(400).json({
@@ -2502,6 +2499,7 @@ exports.rejectDriverVehicle = async (req, res) => {
       pendingVehicle.rejectedAt = new Date()
       pendingVehicle.approvedAt = null
       pendingVehicle.rejectionReason = reason.trim()
+      pendingVehicle.allowDocumentResubmit = allowDocumentResubmit
       pendingVehicle.isActive = false
     }
 
@@ -2510,7 +2508,8 @@ exports.rejectDriverVehicle = async (req, res) => {
       approvalStatus: 'REJECTED',
       rejectedAt: new Date(),
       approvedAt: null,
-      rejectionReason: reason.trim()
+      rejectionReason: reason.trim(),
+      allowDocumentResubmit
     }
     syncDriverLegacyVehicleState(driver)
     await driver.save()

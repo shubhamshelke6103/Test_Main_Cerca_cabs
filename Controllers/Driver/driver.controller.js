@@ -28,6 +28,7 @@ const {
 } = require('../../utils/goToRoute.service.js');
 const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPersistence.js');
 const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify.js');
+const { resolveAggregateVehicleStatus: resolveVehicleStatus } = require('../../utils/driverVehicleAggregateStatus.js');
 const {
     buildInitialApprovalWorkflow,
     getDriverApprovalSummary,
@@ -328,11 +329,6 @@ const collectVehicleDocuments = (req) => {
         documents,
     };
 };
-
-const resolveVehicleStatus = (driver) => (
-    driver.pendingVehicleInfo?.approvalStatus ||
-    (driver.vehicleInfo || driver.assignedFleetVehicleId ? 'APPROVED' : 'NOT_ADDED')
-);
 
 const toPlainVehicleRecord = (vehicleRecord) => (
     vehicleRecord?.toObject ? vehicleRecord.toObject() : vehicleRecord
@@ -762,7 +758,8 @@ const addDriverDocuments = asyncHandler(async (req, res) => {
         }
 
         const approvalSummary = getDriverApprovalSummary(driver);
-        const shouldReplaceExistingDocuments = approvalSummary.status === DRIVER_APPROVAL_STATUS.REJECTED;
+        const wasRejected = approvalSummary.status === DRIVER_APPROVAL_STATUS.REJECTED;
+        const shouldReplaceExistingDocuments = wasRejected;
 
         if (shouldReplaceExistingDocuments) {
             deleteDriverDocuments(driver.documents || []);
@@ -771,7 +768,11 @@ const addDriverDocuments = asyncHandler(async (req, res) => {
             mergeIdentityDriverDocuments(driver, documentEntries);
         }
 
-        driver.rejectionReason = null;
+        if (wasRejected) {
+            setDriverPendingApproval(driver);
+        } else {
+            driver.rejectionReason = null;
+        }
         await driver.save();
 
         logger.info(`Documents added to driver: ${driver.email}`);
@@ -968,6 +969,9 @@ const updateDriverDocuments = asyncHandler(async (req, res) => {
             });
         }
 
+        const approvalSummaryBefore = getDriverApprovalSummary(driver);
+        const wasRejected = approvalSummaryBefore.status === DRIVER_APPROVAL_STATUS.REJECTED;
+
         const { error, entries: documentEntries, mode } = collectDriverIdentityUploads(req);
         if (error) {
             throw new AppError(error, 400, {
@@ -982,7 +986,11 @@ const updateDriverDocuments = asyncHandler(async (req, res) => {
             mergeIdentityDriverDocuments(driver, documentEntries);
         }
 
-        driver.rejectionReason = null;
+        if (wasRejected && mode === 'legacy') {
+            setDriverPendingApproval(driver);
+        } else if (!wasRejected) {
+            driver.rejectionReason = null;
+        }
         await driver.save();
 
         logger.info(`Driver documents updated successfully: ${driver.email}`);
@@ -1428,7 +1436,7 @@ const logoutDriver = async (req, res) => {
 };
 
 /**
- * @desc    Update driver vehicle information
+ * @desc    Update driver vehicle information (new submission or in-place resubmit after REJECTED)
  * @route   PATCH /drivers/:id/vehicle
  */
 const updateDriverVehicle = async (req, res) => {
@@ -1436,7 +1444,6 @@ const updateDriverVehicle = async (req, res) => {
         const { make, model, year, color, licensePlate, vehicleType } = req.body;
         const driverId = req.params.id;
 
-        // Validate request body early
         if (!make || !model || !year || !color || !licensePlate) {
             return res.status(400).json({
                 message: 'make, model, year, color, and licensePlate are required',
@@ -1451,27 +1458,96 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        // Fetch only the fields needed for validation (not entire driver document)
-        const driver = await Driver.findById(driverId).select('vehicles vendorId email pendingVehicleInfo');
+        const driver = await Driver.findById(driverId);
 
         if (!driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
         const owned = getOwnedVehicleRecords(driver);
+        const plateKey = normalizeLicensePlateKey(licensePlate);
 
-        // Check for pending approval
-        const existingPending = getLatestOwnedVehicleRecord(
+        const existingUnderApproval = getLatestOwnedVehicleRecord(
             driver,
-            vehicle => vehicle.approvalStatus === 'UNDER_APPROVAL'
+            (vehicle) => vehicle.approvalStatus === 'UNDER_APPROVAL'
         );
-        if (existingPending) {
+        if (existingUnderApproval) {
             return res.status(400).json({
                 message: 'A vehicle submission is already pending approval',
             });
         }
 
-        // Check max vehicles limit
+        const target = getPendingOwnedVehicleRecord(driver);
+        const isRejectedResubmit =
+            target &&
+            target.approvalStatus === 'REJECTED' &&
+            target.allowDocumentResubmit !== false;
+
+        if (isRejectedResubmit) {
+            deleteDriverDocuments(target.documents || []);
+            target.make = make;
+            target.model = model;
+            target.year = Number(year);
+            target.color = color;
+            target.licensePlate = licensePlate;
+            target.vehicleType = vehicleType || 'sedan';
+            target.documents = documents;
+            target.approvalStatus = 'UNDER_APPROVAL';
+            target.approvalRoutedTo = driver.vendorId ? 'VENDOR' : 'ADMIN';
+            target.submittedAt = new Date();
+            target.approvedAt = null;
+            target.rejectedAt = null;
+            target.rejectionReason = null;
+            target.allowDocumentResubmit = false;
+            target.vendorPreApprovedAt = null;
+            target.approvedBy = null;
+            target.isActive = false;
+
+            const duplicateOther = owned.some(
+                (v) =>
+                    String(v._id) !== String(target._id) &&
+                    normalizeLicensePlateKey(v.licensePlate) === plateKey &&
+                    (v.approvalStatus === 'APPROVED' || v.approvalStatus === 'UNDER_APPROVAL')
+            );
+            if (duplicateOther) {
+                return res.status(400).json({
+                    message: 'A vehicle with this license plate is already registered or awaiting approval',
+                });
+            }
+
+            syncLegacyVehicleState(driver);
+            driver.updatedAt = new Date();
+            await driver.save();
+
+            logger.info(`Driver vehicle resubmitted in place: ${driver.email} vehicleId=${target._id}`);
+            if (!driver.vendorId) {
+                setImmediate(() => {
+                    notifyAdminsRegistrationEvent({
+                        type: 'admin_vehicle_pending',
+                        title: 'Vehicle pending approval',
+                        message: `Driver ${driver.email || driverId}: vehicle ${licensePlate} resubmitted for admin approval.`,
+                        entityKind: 'vehicle',
+                        entityId: driverId,
+                        path: '/folder/drivers',
+                        data: {
+                            licensePlate,
+                            driverId: String(driverId),
+                            source: 'driver_vehicle_resubmit',
+                        },
+                    }).catch((e) =>
+                        logger.error('admin registration notify (driver vehicle resubmit):', e)
+                    );
+                });
+            }
+
+            const routedTo = driver.vendorId ? 'VENDOR' : 'ADMIN';
+            return res.status(200).json({
+                message: `Vehicle resubmitted for ${driver.vendorId ? 'vendor' : 'admin'} approval successfully`,
+                routedTo,
+                ...serializeVehicleState(driver),
+            });
+        }
+
         if (owned.length >= MAX_DRIVER_OWNED_VEHICLES) {
             return res.status(400).json({
                 message: `You can register at most ${MAX_DRIVER_OWNED_VEHICLES} vehicles`,
@@ -1479,8 +1555,6 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        // Check for duplicate license plate
-        const plateKey = normalizeLicensePlateKey(licensePlate);
         const duplicatePlate = owned.some(
             (v) =>
                 normalizeLicensePlateKey(v.licensePlate) === plateKey &&
@@ -1492,7 +1566,18 @@ const updateDriverVehicle = async (req, res) => {
             });
         }
 
-        // Create the new vehicle object
+        const blockedRejected = getPendingOwnedVehicleRecord(driver);
+        if (
+            blockedRejected &&
+            blockedRejected.approvalStatus === 'REJECTED' &&
+            blockedRejected.allowDocumentResubmit === false
+        ) {
+            return res.status(403).json({
+                message:
+                    'This vehicle was rejected without document resubmit permission. Contact support or your vendor.',
+            });
+        }
+
         const newVehicle = {
             make,
             model,
@@ -1513,25 +1598,10 @@ const updateDriverVehicle = async (req, res) => {
             isActive: false,
         };
 
-        // Use atomic MongoDB update instead of loading entire document
-        const updatedDriver = await Driver.findByIdAndUpdate(
-            driverId,
-            {
-                $push: { vehicles: newVehicle },
-                $set: {
-                    pendingVehicleInfo: {
-                        ...newVehicle,
-                        sourceVehicleId: new mongoose.Types.ObjectId(), // Generate new ObjectId
-                    },
-                    updatedAt: new Date(),
-                },
-            },
-            { new: true, select: 'vehicles pendingVehicleInfo vendorId' }
-        );
-
-        if (!updatedDriver) {
-            return res.status(404).json({ message: 'Driver not found' });
-        }
+        driver.vehicles.push(newVehicle);
+        syncLegacyVehicleState(driver);
+        driver.updatedAt = new Date();
+        await driver.save();
 
         logger.info(`Driver vehicle info updated: ${driver.email}`);
         if (!driver.vendorId) {
@@ -1553,11 +1623,12 @@ const updateDriverVehicle = async (req, res) => {
                 );
             });
         }
-        res.status(200).json({ 
+
+        const routedTo = driver.vendorId ? 'VENDOR' : 'ADMIN';
+        res.status(200).json({
             message: `Vehicle submitted for ${driver.vendorId ? 'vendor' : 'admin'} approval successfully`,
-            routedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',
-            vehicles: updatedDriver.vehicles,
-            pendingVehicleInfo: updatedDriver.pendingVehicleInfo,
+            routedTo,
+            ...serializeVehicleState(driver),
         });
     } catch (error) {
         logger.error('Error updating driver vehicle:', error);
@@ -1872,7 +1943,7 @@ const rejectDriverVehicle = async (req, res) => {
             return res.status(400).json({ message: 'Rejection reason is required' });
         }
 
-        const allowDocumentResubmit = Boolean(req.body?.allowDocumentResubmit);
+        const allowDocumentResubmit = req.body?.allowDocumentResubmit !== false;
         await rejectPendingVehicleForDriver(driver, reason.trim(), allowDocumentResubmit);
         queueDriverVehicleRejectedEmail(driver, reason.trim(), 'ADMIN');
         queueVendorDriverVehicleNotificationEmail(
@@ -1932,7 +2003,7 @@ const rejectDriverVehicleBySubdoc = async (req, res) => {
             return res.status(400).json({ message: 'Rejection reason is required' });
         }
 
-        const allowDocumentResubmit = Boolean(req.body?.allowDocumentResubmit);
+        const allowDocumentResubmit = req.body?.allowDocumentResubmit !== false;
         await rejectPendingVehicleForDriver(
             driver,
             reason.trim(),
@@ -2291,11 +2362,23 @@ const updateDriverComplianceDocuments = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
+        const wasRejected =
+            getDriverApprovalSummary(driver).status === DRIVER_APPROVAL_STATUS.REJECTED;
+        const submitForReview = req.body?.submitForReview === true;
+
         const complianceDocuments = Array.isArray(req.body.complianceDocuments)
             ? req.body.complianceDocuments
             : [];
 
         driver.complianceDocuments = syncComplianceStatuses(complianceDocuments);
+
+        if (
+            wasRejected &&
+            (submitForReview || getMissingDriverApprovalDocuments(driver).length === 0)
+        ) {
+            setDriverPendingApproval(driver);
+        }
+
         await driver.save();
 
         res.status(200).json({
@@ -2309,9 +2392,34 @@ const updateDriverComplianceDocuments = async (req, res) => {
     }
 };
 
+const buildDriverResubmitProfileResponse = async (driver) => {
+    const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
+    const earningsResult = await AdminEarnings.aggregate([
+        { $match: { driverId: driver._id } },
+        { $group: { _id: null, totalEarnings: { $sum: '$driverEarning' } } },
+    ]);
+    const totalEarnings = earningsResult.length > 0 ? earningsResult[0].totalEarnings : 0;
+
+    const totalRides = await Ride.countDocuments({
+        driver: driver._id,
+        status: 'completed',
+    });
+
+    const driverObj = driver.toObject();
+    driverObj.totalEarnings = Math.round(totalEarnings * 100) / 100;
+    driverObj.completedRidesCount = totalRides;
+    delete driverObj.password;
+    driverObj.rejectionReason = driver.rejectionReason ?? null;
+    driverObj.vehicleStatus = resolveVehicleStatus(driver);
+    Object.assign(driverObj, serializeDriverApprovalState(driver));
+
+    return driverObj;
+};
+
 /**
  * @desc    Driver resubmits after REJECTED — reset workflow to PENDING_VENDOR / PENDING_ADMIN
  * @route   POST /drivers/:id/resubmit-approval (authenticated, own id only)
+ * Idempotent: if already PENDING_VENDOR / PENDING_ADMIN, returns 200 with current profile.
  */
 const resubmitDriverApproval = async (req, res) => {
     try {
@@ -2321,6 +2429,14 @@ const resubmitDriverApproval = async (req, res) => {
         }
 
         const summary = getDriverApprovalSummary(driver);
+        if (
+            summary.status === DRIVER_APPROVAL_STATUS.PENDING_VENDOR ||
+            summary.status === DRIVER_APPROVAL_STATUS.PENDING_ADMIN
+        ) {
+            const driverObj = await buildDriverResubmitProfileResponse(driver);
+            return res.status(200).json(driverObj);
+        }
+
         if (summary.status !== DRIVER_APPROVAL_STATUS.REJECTED) {
             return res.status(400).json({
                 message: 'Resubmit is only available after your application was rejected',
@@ -2331,26 +2447,7 @@ const resubmitDriverApproval = async (req, res) => {
         setDriverPendingApproval(driver);
         await driver.save();
 
-        const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
-        const earningsResult = await AdminEarnings.aggregate([
-            { $match: { driverId: driver._id } },
-            { $group: { _id: null, totalEarnings: { $sum: '$driverEarning' } } },
-        ]);
-        const totalEarnings = earningsResult.length > 0 ? earningsResult[0].totalEarnings : 0;
-
-        const totalRides = await Ride.countDocuments({
-            driver: driver._id,
-            status: 'completed',
-        });
-
-        const driverObj = driver.toObject();
-        driverObj.totalEarnings = Math.round(totalEarnings * 100) / 100;
-        driverObj.completedRidesCount = totalRides;
-        delete driverObj.password;
-        driverObj.rejectionReason = driver.rejectionReason ?? null;
-        driverObj.vehicleStatus = resolveVehicleStatus(driver);
-        Object.assign(driverObj, serializeDriverApprovalState(driver));
-
+        const driverObj = await buildDriverResubmitProfileResponse(driver);
         res.status(200).json(driverObj);
     } catch (error) {
         logger.error('Error resubmitting driver approval:', error);

@@ -9,6 +9,7 @@ const {
   getMissingDriverApprovalDocuments,
   getDriverApprovalSummary,
 } = require("../../utils/driverApproval.service");
+const { resolveAggregateVehicleStatus: resolveVendorDriverVehicleStatus } = require("../../utils/driverVehicleAggregateStatus.js");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const ADMIN_VENDOR_FILTER_VALUES = ["ALL", "VERIFIED", "PENDING", "REJECTED"];
@@ -110,10 +111,6 @@ const serializeVendorForResponse = (vendorDoc) => {
 
   return vendor;
 };
-
-const resolveVendorDriverVehicleStatus = (driver) =>
-  driver.pendingVehicleInfo?.approvalStatus ||
-  (driver.vehicleInfo || driver.assignedFleetVehicleId ? "APPROVED" : "NOT_ADDED");
 
 const pickVehicleInfoSummary = (vi) => {
   if (!vi || typeof vi !== "object") return null;
