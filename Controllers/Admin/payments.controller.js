@@ -4,6 +4,7 @@ const WalletTransaction = require('../../Models/User/walletTransaction.model');
 const Payout = require('../../Models/Driver/payout.model');
 const VendorPayout = require('../../Models/Vendor/vendorPayout.model');
 const Vendor = require('../../Models/vendor/vendor.models');
+const { syncVendorFinancialFields } = require('../../Controllers/Vendor/vendor.controller');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const logger = require('../../utils/logger');
 
@@ -261,6 +262,7 @@ const processVendorPayout = async (req, res) => {
     if (notes) payout.notes = notes;
 
     await payout.save();
+    await syncVendorFinancialFields(payout.vendor);
 
     if (vendorAfterCompletion) {
       try {
