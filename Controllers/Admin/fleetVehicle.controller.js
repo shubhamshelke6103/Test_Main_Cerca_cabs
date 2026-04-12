@@ -287,6 +287,28 @@ exports.rejectFleetVehicle = async (req, res) => {
     fv.allowDocumentResubmit = allowDocumentResubmit
     await fv.save()
 
+    setImmediate(async () => {
+      try {
+        const vendor = await Vendor.findById(fv.vendorId).select('businessName ownerName email')
+        if (!vendor?.email) return
+
+        await queueExternalAlertEmail({
+          channel: 'email',
+          to: vendor.email,
+          subject: 'Fleet vehicle rejected',
+          message: `Hi ${vendor.businessName || vendor.ownerName || 'Vendor'}, your fleet vehicle ${fv.make} ${fv.model} (${fv.licensePlate}) has been rejected by Cerca admin. Reason: ${reason}`,
+          metadata: {
+            purpose: 'vendor_fleet_vehicle_rejected',
+            vendorId: fv.vendorId,
+            fleetVehicleId: fv._id,
+            rejectedBy: 'ADMIN'
+          }
+        })
+      } catch (emailErr) {
+        logger.error(`Fleet vehicle rejection email queue error for ${fv._id}: ${emailErr.message}`)
+      }
+    })
+
     logger.info('Fleet vehicle rejected by admin', {
       fleetVehicleId: fv._id.toString(),
       vendorId: fv.vendorId?.toString?.(),

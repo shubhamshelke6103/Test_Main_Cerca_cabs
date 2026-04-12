@@ -1,5 +1,6 @@
 const path = require('path');
 const Driver = require('../../Models/Driver/driver.model');
+const Vendor = require('../../Models/vendor/vendor.models');
 const Ride = require('../../Models/Driver/ride.model');
 const Payout = require('../../Models/Driver/payout.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
@@ -105,6 +106,31 @@ const queueDriverRejectionEmail = (driver, reason) => {
       });
     } catch (emailErr) {
       logger.error(`Driver rejection email queue error for ${driver.email}: ${emailErr.message}`);
+    }
+  });
+};
+
+const queueVendorDriverNotificationEmail = (driver, subject, message, purpose) => {
+  if (!driver?.vendorId) return;
+
+  setImmediate(async () => {
+    try {
+      const vendor = await Vendor.findById(driver.vendorId).select('businessName ownerName email');
+      if (!vendor?.email) return;
+
+      await queueExternalAlertEmail({
+        channel: 'email',
+        to: vendor.email,
+        subject,
+        message,
+        metadata: {
+          purpose,
+          vendorId: vendor._id,
+          driverId: driver._id,
+        },
+      });
+    } catch (emailErr) {
+      logger.error(`Vendor notification email queue error for driver ${driver._id}: ${emailErr.message}`);
     }
   });
 };
@@ -503,7 +529,7 @@ const getDriverDetails = async (req, res) => {
 const approveDriver = async (req, res) => {
   try {
     const { id } = req.params;
-    const driver = await Driver.findById(id).select('complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
+    const driver = await Driver.findById(id).select('email complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });
@@ -520,6 +546,12 @@ const approveDriver = async (req, res) => {
     adminApproveDriver(driver);
     await driver.save();
     queueDriverApprovalEmail(driver);
+    queueVendorDriverNotificationEmail(
+      driver,
+      'Driver approved',
+      `Hi ${driver.name || 'Driver'}'s account has been approved by Cerca admin.`,
+      'vendor_driver_approved'
+    );
 
     res.status(200).json({
       message: 'Driver approved',
@@ -550,6 +582,12 @@ const rejectDriver = async (req, res) => {
     rejectDriverApproval(driver, DRIVER_APPROVAL_ACTOR.ADMIN, reason.trim());
     await driver.save();
     queueDriverRejectionEmail(driver, reason.trim());
+    queueVendorDriverNotificationEmail(
+      driver,
+      'Driver rejected',
+      `Hi, driver ${driver.name || driver._id} has been rejected by Cerca admin. Reason: ${reason.trim()}`,
+      'vendor_driver_rejected'
+    );
 
     res.status(200).json({
       message: 'Driver rejected',
@@ -599,7 +637,7 @@ const verifyDriver = async (req, res) => {
       return res.status(400).json({ message: 'isVerified must be true or false' });
     }
 
-    const driver = await Driver.findById(id).select('complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
+    const driver = await Driver.findById(id).select('email complianceDocuments vendorId approvalWorkflow isVerified isActive rejectionReason createdAt');
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });
@@ -617,6 +655,12 @@ const verifyDriver = async (req, res) => {
       adminApproveDriver(driver);
       await driver.save();
       queueDriverApprovalEmail(driver);
+      queueVendorDriverNotificationEmail(
+        driver,
+        'Driver approved',
+        `Hi, driver ${driver.name || driver._id} has been approved by Cerca admin.`,
+        'vendor_driver_approved'
+      );
     } else {
       setDriverPendingApproval(driver);
       await driver.save();

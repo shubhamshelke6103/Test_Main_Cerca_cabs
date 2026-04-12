@@ -2312,6 +2312,25 @@ exports.rejectDriverVehicle = async (req, res) => {
     syncDriverLegacyVehicleState(driver)
     await driver.save()
 
+    setImmediate(async () => {
+      try {
+        await queueExternalAlertEmail({
+          channel: 'email',
+          to: driver.email,
+          subject: 'Driver vehicle rejected',
+          message: `Hi ${driver.name || 'Driver'}, your vehicle has been rejected by ${req.user.businessName || req.user.ownerName || 'your vendor'}. Reason: ${reason.trim()}. Please update the vehicle information and resubmit for approval.`,
+          metadata: {
+            purpose: 'vendor_driver_vehicle_rejected',
+            driverId: driver._id,
+            vendorId: req.user.id,
+            rejectedBy: 'VENDOR'
+          }
+        })
+      } catch (emailErr) {
+        logger.error(`Vendor driver vehicle rejection email queue error for ${driver.email}: ${emailErr.message}`)
+      }
+    })
+
     return res.status(200).json({
       success: true,
       message: 'Driver vehicle rejected successfully',

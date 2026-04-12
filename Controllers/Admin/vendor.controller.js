@@ -3,6 +3,8 @@ const Vendor = require("../../Models/vendor/vendor.models");
 const VendorPayout = mongoose.model("VendorPayout");
 const Driver = require("../../Models/Driver/driver.model");
 const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
+const logger = require("../../utils/logger");
+const { queueExternalAlertEmail } = require("../../utils/alerting.service");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const ADMIN_VENDOR_FILTER_VALUES = ["ALL", "VERIFIED", "PENDING", "REJECTED"];
@@ -338,6 +340,7 @@ exports.verifyVendor = async (req, res) => {
     vendor.vendorReviewStatus = "APPROVED";
 
     await vendor.save();
+    queueVendorApprovalEmail(vendor);
 
     res.json({
       success: true,
@@ -388,6 +391,7 @@ exports.rejectVendor = async (req, res) => {
     vendor.vendorReviewStatus = "REJECTED";
 
     await vendor.save();
+    queueVendorRejectionEmail(vendor, reason);
 
     res.json({
       success: true,

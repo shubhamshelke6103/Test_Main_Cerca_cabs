@@ -540,6 +540,57 @@ const queueDriverVehicleApprovedEmail = (driver, approvedBy = 'ADMIN') => {
     });
 };
 
+const queueDriverVehicleRejectedEmail = (driver, reason, rejectedBy = 'ADMIN') => {
+    if (!driver?.email) return;
+
+    setImmediate(async () => {
+        try {
+            await queueExternalAlertEmail({
+                channel: 'email',
+                to: driver.email,
+                subject: 'Vehicle rejected',
+                message: `Hi ${driver.name || 'Driver'}, your vehicle has been rejected by ${rejectedBy === 'VENDOR' ? 'your vendor' : 'Cerca admin'}. Reason: ${reason || 'No reason provided'}. Please update your vehicle details and resubmit for approval.`,
+                metadata: {
+                    purpose: 'driver_vehicle_rejected',
+                    driverId: driver._id,
+                    rejectedBy,
+                },
+            });
+        } catch (emailErr) {
+            logger.error(
+                `Driver vehicle rejection email queue error for ${driver.email}: ${emailErr.message}`
+            );
+        }
+    });
+};
+
+const queueVendorDriverVehicleNotificationEmail = (driver, subject, message, purpose) => {
+    if (!driver?.vendorId) return;
+
+    setImmediate(async () => {
+        try {
+            const vendor = await Vendor.findById(driver.vendorId).select('businessName ownerName email');
+            if (!vendor?.email) return;
+
+            await queueExternalAlertEmail({
+                channel: 'email',
+                to: vendor.email,
+                subject,
+                message,
+                metadata: {
+                    purpose,
+                    vendorId: vendor._id,
+                    driverId: driver._id,
+                },
+            });
+        } catch (emailErr) {
+            logger.error(
+                `Vendor driver vehicle notification email queue error for ${driver._id}: ${emailErr.message}`
+            );
+        }
+    });
+};
+
 const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN', vehicleSubdocId = null) => {
     let pendingVehicleRecord;
     if (vehicleSubdocId) {
@@ -1823,6 +1874,13 @@ const rejectDriverVehicle = async (req, res) => {
 
         const allowDocumentResubmit = Boolean(req.body?.allowDocumentResubmit);
         await rejectPendingVehicleForDriver(driver, reason.trim(), allowDocumentResubmit);
+        queueDriverVehicleRejectedEmail(driver, reason.trim(), 'ADMIN');
+        queueVendorDriverVehicleNotificationEmail(
+            driver,
+            'Driver vehicle rejected',
+            `Hi, driver ${driver.name || 'a driver'}'s vehicle has been rejected by Cerca admin. Reason: ${reason.trim()}`,
+            'vendor_driver_vehicle_rejected'
+        );
 
         return res.status(200).json({
             message: 'Driver vehicle rejected successfully',
@@ -1880,6 +1938,13 @@ const rejectDriverVehicleBySubdoc = async (req, res) => {
             reason.trim(),
             allowDocumentResubmit,
             req.params.vehicleId
+        );
+        queueDriverVehicleRejectedEmail(driver, reason.trim(), 'ADMIN');
+        queueVendorDriverVehicleNotificationEmail(
+            driver,
+            'Driver vehicle rejected',
+            `Hi, driver ${driver.name || 'a driver'}'s vehicle has been rejected by Cerca admin. Reason: ${reason.trim()}`,
+            'vendor_driver_vehicle_rejected'
         );
 
         return res.status(200).json({
