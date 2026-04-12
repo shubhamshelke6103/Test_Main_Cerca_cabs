@@ -4,7 +4,6 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const vendorController = require("../../Controllers/Vendor/vendor.controller");
-const vendorPayoutController = require("../../Controllers/Vendor/vendorPayout.controller");
 const fleetVehicleController = require("../../Controllers/Vendor/fleetVehicle.controller");
 const { authenticateVendor } = require("../../utils/vendorAuth");
 const {
@@ -128,10 +127,6 @@ router.get("/bank-account", vendorController.getVendorBankAccountSelf);
 router.post("/bank-account", vendorController.addVendorBankAccountSelf);
 router.put("/bank-account", vendorController.updateVendorBankAccountSelf);
 router.delete("/bank-account", vendorController.deleteVendorBankAccountSelf);
-
-router.get("/payout/available-balance", vendorPayoutController.getVendorPayoutAvailableBalance);
-router.get("/payout/history", vendorPayoutController.getVendorPayoutHistory);
-router.post("/payout/request", vendorPayoutController.requestVendorPayout);
 
 // Legacy paths — vendorId must match authenticated vendor
 router.post('/:vendorId/bank-account', vendorController.addVendorBankAccount);

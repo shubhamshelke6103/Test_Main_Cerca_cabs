@@ -10,7 +10,10 @@ const jwt = require('jsonwebtoken')
 const mongoose = require('mongoose')
 const logger = require('../../utils/logger')
 const { queueExternalAlertEmail } = require('../../utils/alerting.service')
-const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify')
+const {
+  notifyAdminsRegistrationEvent,
+  notifyAdminsVendorPayoutRequested
+} = require('../../utils/adminRegistrationNotify')
 const { syncComplianceStatuses } = require('../../utils/compliance.service')
 const {
   getFleetOnlineHoursSummary,
@@ -3002,6 +3005,17 @@ exports.requestVendorPayout = async (req, res) => {
     })
 
     await syncVendorFinancialFields(vendorId)
+
+    try {
+      await notifyAdminsVendorPayoutRequested({
+        vendorId,
+        businessName: vendor.businessName,
+        amount: requestedAmount,
+        payoutId: payout._id.toString()
+      })
+    } catch (notifyErr) {
+      logger.warn('notifyAdminsVendorPayoutRequested failed:', notifyErr.message)
+    }
 
     return res.status(200).json({
       success: true,

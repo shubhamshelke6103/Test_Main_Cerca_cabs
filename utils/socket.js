@@ -2,6 +2,7 @@ const { createAdapter } = require('@socket.io/redis-adapter')
 const { redis } = require('../config/redis')
 
 const { Server } = require('socket.io')
+const jwt = require('jsonwebtoken')
 const logger = require('./logger')
 const Driver = require('../Models/Driver/driver.model')
 const User = require('../Models/User/user.model')
@@ -255,6 +256,55 @@ function initializeSocket (server) {
         )
       } catch (err) {
         logger.error('adminSupportConnect error:', err)
+      }
+    })
+
+    // ============================
+    // VENDOR CONNECTION (JWT) — room vendor_<id> for payout / alerts
+    // ============================
+    socket.on('vendorConnect', async data => {
+      try {
+        const token = data?.token
+        if (!token || typeof token !== 'string') {
+          logger.warn('vendorConnect: token missing')
+          socket.emit('vendorConnectError', { message: 'Token required' })
+          return
+        }
+
+        const secret = process.env.ACCESS_SECRET
+        if (!secret) {
+          logger.error('vendorConnect: ACCESS_SECRET not set')
+          socket.emit('vendorConnectError', { message: 'Server misconfiguration' })
+          return
+        }
+
+        let decoded
+        try {
+          decoded = jwt.verify(token, secret)
+        } catch (verifyErr) {
+          logger.warn(`vendorConnect: invalid token: ${verifyErr.message}`)
+          socket.emit('vendorConnectError', { message: 'Invalid or expired token' })
+          return
+        }
+
+        if (decoded.role !== 'vendor' || !decoded.id) {
+          socket.emit('vendorConnectError', { message: 'Vendor access only' })
+          return
+        }
+
+        const vendorId = String(decoded.id)
+        socket.data.vendorId = vendorId
+        socket.join(`vendor_${vendorId}`)
+
+        logger.info(
+          `Vendor socket joined room vendor_${vendorId} socketId=${socket.id}`
+        )
+        socket.emit('vendorConnected', { vendorId, ok: true })
+      } catch (err) {
+        logger.error('vendorConnect error:', err)
+        socket.emit('vendorConnectError', {
+          message: 'Failed to register vendor socket'
+        })
       }
     })
 

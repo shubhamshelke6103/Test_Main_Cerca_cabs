@@ -228,6 +228,8 @@ const processVendorPayout = async (req, res) => {
 
     const prevStatus = payout.status;
 
+    let vendorAfterCompletion = null;
+
     if (status === 'COMPLETED' && prevStatus !== 'COMPLETED') {
       const updated = await Vendor.findOneAndUpdate(
         { _id: payout.vendor, walletBalance: { $gte: payout.amount } },
@@ -239,6 +241,7 @@ const processVendorPayout = async (req, res) => {
           message: 'Vendor wallet balance is insufficient to complete this payout',
         });
       }
+      vendorAfterCompletion = updated;
     }
 
     if (
@@ -258,6 +261,24 @@ const processVendorPayout = async (req, res) => {
     if (notes) payout.notes = notes;
 
     await payout.save();
+
+    if (vendorAfterCompletion) {
+      try {
+        const { getSocketIO } = require('../../utils/socket');
+        const io = getSocketIO();
+        if (io) {
+          const vid = String(payout.vendor);
+          io.to(`vendor_${vid}`).emit('vendorPayoutCompleted', {
+            payoutId: String(payout._id),
+            amount: payout.amount,
+            newWalletBalance: vendorAfterCompletion.walletBalance,
+            currency: 'INR',
+          });
+        }
+      } catch (sockErr) {
+        logger.warn('vendorPayoutCompleted socket emit failed:', sockErr.message);
+      }
+    }
 
     res.status(200).json({ message: 'Vendor payout updated', payout });
   } catch (error) {
