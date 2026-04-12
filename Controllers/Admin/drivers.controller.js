@@ -498,7 +498,11 @@ const listDrivers = async (req, res) => {
 const getDriverDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const driver = await Driver.findById(id);
+    const driver = await Driver.findById(id).populate({
+      path: 'vendorId',
+      select:
+        'businessName ownerName email phone address isVerified isActive vendorReviewStatus rejectionReason allowDocumentResubmit commissionType commissionValue walletBalance totalEarnings totalRides',
+    });
 
     if (!driver) {
       return res.status(404).json({ message: 'Driver not found' });

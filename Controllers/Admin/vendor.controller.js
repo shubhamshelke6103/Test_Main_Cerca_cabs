@@ -5,6 +5,10 @@ const Driver = require("../../Models/Driver/driver.model");
 const AdminEarnings = require("../../Models/Admin/adminEarnings.model");
 const logger = require("../../utils/logger");
 const { queueExternalAlertEmail } = require("../../utils/alerting.service");
+const {
+  getMissingDriverApprovalDocuments,
+  getDriverApprovalSummary,
+} = require("../../utils/driverApproval.service");
 
 const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const ADMIN_VENDOR_FILTER_VALUES = ["ALL", "VERIFIED", "PENDING", "REJECTED"];
@@ -107,12 +111,30 @@ const serializeVendorForResponse = (vendorDoc) => {
   return vendor;
 };
 
+const resolveVendorDriverVehicleStatus = (driver) =>
+  driver.pendingVehicleInfo?.approvalStatus ||
+  (driver.vehicleInfo || driver.assignedFleetVehicleId ? "APPROVED" : "NOT_ADDED");
+
+const pickVehicleInfoSummary = (vi) => {
+  if (!vi || typeof vi !== "object") return null;
+  return {
+    make: vi.make || null,
+    model: vi.model || null,
+    year: vi.year || null,
+    licensePlate: vi.licensePlate || null,
+    color: vi.color || null,
+    vehicleType: vi.vehicleType || null,
+  };
+};
+
 const serializeVendorDriverSummary = (driverDoc) => {
   if (!driverDoc) return driverDoc;
 
   const driver = driverDoc.toObject ? driverDoc.toObject() : { ...driverDoc };
+  const approvalWorkflow = getDriverApprovalSummary(driverDoc);
   return {
     id: driver._id,
+    _id: driver._id,
     name: driver.name,
     email: driver.email || null,
     phone: driver.phone || null,
@@ -123,6 +145,28 @@ const serializeVendorDriverSummary = (driverDoc) => {
     rideRejectionCount: Number(driver.rideRejectionCount || 0),
     createdAt: driver.createdAt || null,
     updatedAt: driver.updatedAt || null,
+    approvalStatus: approvalWorkflow.status,
+    approvalWorkflow,
+    missingDocuments: getMissingDriverApprovalDocuments(driverDoc),
+    vehicleStatus: resolveVendorDriverVehicleStatus(driverDoc),
+    vendorDriverCategory: driver.vendorDriverCategory || null,
+    rating:
+      driver.rating != null && !Number.isNaN(Number(driver.rating))
+        ? Number(driver.rating)
+        : null,
+    totalRatings:
+      driver.totalRatings != null && !Number.isNaN(Number(driver.totalRatings))
+        ? Number(driver.totalRatings)
+        : null,
+    vehicleInfo: pickVehicleInfoSummary(driver.vehicleInfo),
+    pendingVehicleInfo: driver.pendingVehicleInfo
+      ? {
+          approvalStatus: driver.pendingVehicleInfo.approvalStatus || null,
+          approvalRoutedTo: driver.pendingVehicleInfo.approvalRoutedTo || null,
+        }
+      : null,
+    isPriorityDriver: Boolean(driver.isPriorityDriver),
+    profilePic: driver.profilePic || null,
   };
 };
 
@@ -266,11 +310,7 @@ exports.getVendorById = async (req, res) => {
     const vendorId = req.params.id;
     const [vendor, associatedDrivers] = await Promise.all([
       Vendor.findById(vendorId).select("-password"),
-      Driver.find({ vendorId })
-        .select(
-          "name email phone isVerified isActive isOnline totalEarnings rideRejectionCount createdAt updatedAt"
-        )
-        .sort({ createdAt: -1 }),
+      Driver.find({ vendorId }).sort({ createdAt: -1 }),
     ]);
 
     if (!vendor) {
