@@ -101,6 +101,7 @@ const uploadLimiterStore = createRedisStore('rl:upload:', 60 * 60 * 1000) // 1 h
 const vendorForgotPasswordStore = createRedisStore('rl:vendor-forgot-pw:', 15 * 60 * 1000) // 15 min
 const vendorResetPasswordStore = createRedisStore('rl:vendor-reset-pw:', 15 * 60 * 1000) // 15 min
 const destinationChangeStore = createRedisStore('rl:destination-change:', 15 * 60 * 1000) // 15 min
+const vendorEarningsExportStore = createRedisStore('rl:vendor-earnings-export:', 15 * 60 * 1000) // 15 min
 
 if (isRedisAvailable()) {
   logger.info('✅ Rate limiters using Redis stores (shared across instances)')
@@ -291,6 +292,35 @@ const destinationChangeLimiter = createRateLimiter(
   'destinationChangeLimiter'
 )
 
+// Vendor CSV export: heavier than normal reads — cap per IP
+const vendorEarningsExportLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many earnings exports. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Vendor earnings export rate limit exceeded for IP: ${req.ip}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many earnings exports. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const vendorEarningsExportLimiter = createRateLimiter(
+  vendorEarningsExportLimiterConfig,
+  vendorEarningsExportStore,
+  'vendorEarningsExportLimiter'
+)
+
 // Ensure all rate limiters are valid middleware functions
 // If any are undefined, replace with no-op middleware
 const ensureMiddleware = (middleware, name) => {
@@ -317,6 +347,10 @@ module.exports = {
   destinationChangeLimiter: ensureMiddleware(
     destinationChangeLimiter,
     'destinationChangeLimiter'
+  ),
+  vendorEarningsExportLimiter: ensureMiddleware(
+    vendorEarningsExportLimiter,
+    'vendorEarningsExportLimiter'
   ),
   createRateLimiter,
   createRedisStore

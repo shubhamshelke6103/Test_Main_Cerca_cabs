@@ -206,6 +206,44 @@ const buildVehicleSnapshotFallback = driver => {
   }
 }
 
+const {
+  clampRideLimit,
+  clampRidePage,
+  parseRideSort,
+  sortRideWiseRows,
+  paginateRideRows,
+  normalizeLicensePlateFilter,
+  dateRangeWarning,
+  buildEarningsCsv,
+  MAX_CSV_RIDE_ROWS
+} = require('../../utils/vendorEarningsReport.util')
+
+const resolveVehicleContextForEarning = (entry, driverDoc) => {
+  const hasStoredSnapshot =
+    entry.vehicleSnapshot &&
+    (entry.vehicleSnapshot.licensePlate ||
+      entry.vehicleSnapshot.make ||
+      entry.vehicleSnapshot.model)
+  const snapshot = hasStoredSnapshot
+    ? { ...entry.vehicleSnapshot }
+    : buildVehicleSnapshotFallback(driverDoc || {})
+  const vehicleKey = buildVehicleSummaryKey(snapshot)
+  return {
+    vehicleKey,
+    snapshot,
+    vehicle: {
+      vehicleKey,
+      licensePlate: snapshot.licensePlate || null,
+      make: snapshot.make || null,
+      model: snapshot.model || null,
+      year: snapshot.year ?? null,
+      color: snapshot.color || null,
+      vehicleType: snapshot.vehicleType || null,
+      vehicleSource: snapshot.source || 'UNKNOWN'
+    }
+  }
+}
+
 const buildVendorDriverRevenueMetrics = ({ driver, earnings = [], vendor }) => {
   const vehicleMap = new Map()
 
@@ -293,50 +331,135 @@ const getVendorBaseContext = async vendorId => {
   }
 }
 
-const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => {
-  const { vendor, driverIds } = await getVendorBaseContext(vendorId)
+const getVendorEarningsReportData = async ({
+  vendorId,
+  startDate,
+  endDate,
+  filterDriverId = null,
+  filterVehicleKey = null,
+  filterLicensePlate = null,
+  ridePage: ridePageRaw,
+  rideLimit: rideLimitRaw,
+  rideSort: rideSortRaw,
+  rideOrder: rideOrderRaw
+}) => {
+  const { vendor, driverIds: baseDriverIds } = await getVendorBaseContext(vendorId)
 
-  if (!vendor || driverIds.length === 0) {
-    return {
-      vendor,
-      summary: {
-        totalGrossRevenue: 0,
-        totalDriverEarnings: 0,
-        totalVendorCommission: 0,
-        totalCancellationFines: 0,
-        totalVendorProfit: 0,
-        totalPlatformFee: 0,
-        rideCount: 0
-      },
-      driverWiseEarnings: [],
-      rideWiseRevenue: []
+  const ridePage = clampRidePage(ridePageRaw)
+  const rideLimit = clampRideLimit(rideLimitRaw)
+  const { rideSort, rideOrder } = parseRideSort(rideSortRaw, rideOrderRaw)
+
+  const empty = {
+    vendor,
+    summary: {
+      totalGrossRevenue: 0,
+      totalDriverEarnings: 0,
+      totalVendorCommission: 0,
+      totalCancellationFines: 0,
+      totalVendorProfit: 0,
+      totalPlatformFee: 0,
+      rideCount: 0
+    },
+    driverWiseEarnings: [],
+    vehicleWiseEarnings: [],
+    rideWiseRevenue: [],
+    rideWiseTotalCount: 0,
+    ridePagination: {
+      page: ridePage,
+      limit: rideLimit,
+      totalPages: 0,
+      sort: rideSort,
+      order: rideOrder
+    },
+    meta: {
+      dateRangeWarning: dateRangeWarning(startDate, endDate),
+      csvTruncated: false,
+      csvRowCount: 0
     }
   }
 
-  const earnings = await AdminEarnings.find(
-    buildVendorEarningsFilter({ driverIds, startDate, endDate })
-  )
+  if (!vendor || baseDriverIds.length === 0) {
+    return { ...empty, _allRidesSorted: [] }
+  }
+
+  let driverIds = baseDriverIds
+  if (filterDriverId) {
+    const fid = String(filterDriverId)
+    if (!mongoose.isValidObjectId(fid)) {
+      return {
+        ...empty,
+        _allRidesSorted: [],
+        meta: { ...empty.meta, invalidDriverFilter: true }
+      }
+    }
+    const allowed = baseDriverIds.some(id => String(id) === fid)
+    if (!allowed) {
+      return {
+        ...empty,
+        _allRidesSorted: [],
+        meta: { ...empty.meta, invalidDriverFilter: true }
+      }
+    }
+    driverIds = [new mongoose.Types.ObjectId(fid)]
+  }
+
+  const mongoFilter = buildVendorEarningsFilter({
+    driverIds,
+    startDate,
+    endDate
+  })
+
+  const earnings = await AdminEarnings.find(mongoFilter)
     .populate('rideId', 'pickupAddress dropoffAddress fare createdAt paymentMethod')
-    .populate('driverId', 'name phone email')
+    .populate({
+      path: 'driverId',
+      select:
+        'name phone email vehicles vehicleInfo assignedFleetVehicleId pendingVehicleInfo',
+      populate: {
+        path: 'assignedFleetVehicleId',
+        select: 'licensePlate make model year color vehicleType approvalStatus'
+      }
+    })
     .sort({ rideDate: -1 })
     .lean()
 
-  const rideWiseRevenue = earnings.map(entry => {
+  const normPlate = normalizeLicensePlateFilter(filterLicensePlate)
+  const vKey =
+    typeof filterVehicleKey === 'string' && filterVehicleKey.trim()
+      ? filterVehicleKey.trim()
+      : null
+
+  const rideWiseFull = []
+
+  for (const entry of earnings) {
+    const driverDoc = entry.driverId
+    const { vehicleKey, vehicle } = resolveVehicleContextForEarning(entry, driverDoc)
+
+    if (vKey && vehicleKey !== vKey) continue
+    if (normPlate) {
+      const p = String(vehicle.licensePlate || '')
+        .replace(/\s+/g, '')
+        .toUpperCase()
+      if (p !== normPlate) continue
+    }
+
     const vendorCommission = calculateVendorCommission(vendor, entry.driverEarning)
     const cancellationFineCredit = roundCurrency(entry.vendorFineCredit || 0)
     const vendorProfit = roundCurrency(vendorCommission + cancellationFineCredit)
-    return {
+
+    rideWiseFull.push({
       earningId: entry._id,
       rideId: entry.rideId?._id || null,
       rideDate: entry.rideDate,
-      driver: entry.driverId
+      driver: driverDoc
         ? {
-            id: entry.driverId._id,
-            name: entry.driverId.name,
-            phone: entry.driverId.phone,
-            email: entry.driverId.email || null
+            id: driverDoc._id,
+            name: driverDoc.name,
+            phone: driverDoc.phone,
+            email: driverDoc.email || null
           }
         : null,
+      vehicle,
       pickupAddress: entry.rideId?.pickupAddress || null,
       dropoffAddress: entry.rideId?.dropoffAddress || null,
       grossRevenue: roundCurrency(entry.grossFare),
@@ -346,12 +469,13 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       cancellationFineCredit,
       vendorProfit,
       settlementType: entry.settlementType || 'completed',
-      paymentStatus: entry.paymentStatus
-    }
-  })
+      paymentStatus: entry.paymentStatus,
+      paymentMethod: entry.rideId?.paymentMethod || null
+    })
+  }
 
   const driverWiseMap = new Map()
-  for (const row of rideWiseRevenue) {
+  for (const row of rideWiseFull) {
     if (!row.driver?.id) continue
     const key = row.driver.id.toString()
     if (!driverWiseMap.has(key)) {
@@ -381,7 +505,52 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
     vendorCommission: roundCurrency(item.vendorCommission)
   }))
 
-  const summary = rideWiseRevenue.reduce(
+  const vehicleWiseMap = new Map()
+  for (const row of rideWiseFull) {
+    const vk = row.vehicle?.vehicleKey || 'UNKNOWN_VEHICLE'
+    if (!vehicleWiseMap.has(vk)) {
+      vehicleWiseMap.set(vk, {
+        vehicleKey: vk,
+        licensePlate: row.vehicle?.licensePlate || null,
+        make: row.vehicle?.make || null,
+        model: row.vehicle?.model || null,
+        year: row.vehicle?.year ?? null,
+        vehicleType: row.vehicle?.vehicleType || null,
+        vehicleSource: row.vehicle?.vehicleSource || 'UNKNOWN',
+        rideCount: 0,
+        grossRevenue: 0,
+        driverEarning: 0,
+        baseVendorCommission: 0,
+        cancellationFines: 0,
+        vendorProfit: 0
+      })
+    }
+    const v = vehicleWiseMap.get(vk)
+    v.rideCount += 1
+    v.grossRevenue += row.grossRevenue || 0
+    v.driverEarning += row.driverEarning || 0
+    v.baseVendorCommission += row.vendorCommission || 0
+    v.cancellationFines += row.cancellationFineCredit || 0
+    v.vendorProfit += row.vendorProfit || 0
+  }
+
+  const vehicleWiseEarnings = Array.from(vehicleWiseMap.values()).map(item => ({
+    vehicleKey: item.vehicleKey,
+    licensePlate: item.licensePlate,
+    make: item.make,
+    model: item.model,
+    year: item.year,
+    vehicleType: item.vehicleType,
+    vehicleSource: item.vehicleSource,
+    rideCount: item.rideCount,
+    grossRevenue: roundCurrency(item.grossRevenue),
+    driverEarning: roundCurrency(item.driverEarning),
+    vendorCommission: roundCurrency(item.baseVendorCommission),
+    cancellationFines: roundCurrency(item.cancellationFines),
+    vendorProfit: roundCurrency(item.vendorProfit)
+  }))
+
+  const summary = rideWiseFull.reduce(
     (acc, row) => {
       acc.totalGrossRevenue += row.grossRevenue || 0
       acc.totalDriverEarnings += row.driverEarning || 0
@@ -403,6 +572,10 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
     }
   )
 
+  const sortedRides = sortRideWiseRows(rideWiseFull, rideSort, rideOrder)
+  const { slice, total } = paginateRideRows(sortedRides, ridePage, rideLimit)
+  const totalPages = total === 0 ? 0 : Math.ceil(total / rideLimit)
+
   return {
     vendor,
     summary: {
@@ -415,7 +588,22 @@ const getVendorEarningsReportData = async ({ vendorId, startDate, endDate }) => 
       rideCount: summary.rideCount
     },
     driverWiseEarnings,
-    rideWiseRevenue
+    vehicleWiseEarnings,
+    rideWiseRevenue: slice,
+    rideWiseTotalCount: total,
+    ridePagination: {
+      page: ridePage,
+      limit: rideLimit,
+      totalPages,
+      sort: rideSort,
+      order: rideOrder
+    },
+    meta: {
+      dateRangeWarning: dateRangeWarning(startDate, endDate),
+      csvTruncated: false,
+      csvRowCount: 0
+    },
+    _allRidesSorted: sortedRides
   }
 }
 
@@ -1485,8 +1673,11 @@ exports.getVendorDrivers = async (req, res) => {
 
     const driverIds = drivers.map(driver => driver._id)
     const earnings = driverIds.length
-      ? await AdminEarnings.find({ driverId: { $in: driverIds } })
-          .select('driverId grossFare driverEarning vehicleSnapshot')
+      ? await AdminEarnings.find({
+          driverId: { $in: driverIds },
+          paymentStatus: 'completed'
+        })
+          .select('driverId grossFare driverEarning vehicleSnapshot vendorFineCredit')
           .lean()
       : []
 
@@ -1514,11 +1705,12 @@ exports.getVendorDrivers = async (req, res) => {
 }
 
 // =============================
-// Get single driver (vendor can view any driver)
+// Get single driver (scoped to authenticated vendor)
 // =============================
 exports.getVendorDriverById = async (req, res) => {
   try {
     const { driverId } = req.params
+    const authVendorId = req.user.id
 
     const driver = await Driver.findById(driverId)
       .select('-password')
@@ -1531,13 +1723,21 @@ exports.getVendorDriverById = async (req, res) => {
       return res.status(404).json({ message: 'Driver not found' })
     }
 
+    const driverVendorRef = driver.vendorId?._id || driver.vendorId
+    if (String(driverVendorRef) !== String(authVendorId)) {
+      return res.status(403).json({ message: 'You can only view drivers registered under your vendor account' })
+    }
+
     const vendor = driver.vendorId?._id
       ? await Vendor.findById(driver.vendorId._id)
           .select('commissionType commissionValue')
           .lean()
       : null
-    const earnings = await AdminEarnings.find({ driverId: driver._id })
-      .select('driverId grossFare driverEarning vehicleSnapshot')
+    const earnings = await AdminEarnings.find({
+      driverId: driver._id,
+      paymentStatus: 'completed'
+    })
+      .select('driverId grossFare driverEarning vehicleSnapshot vendorFineCredit')
       .lean()
 
     res.json({
@@ -2458,35 +2658,138 @@ exports.getVendorTotalRides = async (req, res) => {
 }
 
 exports.getVendorEarningsReport = async (req, res) => {
+  const started = Date.now()
   try {
     const vendorId = req.user.id
-    const { startDate, endDate } = req.query
+    const {
+      startDate,
+      endDate,
+      driverId: filterDriverId,
+      vehicleKey,
+      licensePlate,
+      ridePage,
+      rideLimit,
+      rideSort,
+      rideOrder
+    } = req.query
 
     const report = await getVendorEarningsReportData({
       vendorId,
       startDate,
-      endDate
+      endDate,
+      filterDriverId: filterDriverId || null,
+      filterVehicleKey: vehicleKey || null,
+      filterLicensePlate: licensePlate || null,
+      ridePage,
+      rideLimit,
+      rideSort,
+      rideOrder
+    })
+
+    if (report.meta?.invalidDriverFilter) {
+      return res.status(403).json({
+        success: false,
+        message: 'Driver not found or not registered under your vendor account'
+      })
+    }
+
+    const { _allRidesSorted, ...publicReport } = report
+
+    logger.info('vendor_earnings_report', {
+      vendorId: String(vendorId),
+      durationMs: Date.now() - started,
+      rideTotal: report.rideWiseTotalCount,
+      driverRows: report.driverWiseEarnings?.length ?? 0,
+      vehicleRows: report.vehicleWiseEarnings?.length ?? 0
     })
 
     res.status(200).json({
       success: true,
       data: {
         vendor: {
-          id: report.vendor?._id,
-          businessName: report.vendor?.businessName || null,
-          commissionType: report.vendor?.commissionType || null,
-          commissionValue: report.vendor?.commissionValue || 0
+          id: publicReport.vendor?._id,
+          businessName: publicReport.vendor?.businessName || null,
+          commissionType: publicReport.vendor?.commissionType || null,
+          commissionValue: publicReport.vendor?.commissionValue || 0
         },
         filters: {
           startDate: startDate || null,
           endDate: endDate || null,
+          driverId: filterDriverId || null,
+          vehicleKey: vehicleKey || null,
+          licensePlate: licensePlate || null,
           paymentStatus: 'completed'
         },
-        summary: report.summary,
-        driverWiseEarnings: report.driverWiseEarnings,
-        rideWiseRevenue: report.rideWiseRevenue
+        meta: publicReport.meta,
+        summary: publicReport.summary,
+        driverWiseEarnings: publicReport.driverWiseEarnings,
+        vehicleWiseEarnings: publicReport.vehicleWiseEarnings,
+        rideWiseRevenue: publicReport.rideWiseRevenue,
+        rideWiseTotalCount: publicReport.rideWiseTotalCount,
+        ridePagination: publicReport.ridePagination
       }
     })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    })
+  }
+}
+
+exports.getVendorEarningsExport = async (req, res) => {
+  const started = Date.now()
+  try {
+    const vendorId = req.user.id
+    const {
+      startDate,
+      endDate,
+      driverId: filterDriverId,
+      vehicleKey,
+      licensePlate,
+      rideSort,
+      rideOrder
+    } = req.query
+
+    const report = await getVendorEarningsReportData({
+      vendorId,
+      startDate,
+      endDate,
+      filterDriverId: filterDriverId || null,
+      filterVehicleKey: vehicleKey || null,
+      filterLicensePlate: licensePlate || null,
+      ridePage: 1,
+      rideLimit: MAX_CSV_RIDE_ROWS,
+      rideSort: rideSort || 'rideDate',
+      rideOrder: rideOrder || 'desc'
+    })
+
+    if (report.meta?.invalidDriverFilter) {
+      return res.status(403).json({
+        success: false,
+        message: 'Driver not found or not registered under your vendor account'
+      })
+    }
+
+    const allSorted = report._allRidesSorted || []
+    const truncated = allSorted.length > MAX_CSV_RIDE_ROWS
+    const csvRows = truncated ? allSorted.slice(0, MAX_CSV_RIDE_ROWS) : allSorted
+    const csv = buildEarningsCsv(csvRows)
+
+    logger.info('vendor_earnings_export', {
+      vendorId: String(vendorId),
+      durationMs: Date.now() - started,
+      rowCount: csvRows.length,
+      truncated
+    })
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="vendor-earnings-rides.csv"')
+    if (truncated) {
+      res.setHeader('X-Export-Truncated', 'true')
+      res.setHeader('X-Export-Total-Rides', String(allSorted.length))
+    }
+    res.status(200).send(`\ufeff${csv}`)
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -3115,6 +3418,15 @@ exports.blockDriver = async (req, res) => {
         .json({ message: 'Driver not found or not under your vendor account' })
     }
 
+    if (!driver.isVerified) {
+      return res.status(403).json({
+        success: false,
+        code: 'DRIVER_NOT_VERIFIED',
+        message:
+          'Driver must be verified by the platform before you can block or unblock.',
+      })
+    }
+
     driver.isActive = false
     await driver.save()
 
@@ -3138,6 +3450,15 @@ exports.unblockDriver = async (req, res) => {
       return res
         .status(404)
         .json({ message: 'Driver not found or not under your vendor account' })
+    }
+
+    if (!driver.isVerified) {
+      return res.status(403).json({
+        success: false,
+        code: 'DRIVER_NOT_VERIFIED',
+        message:
+          'Driver must be verified by the platform before you can block or unblock.',
+      })
     }
 
     driver.isActive = true

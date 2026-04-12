@@ -10,6 +10,7 @@ const { authenticateVendor } = require("../../utils/vendorAuth");
 const {
   vendorForgotPasswordLimiter,
   vendorResetPasswordLimiter,
+  vendorEarningsExportLimiter,
 } = require("../../middleware/rateLimiter");
 
 const vendorDocsDir = path.join(__dirname, "../../uploads/vendorDocuments");
@@ -108,6 +109,11 @@ router.post(
 router.get("/dashboard/:vendorId",  vendorController.getDashboardStats);
 router.get("/total-rides", vendorController.getVendorTotalRides);
 router.get("/earnings-report", vendorController.getVendorEarningsReport);
+router.get(
+  "/earnings-export",
+  vendorEarningsExportLimiter,
+  vendorController.getVendorEarningsExport
+);
 router.get("/driver-wise-earnings", vendorController.getVendorDriverWiseEarnings);
 router.get("/payout/available-balance", vendorController.getVendorAvailableBalance);
 router.post("/payout/request", vendorController.requestVendorPayout);
