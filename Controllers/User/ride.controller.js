@@ -133,6 +133,13 @@ const normalizeLocationInput = (location, fieldName) => {
   throw new Error(`Invalid ${fieldName} format`)
 }
 
+const normalizeServiceName = (serviceName) => {
+  if (serviceName === undefined || serviceName === null) {
+    return ''
+  }
+  return String(serviceName).toLowerCase().trim().replace(/\s+/g, ' ')
+}
+
 const resolveVehiclePricingConfig = (ride, settings) => {
   const vehicleServiceKey =
     ride.vehicleService || mapServiceToVehicleService(ride.service)
@@ -409,11 +416,25 @@ const createRide = asyncHandler(async (req, res) => {
     // ============================
     // Service Validation
     // ============================
-    const selectedService = rideData.service?.toLowerCase()
+    const selectedService = normalizeServiceName(rideData.service)
 
-    const service = settings.services.find(
-      s => s.name.toLowerCase() === selectedService
+    let service = settings.services?.find(
+      (s) => normalizeServiceName(s.name) === selectedService
     )
+
+    if (!service && selectedService) {
+      const vehicleServiceKey = mapServiceToVehicleService(selectedService)
+      const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
+      if (vehicleService && vehicleService.enabled !== false) {
+        service = {
+          name: vehicleService.name,
+          price: vehicleService.price || 0
+        }
+        logger.info(
+          `Fallback matched ride service "${rideData.service}" to vehicleService ${vehicleServiceKey}`
+        )
+      }
+    }
 
     if (!service) {
       throw new AppError('Invalid service selected', 400, {
@@ -1039,8 +1060,16 @@ const getRidesByDriverId = async (req, res) => {
 
 // Search for nearby drivers based on user location
 const searchRide = async (req, res) => {
-  const { pickupLocation } = req.body // User's pickup location (lat, lon)
-  const { lat, lon } = pickupLocation
+  const { pickupLocation } = req.body // User's pickup location
+  const lat = pickupLocation?.lat ?? pickupLocation?.latitude
+  const lon = pickupLocation?.lon ?? pickupLocation?.longitude
+
+  if (lat === undefined || lon === undefined) {
+    return res.status(400).json({
+      success: false,
+      message: 'pickupLocation must include lat/lon or latitude/longitude'
+    })
+  }
 
   try {
     const nearbyDrivers = await Driver.find({

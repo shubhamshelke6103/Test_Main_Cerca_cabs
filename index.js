@@ -117,7 +117,7 @@ app.use('/admin/support', require('./Routes/Admin/support.routes'))
 app.use('/admin/vendors', require('./Routes/Admin/vendor.routes'))
 app.use('/admin/fleet-vehicles', require('./Routes/Admin/fleetVehicle.routes'))
 
-app.use('/settings', require('./Routes/admin.routes'))
+app.use('/settings', require('./Routes/settings.routes'))
 app.use('/coupons', require('./Routes/coupon.routes'))
 app.use('/address', require('./Routes/User/address.route'))
 app.use('/notifications', require('./Routes/User/notification.routes'))
