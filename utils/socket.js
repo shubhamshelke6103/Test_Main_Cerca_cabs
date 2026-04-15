@@ -3462,24 +3462,44 @@ function initializeSocket (server) {
           return
         }
 
-        // Verify user/driver has access to this ride
-        const userIdToCheck = userId || driverId
-        const userTypeToCheck = userType || (userId ? 'User' : 'Driver')
+        // Normalize incoming user type and participant identifier
+        const normalizedUserType = userType
+          ? String(userType).trim().toLowerCase()
+          : null
+        const inferredUserType = normalizedUserType === 'driver' ? 'Driver' : 'User'
+        const participantId = inferredUserType === 'Driver' ? driverId || userId : userId || driverId
 
-        if (userTypeToCheck === 'User') {
-          const rideUserId = ride.rider?.toString() || ride.rider
-          if (rideUserId !== userIdToCheck) {
+        if (!participantId) {
+          logger.warn(
+            '⚠️ [Socket] joinRideRoom: userId or driverId is required'
+          )
+          socket.emit('roomJoinError', {
+            message: 'User/driver identifier is required'
+          })
+          return
+        }
+
+        // Create normalized ride participant IDs for comparison
+        const rideRiderId = ride.rider
+          ? String(ride.rider._id || ride.rider)
+          : null
+        const rideDriverId = ride.driver
+          ? String(ride.driver._id || ride.driver)
+          : null
+        const requestedParticipantId = String(participantId)
+
+        if (inferredUserType === 'User') {
+          if (rideRiderId !== requestedParticipantId) {
             logger.warn(
-              `⚠️ [Socket] joinRideRoom: User ${userIdToCheck} does not have access to ride ${rideId}`
+              `⚠️ [Socket] joinRideRoom: User ${requestedParticipantId} does not have access to ride ${rideId}`
             )
             socket.emit('roomJoinError', { message: 'Access denied' })
             return
           }
-        } else if (userTypeToCheck === 'Driver') {
-          const rideDriverId = ride.driver?.toString() || ride.driver
-          if (rideDriverId !== userIdToCheck) {
+        } else {
+          if (rideDriverId !== requestedParticipantId) {
             logger.warn(
-              `⚠️ [Socket] joinRideRoom: Driver ${userIdToCheck} does not have access to ride ${rideId}`
+              `⚠️ [Socket] joinRideRoom: Driver ${requestedParticipantId} does not have access to ride ${rideId}`
             )
             socket.emit('roomJoinError', { message: 'Access denied' })
             return
@@ -3499,7 +3519,7 @@ function initializeSocket (server) {
         }
 
         logger.info(`✅ [Socket] Socket ${socket.id} joined room: ${roomName}`)
-        logger.info(`   User/Driver: ${userIdToCheck} (${userTypeToCheck})`)
+        logger.info(`   User/Driver: ${requestedParticipantId} (${inferredUserType})`)
         logger.info(`   Ride Status: ${ride.status}`)
         logger.info(`   Total rooms for socket: ${socket.data.rooms.length}`)
 
