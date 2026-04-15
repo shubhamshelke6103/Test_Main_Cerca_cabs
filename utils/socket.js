@@ -3543,13 +3543,6 @@ function initializeSocket (server) {
 
     socket.on('leaveRideRoom', async data => {
       try {
-        logger.info('🚪 ========================================')
-        logger.info('🚪 [Socket] leaveRideRoom event received')
-        logger.info('🚪 ========================================')
-        logger.info(`🆔 Ride ID: ${data?.rideId}`)
-        logger.info(`🔌 Socket ID: ${socket.id}`)
-        logger.info(`⏰ Timestamp: ${new Date().toISOString()}`)
-
         const { rideId } = data || {}
 
         if (!rideId) {
@@ -3557,6 +3550,41 @@ function initializeSocket (server) {
           socket.emit('roomLeaveError', { message: 'Ride ID is required' })
           return
         }
+
+        if (!/^[0-9a-fA-F]{24}$/.test(rideId)) {
+          logger.warn(
+            `⚠️ [Socket] leaveRideRoom: Invalid rideId format: ${rideId}`
+          )
+          socket.emit('roomLeaveError', { message: 'Invalid ride ID format' })
+          return
+        }
+
+        const ride = await Ride.findById(rideId).select('status')
+        if (!ride) {
+          logger.warn(
+            `⚠️ [Socket] leaveRideRoom: Ride not found - rideId: ${rideId}`
+          )
+          socket.emit('roomLeaveError', { message: 'Ride not found' })
+          return
+        }
+
+        const activeStatuses = ['requested', 'accepted', 'arrived', 'in_progress']
+        if (activeStatuses.includes(ride.status)) {
+          logger.warn(
+            `⚠️ [Socket] leaveRideRoom ignored because ride ${rideId} is active (status: ${ride.status})`
+          )
+          socket.emit('roomLeaveError', {
+            message: 'Cannot leave ride room while ride is active'
+          })
+          return
+        }
+
+        logger.info('🚪 ========================================')
+        logger.info('🚪 [Socket] leaveRideRoom event received')
+        logger.info('🚪 ========================================')
+        logger.info(`🆔 Ride ID: ${rideId}`)
+        logger.info(`🔌 Socket ID: ${socket.id}`)
+        logger.info(`⏰ Timestamp: ${new Date().toISOString()}`)
 
         // Leave socket from room
         const roomName = `ride_${rideId}`
