@@ -65,6 +65,20 @@ const {
 } = require('./rideContactPrivacy.service')
 
 let io
+const DISCONNECT_GRACE_MS = Number(process.env.SOCKET_DISCONNECT_GRACE_MS || 45000)
+const pendingUserDisconnects = new Map()
+const pendingDriverDisconnects = new Map()
+
+const clearPendingDisconnect = (store, key, label) => {
+  if (!key) return
+  const pending = store.get(String(key))
+  if (!pending) return
+  clearTimeout(pending.timer)
+  store.delete(String(key))
+  logger.info(
+    `[SocketGrace] Reconnect detected, cancelled pending ${label} cleanup id=${key}`
+  )
+}
 
 const maskName = value => {
   if (!value) return null
@@ -895,6 +909,7 @@ function initializeSocket (server) {
           logger.warn('riderConnect: userId is missing')
           return
         }
+        clearPendingDisconnect(pendingUserDisconnects, userId, 'user')
 
         // Check if user already has a socketId (reconnection scenario)
         const currentUser = await User.findById(userId)
@@ -976,6 +991,7 @@ function initializeSocket (server) {
           logger.warn('driverConnect: driverId is missing')
           return
         }
+        clearPendingDisconnect(pendingDriverDisconnects, driverId, 'driver')
 
         // ============================
         // RECONNECTION HANDLING
@@ -4199,54 +4215,93 @@ function initializeSocket (server) {
       try {
         logger.info(`Socket disconnecting - socketId: ${socket.id}`)
 
-        // ============================
-        // CLEANUP USER SOCKET (DB SAFE)
-        // ============================
-        const userResult = await User.findOneAndUpdate(
-          { socketId: socket.id },
-          { $unset: { socketId: 1 } },
-          { new: true }
-        )
-
-        if (userResult) {
-          logger.info(
-            `User socket cleaned up - userId: ${userResult._id}, socketId: ${socket.id}`
-          )
-        }
-
-        // ============================
-        // CLEANUP DRIVER SOCKET (DB + REDIS)
-        // ============================
         const driverBySocket = await Driver.findOne({ socketId: socket.id })
-        let driverResult = null
-        if (driverBySocket) {
-          try {
-            await stopDriverOnlineSession(driverBySocket._id, 'socket_disconnect')
-          } catch (sessionErr) {
-            logger.error('disconnect stopDriverOnlineSession:', sessionErr)
+        const userBySocket = await User.findOne({ socketId: socket.id }).select('_id socketId')
+
+        if (userBySocket) {
+          const userId = String(userBySocket._id)
+          const prior = pendingUserDisconnects.get(userId)
+          if (prior) {
+            clearTimeout(prior.timer)
           }
-          driverResult = await Driver.findByIdAndUpdate(
-            driverBySocket._id,
-            {
-              $unset: { socketId: 1 },
-              lastSeen: new Date()
-            },
-            { new: true }
+          const timer = setTimeout(async () => {
+            pendingUserDisconnects.delete(userId)
+            try {
+              const userResult = await User.findOneAndUpdate(
+                { _id: userId, socketId: socket.id },
+                { $unset: { socketId: 1 } },
+                { new: true }
+              )
+              if (userResult) {
+                logger.info(
+                  `[SocketGrace] User socket cleaned after grace - userId: ${userResult._id}, socketId: ${socket.id}`
+                )
+              }
+            } catch (cleanupErr) {
+              logger.error('[SocketGrace] user cleanup error:', cleanupErr)
+            }
+          }, DISCONNECT_GRACE_MS)
+
+          pendingUserDisconnects.set(userId, { timer, socketId: socket.id })
+          logger.info(
+            `[SocketGrace] Scheduled user cleanup userId=${userId} socketId=${socket.id} graceMs=${DISCONNECT_GRACE_MS}`
           )
         }
 
-        if (driverResult) {
+        if (driverBySocket) {
+          const driverId = String(driverBySocket._id)
+          const prior = pendingDriverDisconnects.get(driverId)
+          if (prior) {
+            clearTimeout(prior.timer)
+          }
+          const timer = setTimeout(async () => {
+            pendingDriverDisconnects.delete(driverId)
+            try {
+              const stillSameSocket = await Driver.findOne({
+                _id: driverId,
+                socketId: socket.id
+              }).select('_id')
+              if (!stillSameSocket) {
+                logger.info(
+                  `[SocketGrace] Driver reconnected before cleanup - driverId=${driverId}`
+                )
+                return
+              }
+
+              try {
+                await stopDriverOnlineSession(driverId, 'socket_disconnect_timeout')
+              } catch (sessionErr) {
+                logger.error('[SocketGrace] stopDriverOnlineSession error:', sessionErr)
+              }
+
+              const driverResult = await Driver.findByIdAndUpdate(
+                driverId,
+                {
+                  $unset: { socketId: 1 },
+                  lastSeen: new Date()
+                },
+                { new: true }
+              )
+
+              if (!driverResult) return
+
+              logger.info(
+                `[SocketGrace] Driver socket cleaned after grace - driverId: ${driverResult._id}, socketId: ${socket.id}`
+              )
+
+              await redis.del(`driver:${driverResult._id}`)
+              io.to('admin').emit('driverDisconnect', {
+                driverId: driverResult._id
+              })
+            } catch (cleanupErr) {
+              logger.error('[SocketGrace] driver cleanup error:', cleanupErr)
+            }
+          }, DISCONNECT_GRACE_MS)
+
+          pendingDriverDisconnects.set(driverId, { timer, socketId: socket.id })
           logger.info(
-            `Driver socket cleaned up - driverId: ${driverResult._id}, socketId: ${socket.id}`
+            `[SocketGrace] Scheduled driver cleanup driverId=${driverId} socketId=${socket.id} graceMs=${DISCONNECT_GRACE_MS}`
           )
-
-          // Remove realtime presence from Redis
-          await redis.del(`driver:${driverResult._id}`)
-
-          // Optional: notify admin panel
-          io.to('admin').emit('driverDisconnect', {
-            driverId: driverResult._id
-          })
         }
 
         // ============================
