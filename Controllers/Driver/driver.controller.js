@@ -882,67 +882,6 @@ const rejectPendingVehicleForDriver = async (
 };
 
 /**
- * @desc    Add a new driver
- * @route   POST /drivers
- */
-const addDriver = asyncHandler(async (req, res) => {
-        const { name, password, location } = req.body;
-        const phoneResult = normalizeMobileDigits(req.body.phone);
-        if (phoneResult.error || !phoneResult.value) {
-            throw new AppError(phoneResult.error || 'Phone number is required', 400, {
-                code: 'INVALID_PHONE_NUMBER',
-            });
-        }
-        const phone = phoneResult.value;
-        const emailResult = normalizeEmail(req.body.email);
-        if (emailResult.error) {
-            throw new AppError(emailResult.error, 400, {
-                code: 'INVALID_EMAIL',
-            });
-        }
-        const email = emailResult.value;
-
-        console.log('Received driver data:');
-        console.log(req.body);
-        
-        let driver = await Driver.findOne({ phone });
-        if (driver) {
-            throw new AppError('Driver with this phone number already exists', 400, {
-                code: 'DRIVER_ALREADY_EXISTS',
-            });
-        }
-        // Hash the password
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        // Create a new driver
-        const driverObj = new Driver({
-            name,
-            email,
-            phone,
-            password: hashedPassword,
-            location,
-            documents: [], // Initialize with an empty array
-            approvalWorkflow: buildInitialApprovalWorkflow(null),
-            vendorDriverCategory: 'SELF',
-        });
-
-        await driverObj.save();
-
-        logger.info(`Driver added successfully: ${driverObj.email}`);
-        setImmediate(() => {
-            notifyAdminsRegistrationEvent({
-                type: 'admin_new_driver',
-                title: 'New driver registered',
-                message: `${name} (${phone}) registered and is pending admin approval.`,
-                entityKind: 'driver',
-                entityId: driverObj._id,
-                data: { driverName: name, phone },
-            }).catch((e) => logger.error('admin registration notify (new driver):', e));
-        });
-        res.status(201).json({ id: driverObj, message: 'Driver added successfully' });
-});
-
-/**
  * @desc    Add documents to a driver's documents array
  * @route   POST /drivers/:id/documents
  */
