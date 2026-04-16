@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const logger = require('./utils/logger');
 
 const mongoUri = process.env.MONGODB_URI ||
-    "mongodb+srv://cercacars:8UJAiLQ4bGkTBIat@cluster0.bvbsosh.mongodb.net/demo_Cerca_API?retryWrites=true&w=majority&appName=Cluster0";
+    // "mongodb+srv://cercacars:8UJAiLQ4bGkTBIat@cluster0.bvbsosh.mongodb.net/demo_Cerca_API?retryWrites=true&w=majority&appName=Cluster0";
+    "mongodb+srv://cercacabservices_db_user:ECERfkDQBPE0DC1x@cluster0.2pi81jm.mongodb.net/cerca"
 
 mongoose.connection.on('connected', () => {
     logger.info('🟢 MongoDB connected');
