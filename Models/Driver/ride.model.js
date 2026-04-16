@@ -100,7 +100,26 @@ const rideSchema = new mongoose.Schema(
     userSocketId: String,
 
     fare: Number,
+    estimatedDistanceInKm: Number,
+    actualDistanceInKm: Number,
     distanceInKm: Number,
+    routePoints: [
+      {
+        type: {
+          type: String,
+          enum: ['Point'],
+          default: 'Point'
+        },
+        coordinates: {
+          type: [Number],
+          required: true
+        },
+        recordedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }
+    ],
 
     status: {
       type: String,

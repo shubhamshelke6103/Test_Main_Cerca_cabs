@@ -410,6 +410,7 @@ const createRide = asyncHandler(async (req, res) => {
       dropoffLng
     )
 
+    rideData.estimatedDistanceInKm = distance
     rideData.distanceInKm = distance
 
 

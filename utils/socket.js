@@ -24,6 +24,7 @@ const {
   startRide,
   completeRide,
   createRide,
+  appendRideRoutePoint,
   setUserSocket,
   setDriverSocket,
   searchNearbyDrivers,
@@ -1256,6 +1257,22 @@ function initializeSocket (server) {
         // PERSIST LOCATION (MongoDB)
         // ============================
         await updateDriverLocation(data.driverId, data.location)
+
+        // ============================
+        // PERSIST ROUTE POINT TO THE RIDE
+        // ============================
+        if (data.rideId) {
+          try {
+            const ride = await Ride.findById(data.rideId).select('status')
+            if (ride?.status === 'in_progress') {
+              await appendRideRoutePoint(data.rideId, data.location)
+            }
+          } catch (routeError) {
+            logger.warn(
+              `driverLocationUpdate: Failed to append route point for ride ${data.rideId}: ${routeError.message}`
+            )
+          }
+        }
 
         // ============================
         // REALTIME LOCATION (Redis) — non-fatal if Mongo already saved
@@ -2598,6 +2615,19 @@ function initializeSocket (server) {
 
         const startedRide = await startRide(rideId)
         await updateRideStartTime(rideId)
+
+        if (
+          startedRide.driver?.location?.coordinates?.length === 2 &&
+          startedRide.status === 'in_progress'
+        ) {
+          try {
+            await appendRideRoutePoint(rideId, startedRide.driver.location)
+          } catch (routeError) {
+            logger.warn(
+              `rideStarted: Failed to append start route point for ride ${rideId}: ${routeError.message}`
+            )
+          }
+        }
 
         logger.info(`Ride started successfully - rideId: ${rideId}`)
 

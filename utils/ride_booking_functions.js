@@ -885,6 +885,63 @@ const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
   return R * c
 }
 
+const calculateRouteDistanceInKm = routePoints => {
+  if (!Array.isArray(routePoints) || routePoints.length < 2) {
+    return 0
+  }
+
+  let totalDistance = 0
+  for (let i = 1; i < routePoints.length; i++) {
+    const prev = routePoints[i - 1]
+    const next = routePoints[i]
+    if (
+      !prev?.coordinates ||
+      !next?.coordinates ||
+      prev.coordinates.length < 2 ||
+      next.coordinates.length < 2
+    ) {
+      continue
+    }
+
+    const [prevLng, prevLat] = prev.coordinates
+    const [nextLng, nextLat] = next.coordinates
+    totalDistance += calculateHaversineDistance(
+      prevLat,
+      prevLng,
+      nextLat,
+      nextLng
+    )
+  }
+
+  return Math.round(totalDistance * 100) / 100
+}
+
+const appendRideRoutePoint = async (rideId, location) => {
+  try {
+    const coordinates = toLngLat(location)
+    if (!coordinates || coordinates.length !== 2) {
+      throw new Error('Invalid route point coordinates')
+    }
+
+    const [lng, lat] = coordinates
+    return Ride.findByIdAndUpdate(
+      rideId,
+      {
+        $push: {
+          routePoints: {
+            type: 'Point',
+            coordinates: [lng, lat],
+            recordedAt: new Date()
+          }
+        }
+      },
+      { new: true }
+    )
+  } catch (error) {
+    throw new Error(`Error appending route point: ${error.message}`)
+  }
+}
+
 const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
   try {
     logger.info(`🚗 Assigning driver ${driverId} to ride ${rideId}`)
@@ -1038,11 +1095,28 @@ const completeRide = async (rideId, fare) => {
       `[Fare Tracking] Persisted actualDuration: ${actualDuration}min, actualEndTime: ${endTime.toISOString()} before fare recalculation`
     )
 
-    // Recalculate fare with actual duration
+    // Recalculate fare with actual duration and actual route distance
     let recalculatedFare = fare
     let fareBreakdown = null
     let oldFare = currentRide?.fare || fare || 0
-    
+
+    const actualDistanceFromRoute = calculateRouteDistanceInKm(
+      currentRide?.routePoints || []
+    )
+    const measuredDistanceInKm =
+      currentRide?.actualDistanceInKm > 0
+        ? currentRide.actualDistanceInKm
+        : actualDistanceFromRoute > 0
+        ? actualDistanceFromRoute
+        : currentRide.distanceInKm || 0
+
+    await Ride.findByIdAndUpdate(rideId, {
+      actualDistanceInKm: measuredDistanceInKm,
+      distanceInKm: measuredDistanceInKm,
+      estimatedDistanceInKm:
+        currentRide.estimatedDistanceInKm || currentRide.distanceInKm || measuredDistanceInKm
+    })
+
     try {
       const recalculated = await recalculateRideFare(rideId)
       recalculatedFare = recalculated.finalFare
@@ -3484,6 +3558,7 @@ module.exports = {
   checkAndCleanStaleRideLocks,
   clearRideLock,
   clearWorkerLock,
+  appendRideRoutePoint,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,
   riderAcknowledgeDriverInProgressCancel,
