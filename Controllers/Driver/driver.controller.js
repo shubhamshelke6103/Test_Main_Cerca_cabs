@@ -45,6 +45,213 @@ const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
+const {
+    buildDriverProfilePicUrl,
+    unlinkDriverProfilePicFile,
+    isAllowedProfilePicMime,
+} = require('../../utils/driverProfilePic.service.js');
+
+const DRIVER_JWT_SECRET =
+    process.env.JWT_SECRET ||
+    '@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%';
+
+const signDriverAuthToken = (driver) =>
+    jwt.sign({ id: driver._id, email: driver.email }, DRIVER_JWT_SECRET, { expiresIn: '7d' });
+
+const buildDriverRegisterResponsePayload = (driverObj) => ({
+    id: driverObj,
+    message: 'Driver added successfully',
+    token: signDriverAuthToken(driverObj),
+});
+
+const buildDriverRegisterResponsePayloadFromDoc = (driverDoc) =>
+    buildDriverRegisterResponsePayload(driverDoc);
+
+const parseRegisterLocation = (raw) => {
+    if (raw == null) {
+        throw new AppError('Location is required', 400, { code: 'LOCATION_REQUIRED' });
+    }
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed;
+        } catch {
+            throw new AppError('Invalid location JSON', 400, { code: 'INVALID_LOCATION' });
+        }
+    }
+    return raw;
+};
+
+/**
+ * @desc    Register driver with multipart body (optional profilePic image)
+ * @route   POST /drivers/register
+ */
+const registerDriver = asyncHandler(async (req, res) => {
+        const { name, password, location: rawLocation } = req.body;
+        const location = parseRegisterLocation(rawLocation);
+        const phoneResult = normalizeMobileDigits(req.body.phone);
+        if (phoneResult.error || !phoneResult.value) {
+            throw new AppError(phoneResult.error || 'Phone number is required', 400, {
+                code: 'INVALID_PHONE_NUMBER',
+            });
+        }
+        const phone = phoneResult.value;
+        const emailResult = normalizeEmail(req.body.email);
+        if (emailResult.error) {
+            throw new AppError(emailResult.error, 400, {
+                code: 'INVALID_EMAIL',
+            });
+        }
+        const email = emailResult.value;
+
+        let driver = await Driver.findOne({ phone });
+        if (driver) {
+            throw new AppError('Driver with this phone number already exists', 400, {
+                code: 'DRIVER_ALREADY_EXISTS',
+            });
+        }
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const driverObj = new Driver({
+            name,
+            email,
+            phone,
+            password: hashedPassword,
+            location,
+            documents: [],
+            approvalWorkflow: buildInitialApprovalWorkflow(null),
+            vendorDriverCategory: 'SELF',
+        });
+
+        if (req.file) {
+            if (!isAllowedProfilePicMime(req.file.mimetype)) {
+                throw new AppError('Only JPEG, PNG, or WebP images are allowed', 400, {
+                    code: 'INVALID_PROFILE_PIC_TYPE',
+                });
+            }
+            driverObj.profilePic = buildDriverProfilePicUrl(req, req.file);
+        }
+
+        await driverObj.save();
+
+        logger.info(`Driver added successfully: ${driverObj.email}`);
+        setImmediate(() => {
+            notifyAdminsRegistrationEvent({
+                type: 'admin_new_driver',
+                title: 'New driver registered',
+                message: `${name} (${phone}) registered and is pending admin approval.`,
+                entityKind: 'driver',
+                entityId: driverObj._id,
+                data: { driverName: name, phone },
+            }).catch((e) => logger.error('admin registration notify (new driver):', e));
+        });
+        res.status(201).json(buildDriverRegisterResponsePayloadFromDoc(driverObj));
+});
+
+/**
+ * @desc    Add a new driver (JSON body)
+ * @route   POST /drivers
+ */
+const addDriver = asyncHandler(async (req, res) => {
+        const { name, password, location } = req.body;
+        const phoneResult = normalizeMobileDigits(req.body.phone);
+        if (phoneResult.error || !phoneResult.value) {
+            throw new AppError(phoneResult.error || 'Phone number is required', 400, {
+                code: 'INVALID_PHONE_NUMBER',
+            });
+        }
+        const phone = phoneResult.value;
+        const emailResult = normalizeEmail(req.body.email);
+        if (emailResult.error) {
+            throw new AppError(emailResult.error, 400, {
+                code: 'INVALID_EMAIL',
+            });
+        }
+        const email = emailResult.value;
+
+        console.log('Received driver data:');
+        console.log(req.body);
+        
+        let driver = await Driver.findOne({ phone });
+        if (driver) {
+            throw new AppError('Driver with this phone number already exists', 400, {
+                code: 'DRIVER_ALREADY_EXISTS',
+            });
+        }
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create a new driver
+        const driverObj = new Driver({
+            name,
+            email,
+            phone,
+            password: hashedPassword,
+            location,
+            documents: [], // Initialize with an empty array
+            approvalWorkflow: buildInitialApprovalWorkflow(null),
+            vendorDriverCategory: 'SELF',
+        });
+
+        await driverObj.save();
+
+        logger.info(`Driver added successfully: ${driverObj.email}`);
+        setImmediate(() => {
+            notifyAdminsRegistrationEvent({
+                type: 'admin_new_driver',
+                title: 'New driver registered',
+                message: `${name} (${phone}) registered and is pending admin approval.`,
+                entityKind: 'driver',
+                entityId: driverObj._id,
+                data: { driverName: name, phone },
+            }).catch((e) => logger.error('admin registration notify (new driver):', e));
+        });
+        res.status(201).json(buildDriverRegisterResponsePayloadFromDoc(driverObj));
+});
+
+const patchDriverProfilePhoto = asyncHandler(async (req, res) => {
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            throw new AppError('Driver not found', 404, { code: 'DRIVER_NOT_FOUND' });
+        }
+        if (!req.file) {
+            throw new AppError('profilePic file is required', 400, { code: 'PROFILE_PIC_REQUIRED' });
+        }
+        if (!isAllowedProfilePicMime(req.file.mimetype)) {
+            throw new AppError('Only JPEG, PNG, or WebP images are allowed', 400, {
+                code: 'INVALID_PROFILE_PIC_TYPE',
+            });
+        }
+        const nextUrl = buildDriverProfilePicUrl(req, req.file);
+        if (driver.profilePic) {
+            unlinkDriverProfilePicFile(driver.profilePic);
+        }
+        driver.profilePic = nextUrl;
+        await driver.save();
+        logger.info(`Driver profile photo updated: ${driver.email}`);
+        res.status(200).json({
+            success: true,
+            message: 'Profile photo updated',
+            profilePic: driver.profilePic,
+        });
+});
+
+const deleteDriverProfilePhoto = asyncHandler(async (req, res) => {
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            throw new AppError('Driver not found', 404, { code: 'DRIVER_NOT_FOUND' });
+        }
+        if (driver.profilePic) {
+            unlinkDriverProfilePicFile(driver.profilePic);
+        }
+        driver.profilePic = null;
+        await driver.save();
+        res.status(200).json({
+            success: true,
+            message: 'Profile photo removed',
+            profilePic: null,
+        });
+});
 
 const buildDateRange = (period, startDate, endDate) => {
     const now = new Date();
@@ -828,12 +1035,7 @@ const loginDriver = asyncHandler(async (req, res) => {
         });
     }
 
-        // Generate JWT token
-        const token = jwt.sign(
-            { id: driver._id, email: driver.email },
-            "@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%",
-            { expiresIn: '7d' }
-        );
+        const token = signDriverAuthToken(driver);
 
         // Do not start an online session on login — fleet/vehicle eligibility is enforced when the driver
         // actually goes online (PATCH /drivers/:id/online-status). Starting a session here caused 500s for
@@ -914,6 +1116,10 @@ const deleteDriver = asyncHandler(async (req, res) => {
             throw new AppError('Driver not found', 404, {
                 code: 'DRIVER_NOT_FOUND',
             });
+        }
+
+        if (driver.profilePic) {
+            unlinkDriverProfilePicFile(driver.profilePic);
         }
 
         logger.info(`Driver deleted successfully: ${driver.email}`);
@@ -2572,6 +2778,9 @@ const getSharedDriverLocation = async (req, res) => {
 
 module.exports = {
     addDriver,
+    registerDriver,
+    patchDriverProfilePhoto,
+    deleteDriverProfilePhoto,
     addDriverDocuments,
     loginDriver,
     getAllDrivers,

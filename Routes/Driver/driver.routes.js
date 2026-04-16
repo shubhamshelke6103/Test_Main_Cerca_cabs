@@ -1,8 +1,13 @@
 const express = require('express');
+const fs = require('fs');
 const multer = require('multer');
 const AppError = require('../../utils/errors/AppError');
+const { DRIVER_PROFILE_PIC_SUBDIR } = require('../../utils/driverProfilePic.service.js');
 const {
     addDriver,
+    registerDriver,
+    patchDriverProfilePhoto,
+    deleteDriverProfilePhoto,
     loginDriver,
     getAllDrivers,
     getDriverById,
@@ -88,14 +93,54 @@ const driverIdentityUpload = upload.fields([
     { name: 'documents', maxCount: 10 },
 ]);
 
+const driverProfilePicStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        fs.mkdirSync(DRIVER_PROFILE_PIC_SUBDIR, { recursive: true });
+        cb(null, DRIVER_PROFILE_PIC_SUBDIR);
+    },
+    filename: (req, file, cb) => {
+        const safe = String(file.originalname || 'photo').replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${safe}`);
+    },
+});
+
+const driverProfilePicUpload = multer({
+    storage: driverProfilePicStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const ok = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+        if (!ok) {
+            return cb(new AppError('Only JPEG, PNG, or WebP images are allowed', 400, {
+                code: 'INVALID_PROFILE_PIC_TYPE',
+            }));
+        }
+        cb(null, true);
+    },
+});
+
 // Routes for driver management
 router.post('/me/leave-vendor', authenticateDriver, vendorController.leaveVendorAsDriver);
-router.post('/', addDriver); // Add a new driver with documents
+router.post('/register', driverProfilePicUpload.single('profilePic'), registerDriver);
+router.post('/', addDriver); // Add a new driver (JSON)
 router.post('/login', loginDriver); // Login driver
 router.get('/', getAllDrivers); // Get all drivers
 router.get('/:id', getDriverById); // Get a driver by ID
 router.delete('/:id', deleteDriver); // Delete a driver by ID
 router.put('/:id', updateDriver); // Update a driver with optional new documents
+
+router.patch(
+    '/:id/profile-photo',
+    authenticateDriver,
+    requireOwnDriver,
+    driverProfilePicUpload.single('profilePic'),
+    patchDriverProfilePhoto
+);
+router.delete(
+    '/:id/profile-photo',
+    authenticateDriver,
+    requireOwnDriver,
+    deleteDriverProfilePhoto
+);
 
 // Route to add documents to a driver's documents array
 router.post('/:id/documents', driverIdentityUpload, addDriverDocuments);

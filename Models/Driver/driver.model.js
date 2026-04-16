@@ -214,6 +214,12 @@ const driverSchema = new mongoose.Schema({
     trim: true,
     match: [/^\d+$/, 'Phone number must contain digits only']
   },
+  /** Full URL to profile photo (uploads/driverProfilePics) */
+  profilePic: {
+    type: String,
+    default: null,
+    trim: true
+  },
   password: {
     type: String,
     required: true
