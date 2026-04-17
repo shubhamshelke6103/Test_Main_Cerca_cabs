@@ -662,8 +662,8 @@ const switchRideToCash = asyncHandler(async (req, res) => {
     })
   }
 
-  if (['completed', 'cancelled'].includes(ride.status)) {
-    throw new AppError('Cannot switch payment method after ride is completed or cancelled', 400, {
+  if (ride.status === 'cancelled') {
+    throw new AppError('Cannot switch payment method after ride is cancelled', 400, {
       code: 'RIDE_PAYMENT_CHANGE_NOT_ALLOWED'
     })
   }
