@@ -627,7 +627,12 @@ const updateRide = asyncHandler(async (req, res) => {
 
 const switchRideToCash = asyncHandler(async (req, res) => {
   const { rideId } = req.params
-  const { userId } = req.body
+  const userId =
+    req.body?.userId ||
+    req.query?.userId ||
+    req.headers['x-user-id'] ||
+    req.headers['x-userid'] ||
+    req.user?.id
 
   if (!mongoose.Types.ObjectId.isValid(rideId)) {
     throw new AppError('Ride not found', 404, {
