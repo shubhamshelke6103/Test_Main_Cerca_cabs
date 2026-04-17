@@ -24,7 +24,8 @@ const {
   acknowledgeDriverCancelSettlement,
   confirmCashDriverCancelSettlement,
   payWalletDriverCancelSettlement,
-  verifyRazorpayDriverCancelSettlement
+  verifyRazorpayDriverCancelSettlement,
+  switchRideToCash
 } = require('../Controllers/User/ride.controller');
 const { sharedRideRateLimiter } = require('../middleware/shareToken.middleware');
 const {
@@ -96,6 +97,9 @@ router.post(
   '/:rideId/driver-cancel-settlement/verify-razorpay',
   verifyRazorpayDriverCancelSettlement
 );
+
+// POST /rides/:rideId/switch-to-cash - Switch an unpaid ride to cash payment
+router.post('/:rideId/switch-to-cash', switchRideToCash);
 
 // Get rides for a specific user
 // GET /rides/user/:userId

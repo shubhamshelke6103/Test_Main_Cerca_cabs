@@ -625,6 +625,76 @@ const updateRide = asyncHandler(async (req, res) => {
   res.status(200).json(updatedRide)
 })
 
+const switchRideToCash = asyncHandler(async (req, res) => {
+  const { rideId } = req.params
+  const { userId } = req.body
+
+  if (!mongoose.Types.ObjectId.isValid(rideId)) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
+  }
+
+  if (!userId) {
+    throw new AppError('User ID is required', 401, {
+      code: 'USER_ID_REQUIRED'
+    })
+  }
+
+  const ride = await Ride.findById(rideId)
+
+  if (!ride) {
+    throw new AppError('Ride not found', 404, {
+      code: 'RIDE_NOT_FOUND'
+    })
+  }
+
+  const riderId = ride.rider?._id || ride.rider
+  if (!riderId || String(riderId) !== String(userId)) {
+    throw new AppError('Unauthorized: This ride does not belong to you', 403, {
+      code: 'UNAUTHORIZED_RIDE_ACCESS'
+    })
+  }
+
+  if (['completed', 'cancelled'].includes(ride.status)) {
+    throw new AppError('Cannot switch payment method after ride is completed or cancelled', 400, {
+      code: 'RIDE_PAYMENT_CHANGE_NOT_ALLOWED'
+    })
+  }
+
+  if (ride.paymentMethod === 'CASH') {
+    return res.status(200).json({
+      success: true,
+      message: 'Ride payment method is already set to CASH',
+      data: ride
+    })
+  }
+
+  if (ride.paymentStatus === 'completed') {
+    throw new AppError('Cannot switch to CASH after payment is already completed', 400, {
+      code: 'RIDE_PAYMENT_ALREADY_PROCESSED'
+    })
+  }
+
+  if (ride.paymentMethod === 'WALLET' && ride.walletAmountUsed > 0) {
+    throw new AppError('Cannot switch to CASH after wallet payment has been applied', 400, {
+      code: 'CANNOT_SWITCH_AFTER_WALLET_PAYMENT'
+    })
+  }
+
+  ride.paymentMethod = 'CASH'
+  ride.transactionId = null
+  ride.razorpayPaymentId = null
+  ride.razorpayRefundId = null
+  ride.razorpayRefundStatus = null
+  await ride.save()
+
+  res.status(200).json({
+    success: true,
+    message: 'Ride payment method switched to CASH',
+    data: ride
+  })
+})
 
 
 /**
@@ -2134,5 +2204,6 @@ module.exports = {
   acknowledgeDriverCancelSettlement,
   confirmCashDriverCancelSettlement,
   payWalletDriverCancelSettlement,
-  verifyRazorpayDriverCancelSettlement
+  verifyRazorpayDriverCancelSettlement,
+  switchRideToCash
 }
