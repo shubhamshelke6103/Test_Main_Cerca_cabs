@@ -308,58 +308,58 @@ const searchNearbyDrivers = async (userId, location) => {
 
 /**
  * Map service name to vehicleService key
- * @param {string} serviceName - Service name (e.g., "sedan", "suv", "auto", "Cerca Small", etc.)
- * @returns {string} - Vehicle service key ("cercaSmall", "cercaMedium", "cercaLarge")
+ * @param {string} serviceName - Service name (e.g., "cercaGlide", "cercaTitan", "auto", "Cerca Zip", etc.)
+ * @returns {string} - Vehicle service key ("cercaZip", "cercaGlide", "cercaTitan")
  */
 /**
  * Map service name from user app to vehicle service key
- * Mapping: Sedan → Cerca Medium, SUV → Cerca Large, Hatchback → Cerca Small
- * @param {string} serviceName - Service name from user app ('sedan', 'suv', 'auto', 'hatchback')
- * @returns {string} - Vehicle service key ('cercaSmall', 'cercaMedium', 'cercaLarge')
+ * Mapping: Cerca Glide → cercaGlide, Cerca Titan → cercaTitan, Cerca Zip → cercaZip
+ * @param {string} serviceName - Service name from user app ('cercaGlide', 'cercaTitan', 'auto', 'cercaZip')
+ * @returns {string} - Vehicle service key ('cercaZip', 'cercaGlide', 'cercaTitan')
  */
 const mapServiceToVehicleService = (serviceName) => {
   const normalized = serviceName.toLowerCase()
   // Map service names to vehicle services
-  // Sedan → Cerca Medium
-  if (normalized === 'sedan' || normalized.includes('medium')) {
-    return 'cercaMedium'
+  // Cerca Glide → cercaGlide
+  if (normalized === 'cercaGlide' || normalized === 'sedan' || normalized.includes('glide') || normalized.includes('medium')) {
+    return 'cercaGlide'
   }
-  // SUV → Cerca Large
-  else if (normalized === 'suv' || normalized.includes('large')) {
-    return 'cercaLarge'
+  // Cerca Titan → cercaTitan
+  else if (normalized === 'cercaTitan' || normalized === 'suv' || normalized.includes('titan') || normalized.includes('large')) {
+    return 'cercaTitan'
   }
-  // Hatchback → Cerca Small (also auto for legacy support)
-  else if (normalized === 'hatchback' || normalized === 'auto' || normalized.includes('small')) {
-    return 'cercaSmall'
+  // Cerca Zip → cercaZip (also auto for legacy support)
+  else if (normalized === 'cercaZip' || normalized === 'hatchback' || normalized === 'auto' || normalized.includes('zip') || normalized.includes('small')) {
+    return 'cercaZip'
   }
-  // Default to small if unknown
-  return 'cercaSmall'
+  // Default to zip if unknown
+  return 'cercaZip'
 }
 
 /**
  * Map vehicle service key to driver vehicle type
  * Used for filtering drivers by vehicle type
- * @param {string} vehicleServiceKey - Vehicle service key ('cercaSmall', 'cercaMedium', 'cercaLarge')
- * @returns {string} - Driver vehicle type ('hatchback', 'sedan', 'suv')
+ * @param {string} vehicleServiceKey - Vehicle service key ('cercaZip', 'cercaGlide', 'cercaTitan')
+ * @returns {string} - Driver vehicle type ('cercaZip', 'cercaGlide', 'cercaTitan')
  */
 const mapVehicleServiceToDriverType = (vehicleServiceKey) => {
   const normalized = vehicleServiceKey.toLowerCase()
-  if (normalized === 'cercasmall') {
-    return 'hatchback'
-  } else if (normalized === 'cercamedium') {
-    return 'sedan'
-  } else if (normalized === 'cercalarge') {
-    return 'suv'
+  if (normalized === 'cercazip') {
+    return 'cercaZip'
+  } else if (normalized === 'cercaglide') {
+    return 'cercaGlide'
+  } else if (normalized === 'cercatitan') {
+    return 'cercaTitan'
   }
   // Default fallback
-  return 'hatchback'
+  return 'cercaZip'
 }
 
 /**
  * Map service name to driver vehicle type
  * Used for filtering drivers during ride matching
- * @param {string} serviceName - Service name from user app ('sedan', 'suv', 'auto', 'hatchback')
- * @returns {string} - Driver vehicle type ('hatchback', 'sedan', 'suv')
+ * @param {string} serviceName - Service name from user app ('cercaGlide', 'cercaTitan', 'auto', 'cercaZip')
+ * @returns {string} - Driver vehicle type ('cercaZip', 'cercaGlide', 'cercaTitan')
  */
 const mapServiceToDriverType = (serviceName) => {
   const vehicleServiceKey = mapServiceToVehicleService(serviceName)

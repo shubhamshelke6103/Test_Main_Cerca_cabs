@@ -1635,7 +1635,7 @@ const updateDriverVehicle = async (req, res) => {
             target.year = Number(year);
             target.color = color;
             target.licensePlate = licensePlate;
-            target.vehicleType = vehicleType || 'sedan';
+            target.vehicleType = vehicleType || 'cercaGlide';
             target.documents = documents;
             target.approvalStatus = 'UNDER_APPROVAL';
             target.approvalRoutedTo = driver.vendorId ? 'VENDOR' : 'ADMIN';
@@ -1729,7 +1729,7 @@ const updateDriverVehicle = async (req, res) => {
             year: Number(year),
             color,
             licensePlate,
-            vehicleType: vehicleType || 'sedan',
+            vehicleType: vehicleType || 'cercaGlide',
             documents,
             approvalStatus: 'UNDER_APPROVAL',
             approvalRoutedTo: driver.vendorId ? 'VENDOR' : 'ADMIN',

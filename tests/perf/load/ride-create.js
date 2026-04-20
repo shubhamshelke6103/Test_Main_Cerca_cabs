@@ -9,7 +9,7 @@ const body = JSON.stringify({
   dropoffLocation: {
     coordinates: [77.6245, 12.9352]
   },
-  service: 'cerca small',
+  service: 'cercaZip',
   rideFor: 'SELF'
 })
 

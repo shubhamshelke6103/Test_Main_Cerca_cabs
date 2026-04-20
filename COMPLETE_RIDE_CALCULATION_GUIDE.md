@@ -45,7 +45,7 @@ Final Base Fare = MAX(Base Fare, Minimum Fare)
 1. **Get Admin Settings:**
    - `perKmRate`: Rate per kilometer (e.g., ₹15/km)
    - `minimumFare`: Minimum fare guarantee (e.g., ₹50)
-   - `service.price`: Base price for selected service (e.g., ₹299 for "Cerca Small")
+   - `service.price`: Base price for selected service (e.g., ₹299 for "Cerca Zip")
 
 2. **Calculate Distance:**
    - Distance calculated using Haversine formula between pickup and dropoff coordinates
@@ -69,7 +69,7 @@ Final Base Fare = MAX(Base Fare, Minimum Fare)
 ### Example
 
 **Settings:**
-- Service: "Cerca Small"
+- Service: "Cerca Zip"
 - Service Price: ₹299
 - Per Km Rate: ₹15/km
 - Minimum Fare: ₹50
@@ -230,7 +230,7 @@ Step 2: Final Fare = MAX(0, ₹449 - ₹449) = ₹0
 ### Example: Complete Calculation
 
 **Settings:**
-- Service: "Cerca Small" (₹299)
+- Service: "Cerca Zip" (₹299)
 - Per Km Rate: ₹15/km
 - Minimum Fare: ₹50
 
@@ -502,7 +502,7 @@ Final Fare = 3 × ₹500 = ₹1,500
 ### Example 1: Standard Ride with Promo Code
 
 **Settings:**
-- Service: "Cerca Small" (₹299)
+- Service: "Cerca Zip" (₹299)
 - Per Km Rate: ₹15/km
 - Minimum Fare: ₹50
 - Platform Fees: 20%
@@ -541,7 +541,7 @@ Driver Gets: ₹306.56
 ### Example 2: Short Distance Ride (Minimum Fare Applied)
 
 **Settings:**
-- Service: "Cerca Small" (₹299)
+- Service: "Cerca Zip" (₹299)
 - Per Km Rate: ₹15/km
 - Minimum Fare: ₹50
 
@@ -634,15 +634,15 @@ Average Net Per Ride = ₹324.64
   },
   services: [
     {
-      name: "Cerca Small",
+      name: "Cerca Zip",
       price: 299
     },
     {
-      name: "Cerca Medium",
+      name: "Cerca Glide",
       price: 499
     },
     {
-      name: "Cerca Large",
+      name: "Cerca Titan",
       price: 699
     }
   ]

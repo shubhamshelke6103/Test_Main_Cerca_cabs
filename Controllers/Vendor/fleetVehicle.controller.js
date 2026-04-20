@@ -99,7 +99,7 @@ exports.createFleetVehicle = async (req, res) => {
       year: Number(year),
       color: String(color).trim(),
       licensePlate: String(licensePlate).trim(),
-      vehicleType: vehicleType || 'sedan',
+      vehicleType: vehicleType || 'cercaGlide',
       documents,
       approvalStatus: 'UNDER_APPROVAL',
       submittedAt: new Date(),

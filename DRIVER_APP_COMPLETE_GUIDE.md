@@ -155,7 +155,7 @@ Map<String, String> headers = {
     "year": 2020,
     "color": "White",
     "licensePlate": "KA01AB1234",
-    "vehicleType": "sedan"
+    "vehicleType": "cercaGlide"
   },
   "lastSeen": "2025-10-11T10:30:00.000Z",
   "documents": ["url1", "url2"],
@@ -215,11 +215,11 @@ Map<String, String> headers = {
   "year": 2020,
   "color": "White",
   "licensePlate": "KA01AB1234",
-  "vehicleType": "sedan"
+  "vehicleType": "cercaGlide"
 }
 ```
 
-**Vehicle Types**: `sedan`, `suv`, `hatchback`, `auto`
+**Vehicle Types**: `cercaGlide`, `cercaTitan`, `cercaZip`, `auto`
 
 **Response** (200):
 ```json
@@ -231,7 +231,7 @@ Map<String, String> headers = {
     "year": 2020,
     "color": "White",
     "licensePlate": "KA01AB1234",
-    "vehicleType": "sedan"
+    "vehicleType": "cercaGlide"
   }
 }
 ```
@@ -1258,7 +1258,7 @@ class VehicleInfo {
   int? year;
   String? color;
   String? licensePlate;
-  String vehicleType; // sedan, suv, hatchback, auto
+  String vehicleType; // cercaGlide, cercaTitan, cercaZip, auto
 }
 
 class RideReference {

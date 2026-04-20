@@ -43,29 +43,29 @@ const SettingsSchema = new mongoose.Schema({
         processingDays: { type: Number, default: 3 }, // Business days
     },
     vehicleServices: {
-        cercaSmall: {
-            name: { type: String, default: 'Cerca Small' },
+        cercaZip: {
+            name: { type: String, default: 'Cerca Zip' },
             price: { type: Number, required: true, default: 299 },
             perMinuteRate: { type: Number, required: true, default: 2 },
             seats: { type: Number, default: 4 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/cerca-small.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-zip.png' }
         },
-        cercaMedium: {
-            name: { type: String, default: 'Cerca Medium' },
+        cercaGlide: {
+            name: { type: String, default: 'Cerca Glide' },
             price: { type: Number, required: true, default: 499 },
             perMinuteRate: { type: Number, required: true, default: 3 },
             seats: { type: Number, default: 6 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/Cerca-medium.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-glide.png' }
         },
-        cercaLarge: {
-            name: { type: String, default: 'Cerca Large' },
+        cercaTitan: {
+            name: { type: String, default: 'Cerca Titan' },
             price: { type: Number, required: true, default: 699 },
             perMinuteRate: { type: Number, required: true, default: 4 },
             seats: { type: Number, default: 8 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/cerca-large.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-titan.png' }
         }
     },
 }, { timestamps: true });

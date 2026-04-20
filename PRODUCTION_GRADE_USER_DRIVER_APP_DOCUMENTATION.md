@@ -281,7 +281,7 @@ this.socketService.emit('newRideRequest', {
   dropoffLocation: { type: 'Point', coordinates: [lng, lat] },
   pickupAddress: 'Full address',
   dropoffAddress: 'Full address',
-  service: 'sedan' | 'suv' | 'auto',
+  service: 'cercaGlide' | 'cercaTitan' | 'auto',
   fare: calculatedFare,
   distanceInKm: calculatedDistance,
   paymentMethod: 'CASH' | 'RAZORPAY' | 'WALLET',

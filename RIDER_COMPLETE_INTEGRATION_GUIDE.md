@@ -71,7 +71,7 @@ socket.emit('newRideRequest', {
   dropoffAddress: '456 Park Ave, Bangalore',
   fare: 150,
   distanceInKm: 5.2,
-  service: 'sedan', // 'sedan', 'suv', 'hatchback', 'auto'
+  service: 'cercaGlide', // 'cercaGlide', 'cercaTitan', 'cercaZip', 'auto'
   rideType: 'normal', // 'normal', 'whole_day', 'custom'
   paymentMethod: 'CASH' // 'CASH', 'RAZORPAY', 'WALLET'
 });
@@ -860,7 +860,7 @@ const updateUserWallet = async (userId, amount, operation) => {
     "fare": 200,
     "distanceInKm": 8.5,
     "status": "requested",
-    "service": "suv",
+    "service": "cercaTitan",
     "paymentMethod": "RAZORPAY",
     "createdAt": "2024-01-16T09:00:00.000Z"
   }

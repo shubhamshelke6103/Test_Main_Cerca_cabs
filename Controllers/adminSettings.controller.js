@@ -46,58 +46,58 @@ const updateSettings = async (req, res) => {
             // Ensure vehicleServices have all required fields
             if (!newSettingsData.vehicleServices) {
                 newSettingsData.vehicleServices = {
-                    cercaSmall: {
-                        name: 'Cerca Small',
+                    cercaZip: {
+                        name: 'Cerca Zip',
                         price: 299,
                         perMinuteRate: 2,
                         seats: 4,
                         enabled: true,
-                        imagePath: 'assets/cars/cerca-small.png'
+                        imagePath: 'assets/cars/cerca-zip.png'
                     },
-                    cercaMedium: {
-                        name: 'Cerca Medium',
+                    cercaGlide: {
+                        name: 'Cerca Glide',
                         price: 499,
                         perMinuteRate: 3,
                         seats: 6,
                         enabled: true,
-                        imagePath: 'assets/cars/Cerca-medium.png'
+                        imagePath: 'assets/cars/cerca-glide.png'
                     },
-                    cercaLarge: {
-                        name: 'Cerca Large',
+                    cercaTitan: {
+                        name: 'Cerca Titan',
                         price: 699,
                         perMinuteRate: 4,
                         seats: 8,
                         enabled: true,
-                        imagePath: 'assets/cars/cerca-large.png'
+                        imagePath: 'assets/cars/cerca-titan.png'
                     }
                 };
             } else {
                 // Ensure each vehicle service has all required fields
-                ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+                ['cercaZip', 'cercaGlide', 'cercaTitan'].forEach(serviceKey => {
                     if (newSettingsData.vehicleServices[serviceKey]) {
                         const service = newSettingsData.vehicleServices[serviceKey];
                         // Ensure perMinuteRate is set
                         if (service.perMinuteRate === undefined || service.perMinuteRate === null) {
-                            service.perMinuteRate = serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4;
+                            service.perMinuteRate = serviceKey === 'cercaZip' ? 2 : serviceKey === 'cercaGlide' ? 3 : 4;
                         }
                         // Ensure price is set
                         if (service.price === undefined || service.price === null) {
-                            service.price = serviceKey === 'cercaSmall' ? 299 : serviceKey === 'cercaMedium' ? 499 : 699;
+                            service.price = serviceKey === 'cercaZip' ? 299 : serviceKey === 'cercaGlide' ? 499 : 699;
                         }
                         // Ensure other fields have defaults
                         if (!service.name) {
-                            service.name = serviceKey === 'cercaSmall' ? 'Cerca Small' : serviceKey === 'cercaMedium' ? 'Cerca Medium' : 'Cerca Large';
+                            service.name = serviceKey === 'cercaZip' ? 'Cerca Zip' : serviceKey === 'cercaGlide' ? 'Cerca Glide' : 'Cerca Titan';
                         }
                         if (service.seats === undefined || service.seats === null) {
-                            service.seats = serviceKey === 'cercaSmall' ? 4 : serviceKey === 'cercaMedium' ? 6 : 8;
+                            service.seats = serviceKey === 'cercaZip' ? 4 : serviceKey === 'cercaGlide' ? 6 : 8;
                         }
                         if (service.enabled === undefined) {
                             service.enabled = true;
                         }
                         if (!service.imagePath) {
-                            service.imagePath = serviceKey === 'cercaSmall' ? 'assets/cars/cerca-small.png' : 
-                                               serviceKey === 'cercaMedium' ? 'assets/cars/Cerca-medium.png' : 
-                                               'assets/cars/cerca-large.png';
+                            service.imagePath = serviceKey === 'cercaZip' ? 'assets/cars/cerca-zip.png' : 
+                                               serviceKey === 'cercaGlide' ? 'assets/cars/cerca-glide.png' : 
+                                               'assets/cars/cerca-titan.png';
                         }
                     }
                 });
@@ -294,26 +294,26 @@ const getVehicleServices = async (req, res) => {
         if (!settings || !settings.vehicleServices) {
             // Return default values if settings don't exist
             return res.status(200).json({
-                cercaSmall: {
-                    name: 'Cerca Small',
+                cercaZip: {
+                    name: 'Cerca Zip',
                     price: 299,
                     seats: 4,
                     enabled: true,
-                    imagePath: 'assets/cars/cerca-small.png'
+                    imagePath: 'assets/cars/cerca-zip.png'
                 },
-                cercaMedium: {
-                    name: 'Cerca Medium',
+                cercaGlide: {
+                    name: 'Cerca Glide',
                     price: 499,
                     seats: 6,
                     enabled: true,
-                    imagePath: 'assets/cars/Cerca-medium.png'
+                    imagePath: 'assets/cars/cerca-glide.png'
                 },
-                cercaLarge: {
-                    name: 'Cerca Large',
+                cercaTitan: {
+                    name: 'Cerca Titan',
                     price: 699,
                     seats: 8,
                     enabled: true,
-                    imagePath: 'assets/cars/cerca-large.png'
+                    imagePath: 'assets/cars/cerca-titan.png'
                 }
             });
         }
@@ -373,29 +373,29 @@ const getPublicSettings = async (req, res) => {
                     driverCommissions: 90
                 },
                 vehicleServices: {
-                    cercaSmall: {
-                        name: 'Cerca Small',
+                    cercaZip: {
+                        name: 'Cerca Zip',
                         price: 299,
                         perMinuteRate: 2,
                         seats: 4,
                         enabled: true,
-                        imagePath: 'assets/cars/cerca-small.png'
+                        imagePath: 'assets/cars/cerca-zip.png'
                     },
-                    cercaMedium: {
-                        name: 'Cerca Medium',
+                    cercaGlide: {
+                        name: 'Cerca Glide',
                         price: 499,
                         perMinuteRate: 3,
                         seats: 6,
                         enabled: true,
-                        imagePath: 'assets/cars/Cerca-medium.png'
+                        imagePath: 'assets/cars/cerca-glide.png'
                     },
-                    cercaLarge: {
-                        name: 'Cerca Large',
+                    cercaTitan: {
+                        name: 'Cerca Titan',
                         price: 699,
                         perMinuteRate: 4,
                         seats: 8,
                         enabled: true,
-                        imagePath: 'assets/cars/cerca-large.png'
+                        imagePath: 'assets/cars/cerca-titan.png'
                     }
                 }
             });
@@ -403,29 +403,29 @@ const getPublicSettings = async (req, res) => {
         
         // Ensure perMinuteRate is included for each service
         let vehicleServices = settings.vehicleServices || {
-            cercaSmall: {
-                name: 'Cerca Small',
+            cercaZip: {
+                name: 'Cerca Zip',
                 price: 299,
                 perMinuteRate: 2,
                 seats: 4,
                 enabled: true,
-                imagePath: 'assets/cars/cerca-small.png'
+                imagePath: 'assets/cars/cerca-zip.png'
             },
-            cercaMedium: {
-                name: 'Cerca Medium',
+            cercaGlide: {
+                name: 'Cerca Glide',
                 price: 499,
                 perMinuteRate: 3,
                 seats: 6,
                 enabled: true,
-                imagePath: 'assets/cars/Cerca-medium.png'
+                imagePath: 'assets/cars/cerca-glide.png'
             },
-            cercaLarge: {
-                name: 'Cerca Large',
+            cercaTitan: {
+                name: 'Cerca Titan',
                 price: 699,
                 perMinuteRate: 4,
                 seats: 8,
                 enabled: true,
-                imagePath: 'assets/cars/cerca-large.png'
+                imagePath: 'assets/cars/cerca-titan.png'
             }
         };
 

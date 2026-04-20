@@ -33,9 +33,9 @@ There are **2 vehicle sources** in the system:
 
 ## Vehicle Type Values
 
-- `sedan`
-- `suv`
-- `hatchback`
+- `cercaGlide`
+- `cercaTitan`
+- `cercaZip`
 - `auto`
 
 ## Authentication Summary
@@ -538,7 +538,7 @@ Each object inside `vehicles` contains:
   "year": 2023,
   "color": "White",
   "licensePlate": "DL01AB1234",
-  "vehicleType": "suv",
+  "vehicleType": "cercaTitan",
   "approvalStatus": "APPROVED",
   "assignedDriver": {
     "_id": "driver_id",
@@ -567,7 +567,7 @@ Each object inside `vehicles` contains:
   "year": 2022,
   "color": "Silver",
   "licensePlate": "MH12AB1234",
-  "vehicleType": "sedan",
+  "vehicleType": "cercaGlide",
   "documents": [
     {
       "documentType": "RC",

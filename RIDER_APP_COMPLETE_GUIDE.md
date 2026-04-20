@@ -191,7 +191,7 @@ const calculateFare = async (pickupCoords, dropoffCoords) => {
           latitude: dropoffCoords.latitude
         },
         rideType: 'normal', // 'normal', 'whole_day', 'custom'
-        service: 'sedan' // 'sedan', 'suv', 'auto'
+        service: 'cercaGlide' // 'cercaGlide', 'cercaTitan', 'auto'
       })
     });
 

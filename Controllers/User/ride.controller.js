@@ -1304,11 +1304,11 @@ const calculateFare = async (req, res) => {
         if (canUse.canUse) {
           // Map vehicleServiceKey to service names for coupon validation
           const serviceNameMap = {
-            cercaSmall: 'hatchback',
-            cercaMedium: 'sedan',
-            cercaLarge: 'suv'
+            cercaZip: 'cercaZip',
+            cercaGlide: 'cercaGlide',
+            cercaTitan: 'cercaTitan'
           }
-          const serviceName = serviceNameMap[vehicleServiceKey] || 'hatchback'
+          const serviceName = serviceNameMap[vehicleServiceKey] || 'cercaZip'
 
           const serviceApplicable =
             !coupon.applicableServices ||
@@ -1496,11 +1496,11 @@ const calculateAllFares = async (req, res) => {
           if (canUse.canUse) {
             // Map vehicleServiceKey to service names for coupon validation
             const serviceNameMap = {
-              cercaSmall: 'hatchback',
-              cercaMedium: 'sedan',
-              cercaLarge: 'suv'
+              cercaZip: 'cercaZip',
+              cercaGlide: 'cercaGlide',
+              cercaTitan: 'cercaTitan'
             }
-            const serviceName = serviceNameMap[vehicleServiceKey] || 'hatchback'
+            const serviceName = serviceNameMap[vehicleServiceKey] || 'cercaZip'
 
             const serviceApplicable =
               !coupon.applicableServices ||

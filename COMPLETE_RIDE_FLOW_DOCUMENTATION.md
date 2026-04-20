@@ -66,7 +66,7 @@ requested → accepted → arrived → in_progress → completed
 - User selects dropoff location
 - System calculates distance using Haversine formula
 - System calculates fare: `basePrice + (distance * perKmRate)`, minimum fare applied
-- User selects vehicle type (sedan/suv/auto)
+- User selects vehicle type (cercaGlide/cercaTitan/auto)
 - User selects payment method (CASH/RAZORPAY/WALLET)
 - Optional: User applies promo code
 
@@ -110,7 +110,7 @@ requested → accepted → arrived → in_progress → completed
   },
   pickupAddress: 'Full address string',
   dropoffAddress: 'Full address string',
-  service: 'sedan' | 'suv' | 'auto',
+  service: 'cercaGlide' | 'cercaTitan' | 'auto',
   fare: calculatedFare,
   distanceInKm: calculatedDistance,
   paymentMethod: 'CASH' | 'RAZORPAY' | 'WALLET',

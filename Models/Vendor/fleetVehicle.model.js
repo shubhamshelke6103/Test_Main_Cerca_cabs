@@ -30,8 +30,8 @@ const fleetVehicleSchema = new mongoose.Schema(
     licensePlate: { type: String, required: true, trim: true },
     vehicleType: {
       type: String,
-      enum: ['sedan', 'suv', 'hatchback', 'auto'],
-      default: 'sedan'
+      enum: ['cercaGlide', 'cercaTitan', 'cercaZip', 'auto'],
+      default: 'cercaGlide'
     },
     documents: {
       type: [fleetVehicleDocumentSchema],

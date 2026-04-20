@@ -857,7 +857,7 @@
               "year": "number",
               "color": "string",
               "licensePlate": "string",
-              "vehicleType": "string (default: 'sedan')"
+              "vehicleType": "string (default: 'cercaGlide')"
             }
           },
           "response": {

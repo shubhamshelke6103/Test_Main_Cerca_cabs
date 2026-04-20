@@ -74,7 +74,7 @@ Create a new promo code/coupon.
   "maxUsage": 1000,
   "maxUsagePerUser": 1,
   "isActive": true,
-  "applicableServices": ["sedan", "suv"],
+  "applicableServices": ["cercaGlide", "cercaTitan"],
   "applicableRideTypes": ["normal"]
 }
 ```
@@ -212,7 +212,7 @@ Validate a coupon before applying it to a ride.
   "couponCode": "SAVE50",
   "userId": "507f1f77bcf86cd799439011",
   "rideFare": 250,
-  "service": "sedan",
+  "service": "cercaGlide",
   "rideType": "normal"
 }
 ```
@@ -460,7 +460,7 @@ const rideData = {
   riderId: userId,
   pickupLocation: { longitude: 77.2090, latitude: 28.6139 },
   dropoffLocation: { longitude: 77.1025, latitude: 28.5355 },
-  service: 'sedan',
+  service: 'cercaGlide',
   promoCode: 'SAVE50', // Include promo code
   paymentMethod: 'WALLET',
   // ... other ride data
@@ -482,7 +482,7 @@ const validateResponse = await axios.post('/api/coupons/validate', {
   couponCode: 'SAVE50',
   userId: userId,
   rideFare: estimatedFare,
-  service: 'sedan',
+  service: 'cercaGlide',
   rideType: 'normal'
 });
 

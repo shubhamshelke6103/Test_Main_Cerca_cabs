@@ -9,8 +9,8 @@ const vehicleDetailsSchema = new mongoose.Schema(
     licensePlate: String,
     vehicleType: {
       type: String,
-      enum: ['sedan', 'suv', 'hatchback', 'auto'],
-      default: 'sedan'
+      enum: ['cercaGlide', 'cercaTitan', 'cercaZip', 'auto'],
+      default: 'cercaGlide'
     }
   },
   { _id: false }

@@ -262,11 +262,11 @@ const DISTANCE_MATRIX_API_URL = 'https://maps.googleapis.com/maps/api/distancema
 
 /**
  * Calculate distance and fare between two points
- * GET /api/google-maps/distance-matrix?origin=lat,lng&destination=lat,lng&service=sedan
+ * GET /api/google-maps/distance-matrix?origin=lat,lng&destination=lat,lng&service=cercaGlide
  */
 const calculateDistanceAndFare = async (req, res) => {
   try {
-    const { origin, destination, service = 'sedan' } = req.query;
+    const { origin, destination, service = 'cercaGlide' } = req.query;
 
     // Validate required parameters
     if (!origin || !destination) {
@@ -589,7 +589,7 @@ router.post('/calculate-fare', calculateFare); // NEW
 ```javascript
 const calculateFare = async (req, res) => {
   try {
-    const { pickupLocation, dropoffLocation, service = 'sedan', promoCode } = req.body;
+    const { pickupLocation, dropoffLocation, service = 'cercaGlide', promoCode } = req.body;
 
     // Validate required fields
     if (!pickupLocation || !dropoffLocation) {

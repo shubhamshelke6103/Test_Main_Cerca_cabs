@@ -37,9 +37,9 @@ Possible values:
 
 Allowed `vehicleType` values:
 
-- `sedan`
-- `suv`
-- `hatchback`
+- `cercaGlide`
+- `cercaTitan`
+- `cercaZip`
 - `auto`
 
 ## 1. Driver Submits Vehicle For Approval

@@ -209,12 +209,12 @@ const rideSchema = new mongoose.Schema(
     // =========================
     vehicleType: {
       type: String,
-      enum: ['sedan', 'suv', 'hatchback', 'auto']
+      enum: ['cercaGlide', 'cercaTitan', 'cercaZip', 'auto']
     },
 
     vehicleService: {
       type: String,
-      enum: ['cercaSmall', 'cercaMedium', 'cercaLarge']
+      enum: ['cercaZip', 'cercaGlide', 'cercaTitan']
     },
 
     service: String,
