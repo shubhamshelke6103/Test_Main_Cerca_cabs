@@ -366,6 +366,118 @@ const mapServiceToDriverType = (serviceName) => {
   return mapVehicleServiceToDriverType(vehicleServiceKey)
 }
 
+const DRIVER_RIDE_TYPE_ORDER = ['cercaZip', 'cercaGlide', 'cercaTitan']
+
+const normalizeRideAccessPreferences = (rideAccess) => ({
+  allowZip: Boolean(rideAccess?.allowZip),
+  allowGlide: Boolean(rideAccess?.allowGlide)
+})
+
+const getRideAccessDefaultsForVehicleType = (vehicleType) => {
+  const normalized = String(vehicleType || '').trim()
+
+  if (normalized === 'cercaGlide') {
+    return {
+      allowZip: false,
+      allowGlide: false,
+      availableToggles: ['allowZip']
+    }
+  }
+
+  if (normalized === 'cercaTitan') {
+    return {
+      allowZip: false,
+      allowGlide: false,
+      availableToggles: ['allowGlide', 'allowZip']
+    }
+  }
+
+  return {
+    allowZip: false,
+    allowGlide: false,
+    availableToggles: []
+  }
+}
+
+const resolveDriverVehicleType = async (driver) => {
+  const directVehicleType = String(driver?.vehicleInfo?.vehicleType || '').trim()
+  if (DRIVER_RIDE_TYPE_ORDER.includes(directVehicleType)) {
+    return directVehicleType
+  }
+
+  if (Array.isArray(driver?.vehicles) && driver.vehicles.length > 0) {
+    const approvedVehicles = driver.vehicles.filter(
+      vehicle => vehicle?.approvalStatus === 'APPROVED'
+    )
+    const activeVehicle =
+      approvedVehicles.find(vehicle => vehicle?.isActive) || approvedVehicles[0]
+
+    const activeVehicleType = String(activeVehicle?.vehicleType || '').trim()
+    if (DRIVER_RIDE_TYPE_ORDER.includes(activeVehicleType)) {
+      return activeVehicleType
+    }
+  }
+
+  const assignedFleetVehicleId = driver?.assignedFleetVehicleId
+  if (assignedFleetVehicleId) {
+    const fleetVehicle = await FleetVehicle.findById(assignedFleetVehicleId)
+      .select('vehicleType')
+      .lean()
+
+    const fleetVehicleType = String(fleetVehicle?.vehicleType || '').trim()
+    if (DRIVER_RIDE_TYPE_ORDER.includes(fleetVehicleType)) {
+      return fleetVehicleType
+    }
+  }
+
+  return null
+}
+
+const getDriverRideAccessProfile = async (driver) => {
+  const vehicleType = await resolveDriverVehicleType(driver)
+  const preferences = normalizeRideAccessPreferences(driver?.rideAccess)
+  const defaults = getRideAccessDefaultsForVehicleType(vehicleType)
+
+  const allowedRideTypes = []
+  if (vehicleType) {
+    allowedRideTypes.push(vehicleType)
+  }
+
+  if (vehicleType === 'cercaGlide' && preferences.allowZip) {
+    allowedRideTypes.push('cercaZip')
+  }
+
+  if (vehicleType === 'cercaTitan') {
+    if (preferences.allowGlide) {
+      allowedRideTypes.push('cercaGlide')
+    }
+    if (preferences.allowZip) {
+      allowedRideTypes.push('cercaZip')
+    }
+  }
+
+  return {
+    vehicleType,
+    preferences,
+    availableToggles: defaults.availableToggles,
+    allowedRideTypes,
+    rideAccess: {
+      allowZip: preferences.allowZip,
+      allowGlide: preferences.allowGlide
+    }
+  }
+}
+
+const driverCanAcceptRideType = async (driver, requestedVehicleType) => {
+  const normalizedRequestedType = String(requestedVehicleType || '').trim()
+  if (!DRIVER_RIDE_TYPE_ORDER.includes(normalizedRequestedType)) {
+    return true
+  }
+
+  const profile = await getDriverRideAccessProfile(driver)
+  return profile.allowedRideTypes.includes(normalizedRequestedType)
+}
+
 /**
  * Calculate fare with time component
  * @param {number} basePrice - Base price from service
@@ -3302,12 +3414,6 @@ const searchDriversWithProgressiveRadius = async (
         driverQuery.isBusy = false
       }
 
-      // Filter by vehicle type if provided
-      if (vehicleType) {
-        driverQuery['vehicleInfo.vehicleType'] = vehicleType
-        logger.info(`   🚗 Filtering drivers by vehicle type: ${vehicleType}`)
-      }
-
       // Priority driver filter (only when options passed - backward compatible)
       if (options && typeof options.priorityOnly === 'boolean') {
         if (options.priorityOnly) {
@@ -3325,8 +3431,8 @@ const searchDriversWithProgressiveRadius = async (
 
       // Now apply filters - including socketId to ensure only connected drivers
       let drivers = await Driver.find(driverQuery)
-        .select('socketId goTo location') // Select GO TO state for route-aware filtering
-        .limit(10) // Limit to 10 drivers per radius
+        .select('socketId goTo location vehicleInfo assignedFleetVehicleId rideAccess') // Select ride-access and vehicle state for eligibility filtering
+        .limit(50) // Pull a wider pool, then filter down by ride access
 
       const filterDescription = (() => {
         let desc = 'isActive: true, isOnline: true, socketId exists'
@@ -3336,10 +3442,25 @@ const searchDriversWithProgressiveRadius = async (
           desc += ', isBusy: false'
         }
         if (vehicleType) {
-          desc += `, vehicleType: ${vehicleType}`
+          desc += `, requestedVehicleType: ${vehicleType}`
         }
         return desc
       })()
+
+      if (vehicleType) {
+        const eligibleDrivers = []
+        for (const driver of drivers) {
+          const canAccept = await driverCanAcceptRideType(driver, vehicleType)
+          if (canAccept) {
+            eligibleDrivers.push(driver)
+          }
+        }
+        logger.info(
+          `   🚗 Filtered ${drivers.length - eligibleDrivers.length} driver(s) by ride access for requested type: ${vehicleType}`
+        )
+        drivers = eligibleDrivers
+      }
+
       logger.info(
         `   ✅ Found ${drivers.length} drivers after applying filters (${filterDescription})`
       )
@@ -3518,6 +3639,11 @@ module.exports = {
   mapServiceToVehicleService,
   mapVehicleServiceToDriverType,
   mapServiceToDriverType,
+  normalizeRideAccessPreferences,
+  getRideAccessDefaultsForVehicleType,
+  resolveDriverVehicleType,
+  getDriverRideAccessProfile,
+  driverCanAcceptRideType,
   calculateFareWithTime,
   calculateHaversineDistance,
   createRide,

@@ -300,6 +300,20 @@ const driverSchema = new mongoose.Schema({
     type: vehicleDetailsSchema,
     default: null
   },
+  rideAccess: {
+    allowZip: {
+      type: Boolean,
+      default: false
+    },
+    allowGlide: {
+      type: Boolean,
+      default: false
+    },
+    updatedAt: {
+      type: Date,
+      default: null
+    }
+  },
   pendingVehicleInfo: {
     type: pendingVehicleSchema,
     default: null

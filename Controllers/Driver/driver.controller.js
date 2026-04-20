@@ -39,7 +39,10 @@ const {
 const {
     sanitizeRideListContactsForDriver,
 } = require('../../utils/rideContactPrivacy.service.js');
-const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions.js');
+const {
+    cancelRide: cancelRideFromBooking,
+    getRideAccessDefaultsForVehicleType,
+} = require('../../utils/ride_booking_functions.js');
 const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
@@ -656,6 +659,20 @@ const syncLegacyVehicleState = (driver) => {
     return driver;
 };
 
+const syncRideAccessState = (driver) => {
+    const activeVehicle = getActiveOwnedVehicleRecord(driver);
+    const vehicleType = activeVehicle?.vehicleType || driver?.vehicleInfo?.vehicleType || null;
+    const defaults = getRideAccessDefaultsForVehicleType(vehicleType);
+
+    driver.rideAccess = {
+        allowZip: defaults.allowZip,
+        allowGlide: defaults.allowGlide,
+        updatedAt: new Date(),
+    };
+
+    return driver;
+};
+
 const serializeOwnedVehicles = (driver) => (
     getOwnedVehicleRecords(driver).map(vehicle => toPlainVehicleRecord(vehicle))
 );
@@ -668,6 +685,8 @@ const serializeVehicleState = (driver) => {
         vehicleStatus: resolveVehicleStatus(driver),
         vehicles: serializeOwnedVehicles(driver),
         activeVehicleId: activeRec && activeRec._id ? String(activeRec._id) : null,
+        activeVehicleType: activeRec?.vehicleType || driver?.vehicleInfo?.vehicleType || null,
+        rideAccess: driver.rideAccess || null,
     };
 };
 
@@ -709,6 +728,7 @@ const clearDriverVehicleState = (driver) => {
 
     syncLegacyVehicleState(driver);
     driver.assignedFleetVehicleId = null;
+    syncRideAccessState(driver);
 
     return removed;
 };
@@ -840,6 +860,7 @@ const approvePendingVehicleForDriver = async (driver, approvedBy = 'ADMIN', vehi
 
     driver.pendingVehicleInfo = null;
     syncLegacyVehicleState(driver);
+    syncRideAccessState(driver);
     await driver.save();
 
     return driver;
@@ -1931,6 +1952,7 @@ const setDriverActiveOwnedVehicle = async (req, res) => {
                 v.isActive = String(v._id) === String(vehicleId);
             });
             syncLegacyVehicleState(fresh);
+            syncRideAccessState(fresh);
             await fresh.save();
             return res.status(200).json({
                 message: 'Active vehicle updated',
@@ -1971,6 +1993,7 @@ const setDriverActiveOwnedVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
         syncLegacyVehicleState(updated);
+        syncRideAccessState(updated);
         await updated.save();
 
         return res.status(200).json({
@@ -2023,6 +2046,7 @@ const deleteDriverGarageVehicle = async (req, res) => {
         }
 
         syncLegacyVehicleState(driver);
+        syncRideAccessState(driver);
         await driver.save();
 
         logger.info(`Driver removed garage vehicle subdoc: ${driver.email} vehicleId=${vehicleId}`);

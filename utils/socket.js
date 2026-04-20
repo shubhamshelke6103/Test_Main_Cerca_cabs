@@ -44,6 +44,7 @@ const {
   resolveEmergency,
   autoAssignDriver,
   searchDriversWithProgressiveRadius,
+  getDriverRideAccessProfile,
   validateAndFixDriverStatus,
   checkAndCleanStaleRideLocks,
   clearRideRedisKeys
@@ -1136,11 +1137,17 @@ function initializeSocket (server) {
           })
         }
 
+        const rideAccessProfile = await getDriverRideAccessProfile(finalDriver)
+
         socket.emit('driverStatusUpdate', {
           driverId,
           isOnline: !!finalDriver?.isOnline,
           isActive: finalDriver?.isActive || false,
-          isBusy: finalDriver?.isBusy || false
+          isBusy: finalDriver?.isBusy || false,
+          rideAccess: rideAccessProfile.rideAccess,
+          availableRideToggles: rideAccessProfile.availableToggles,
+          allowedRideTypes: rideAccessProfile.allowedRideTypes,
+          vehicleType: rideAccessProfile.vehicleType
         })
       } catch (err) {
         logger.error(
@@ -1211,11 +1218,17 @@ function initializeSocket (server) {
           `Driver toggle status updated - driverId: ${driverId}, isOnline: ${driver.isOnline}, isActive: ${driver.isActive}`
         )
 
+        const rideAccessProfile = await getDriverRideAccessProfile(driver)
+
         socket.emit('driverStatusUpdate', {
           driverId,
           isOnline: driver.isOnline,
           isActive: driver.isActive,
           isBusy: driver.isBusy,
+          rideAccess: rideAccessProfile.rideAccess,
+          availableRideToggles: rideAccessProfile.availableToggles,
+          allowedRideTypes: rideAccessProfile.allowedRideTypes,
+          vehicleType: rideAccessProfile.vehicleType,
           message: driver.isOnline
             ? 'You are now accepting ride requests'
             : 'You are now offline for ride requests'
@@ -1229,6 +1242,111 @@ function initializeSocket (server) {
       } catch (err) {
         logger.error('driverToggleStatus error:', err)
         socket.emit('errorEvent', { message: 'Failed to update driver status' })
+      }
+    })
+
+    // ============================
+    // DRIVER RIDE ACCESS TOGGLES
+    // ============================
+    socket.on('driverRidePreferenceUpdate', async data => {
+      try {
+        const { driverId } = data || {}
+        const parsePreferenceBoolean = value => {
+          if (typeof value === 'boolean') return value
+          if (typeof value === 'number') return value === 1
+          if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase()
+            if (['true', '1', 'yes', 'on'].includes(normalized)) return true
+            if (['false', '0', 'no', 'off'].includes(normalized)) return false
+          }
+          return undefined
+        }
+        const rawZip =
+          data?.rideAccess?.allowZip ??
+          data?.allowZip ??
+          data?.zip ??
+          data?.enableZip
+        const rawGlide =
+          data?.rideAccess?.allowGlide ??
+          data?.allowGlide ??
+          data?.glide ??
+          data?.enableGlide
+
+        if (!driverId) {
+          socket.emit('errorEvent', { message: 'Driver ID is required' })
+          return
+        }
+
+        const driver = await Driver.findById(driverId)
+        if (!driver) {
+          socket.emit('errorEvent', { message: 'Driver not found' })
+          return
+        }
+
+        const profile = await getDriverRideAccessProfile(driver)
+        if (!profile.vehicleType) {
+          socket.emit('errorEvent', {
+            message: 'Add an approved vehicle before changing ride access'
+          })
+          return
+        }
+
+        const currentRideAccess = {
+          allowZip: Boolean(driver?.rideAccess?.allowZip),
+          allowGlide: Boolean(driver?.rideAccess?.allowGlide)
+        }
+
+        const nextRideAccess = {
+          allowZip: profile.availableToggles.includes('allowZip')
+            ? (parsePreferenceBoolean(rawZip) ?? currentRideAccess.allowZip)
+            : false,
+          allowGlide: profile.availableToggles.includes('allowGlide')
+            ? (parsePreferenceBoolean(rawGlide) ?? currentRideAccess.allowGlide)
+            : false,
+          updatedAt: new Date()
+        }
+
+        const updatedDriver = await Driver.findByIdAndUpdate(
+          driverId,
+          {
+            $set: {
+              rideAccess: nextRideAccess,
+              lastSeen: new Date()
+            }
+          },
+          { new: true }
+        )
+        if (!updatedDriver) {
+          socket.emit('errorEvent', { message: 'Driver not found' })
+          return
+        }
+
+        const updatedProfile = await getDriverRideAccessProfile(updatedDriver)
+
+        socket.emit('driverRidePreferenceUpdated', {
+          driverId,
+          vehicleType: updatedProfile.vehicleType,
+          rideAccess: updatedProfile.rideAccess,
+          availableRideToggles: updatedProfile.availableToggles,
+          allowedRideTypes: updatedProfile.allowedRideTypes
+        })
+
+        socket.emit('driverStatusUpdate', {
+          driverId,
+          isOnline: !!updatedDriver.isOnline,
+          isActive: !!updatedDriver.isActive,
+          isBusy: !!updatedDriver.isBusy,
+          vehicleType: updatedProfile.vehicleType,
+          rideAccess: updatedProfile.rideAccess,
+          availableRideToggles: updatedProfile.availableToggles,
+          allowedRideTypes: updatedProfile.allowedRideTypes,
+          message: 'Ride access updated successfully'
+        })
+      } catch (err) {
+        logger.error('driverRidePreferenceUpdate error:', err)
+        socket.emit('errorEvent', {
+          message: 'Failed to update ride access preferences'
+        })
       }
     })
 
