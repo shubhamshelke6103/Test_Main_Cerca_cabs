@@ -31,6 +31,7 @@ const {
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
+    updateDriverIntercityToggle,
     getUpcomingBookings,
     rejectAcceptedRide,
     markCashCollected,
@@ -259,6 +260,7 @@ router.delete(
 
 // Route to update driver busy status
 router.patch('/:id/busy-status', updateDriverBusyStatus);
+router.patch('/:id/intercity-toggle', updateDriverIntercityToggle);
 
 // Route to get driver statistics
 router.get('/:id/stats', getDriverStats);

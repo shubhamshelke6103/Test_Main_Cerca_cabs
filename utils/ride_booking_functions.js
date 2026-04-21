@@ -997,6 +997,197 @@ const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
   return R * c
 }
 
+const roundMoney = value => Math.round((Number(value) || 0) * 100) / 100
+
+const getIntercityPricingConfig = settings => {
+  const config = settings?.intercityPricingConfigurations || {}
+  return {
+    enabled: config.enabled !== false,
+    baseFare: Number(config.baseFare || settings?.pricingConfigurations?.baseFare || 0),
+    perKmRates: {
+      cercaZip: Number(config.perKmRates?.cercaZip ?? settings?.pricingConfigurations?.perKmRate ?? 0),
+      cercaGlide: Number(config.perKmRates?.cercaGlide ?? settings?.pricingConfigurations?.perKmRate ?? 0),
+      cercaTitan: Number(config.perKmRates?.cercaTitan ?? settings?.pricingConfigurations?.perKmRate ?? 0)
+    },
+    tollChargeDefault: Number(config.tollChargeDefault || 0),
+    parkingChargeDefault: Number(config.parkingChargeDefault || 0),
+    roundTripAllowance: {
+      first24Hours: Number(config.roundTripAllowance?.first24Hours ?? 300),
+      next24Hours: Number(config.roundTripAllowance?.next24Hours ?? 500),
+      subsequent24Hours: Number(config.roundTripAllowance?.subsequent24Hours ?? 500)
+    },
+    dailyDistanceAllowance: {
+      thresholdKm: Number(config.dailyDistanceAllowance?.thresholdKm ?? 300),
+      cercaZipPerKm: Number(config.dailyDistanceAllowance?.cercaZipPerKm ?? 10),
+      cercaGlidePerKm: Number(config.dailyDistanceAllowance?.cercaGlidePerKm ?? 12),
+      cercaTitanPerKm: Number(config.dailyDistanceAllowance?.cercaTitanPerKm ?? 16)
+    },
+    matching: {
+      batchSize: Number(config.matching?.batchSize ?? 5),
+      batchWaitSeconds: Number(config.matching?.batchWaitSeconds ?? 45),
+      scheduledMatchLeadMinutes: Number(config.matching?.scheduledMatchLeadMinutes ?? 1440),
+      cronIntervalMinutes: Number(config.matching?.cronIntervalMinutes ?? 5)
+    }
+  }
+}
+
+const getIntercityPerKmRate = (vehicleType, settings) => {
+  const config = getIntercityPricingConfig(settings)
+  return Number(
+    config.perKmRates?.[vehicleType] ??
+      config.perKmRates?.cercaZip ??
+      settings?.pricingConfigurations?.perKmRate ??
+      0
+  )
+}
+
+const getIntercityDailyAllowanceRate = vehicleType => {
+  const map = {
+    cercaZip: 10,
+    cercaGlide: 12,
+    cercaTitan: 16
+  }
+  return map[vehicleType] || 10
+}
+
+const calculateIntercityAllowance = ({
+  durationMinutes = 0,
+  distanceKm = 0,
+  vehicleType = 'cercaZip',
+  settings
+}) => {
+  const config = getIntercityPricingConfig(settings)
+  const hours = Math.max(0, Number(durationMinutes) / 60)
+  let allowance = 0
+
+  if (hours > 0) {
+    const firstBlock = Math.min(hours, 24)
+    if (firstBlock > 0) allowance += config.roundTripAllowance.first24Hours
+    if (hours > 24) {
+      const remaining = hours - 24
+      const extraBlocks = Math.ceil(remaining / 24)
+      if (extraBlocks > 0) {
+        allowance += config.roundTripAllowance.next24Hours
+      }
+      if (extraBlocks > 1) {
+        allowance += (extraBlocks - 1) * config.roundTripAllowance.subsequent24Hours
+      }
+    }
+  }
+
+  const thresholdKm = config.dailyDistanceAllowance.thresholdKm
+  if (Number(distanceKm) > thresholdKm) {
+    const distanceAllowanceRate = getIntercityDailyAllowanceRate(vehicleType)
+    const extraKm = Number(distanceKm) - thresholdKm
+    allowance += extraKm * distanceAllowanceRate
+  }
+
+  return roundMoney(allowance)
+}
+
+const calculateIntercityFareBreakdown = ({
+  pickupLocation,
+  dropoffLocation,
+  durationMinutes = 0,
+  vehicleType = 'cercaZip',
+  tripMode = 'one_way',
+  tollCharges = 0,
+  parkingCharges = 0,
+  settings
+}) => {
+  if (!pickupLocation?.coordinates || !dropoffLocation?.coordinates) {
+    throw new Error('Pickup and dropoff locations are required for intercity fare calculation')
+  }
+
+  const config = getIntercityPricingConfig(settings)
+  const [pickupLng, pickupLat] = pickupLocation.coordinates
+  const [dropoffLng, dropoffLat] = dropoffLocation.coordinates
+  const distanceKm = calculateHaversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng)
+  const perKmRate = getIntercityPerKmRate(vehicleType, settings)
+  const baseFare = roundMoney(config.baseFare)
+  const distanceFare = roundMoney(distanceKm * perKmRate)
+  const roundedToll = roundMoney(tollCharges || config.tollChargeDefault || 0)
+  const roundedParking = roundMoney(parkingCharges || config.parkingChargeDefault || 0)
+  const driverAllowance = tripMode === 'round_trip'
+    ? calculateIntercityAllowance({
+        durationMinutes,
+        distanceKm,
+        vehicleType,
+        settings
+      })
+    : 0
+
+  const finalFare = roundMoney(
+    baseFare + distanceFare + roundedToll + roundedParking + driverAllowance
+  )
+
+  return {
+    distanceKm: roundMoney(distanceKm),
+    durationMinutes: Math.max(0, Math.round(Number(durationMinutes) || 0)),
+    perKmRate: roundMoney(perKmRate),
+    baseFare,
+    distanceFare,
+    tollCharges: roundedToll,
+    parkingCharges: roundedParking,
+    driverAllowance,
+    finalFare,
+    tripMode
+  }
+}
+
+const isIntercityRide = ride => String(ride?.rideType || '').toLowerCase() === 'intercity'
+
+const getIntercityEligibleDrivers = async ({
+  pickupLocation,
+  dropoffLocation,
+  vehicleType,
+  batchSize = 5,
+  excludeDriverIds = [],
+  matchRadiusMeters = 20000
+}) => {
+  const drivers = await Driver.find({
+    location: {
+      $near: {
+        $geometry: {
+          type: 'Point',
+          coordinates: pickupLocation.coordinates
+        },
+        $maxDistance: matchRadiusMeters
+      }
+    },
+    isActive: true,
+    isOnline: true,
+    isBusy: false,
+    intercityEnabled: true,
+    socketId: { $exists: true, $ne: null, $ne: '' },
+    ...(excludeDriverIds.length ? { _id: { $nin: excludeDriverIds } } : {})
+  })
+    .select('name socketId location vehicleInfo assignedFleetVehicleId rideAccess intercityEnabled isBusy isOnline')
+    .limit(Math.max(batchSize, 20))
+
+  const filtered = []
+  for (const driver of drivers) {
+    const vehicle = driver.vehicleInfo?.vehicleType || driver.assignedFleetVehicleId?.vehicleType || driver.vehicleInfo?.type || null
+    if (vehicleType && vehicle && String(vehicle) !== String(vehicleType)) {
+      continue
+    }
+    filtered.push(driver)
+  }
+
+  return filtered.sort((a, b) => {
+    const aCoords = a.location?.coordinates || []
+    const bCoords = b.location?.coordinates || []
+    const pickupCoords = pickupLocation.coordinates
+    const aDist = aCoords.length === 2
+      ? calculateHaversineDistance(pickupCoords[1], pickupCoords[0], aCoords[1], aCoords[0])
+      : Number.MAX_SAFE_INTEGER
+    const bDist = bCoords.length === 2
+      ? calculateHaversineDistance(pickupCoords[1], pickupCoords[0], bCoords[1], bCoords[0])
+      : Number.MAX_SAFE_INTEGER
+    return aDist - bDist
+  }).slice(0, batchSize)
+}
+
 const calculateRouteDistanceInKm = routePoints => {
   if (!Array.isArray(routePoints) || routePoints.length < 2) {
     return 0
@@ -1140,16 +1331,27 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
     logger.info(`✅ Driver ${driverId} assigned to ride ${rideId}`)
 
     // 4️⃣ DRIVER BUSY LOGIC
-    if (ride.bookingType === 'INSTANT') {
+    if (isIntercityRide(ride)) {
       await Driver.findByIdAndUpdate(driverId, {
         isBusy: true,
-        busyUntil: null
+        busyUntil: ride.scheduledAt || null,
+        currentRideType: 'intercity',
+        currentRideId: ride._id
+      })
+    } else if (ride.bookingType === 'INSTANT') {
+      await Driver.findByIdAndUpdate(driverId, {
+        isBusy: true,
+        busyUntil: null,
+        currentRideType: 'normal',
+        currentRideId: ride._id
       })
     } else {
       // FULL_DAY / RENTAL
       await Driver.findByIdAndUpdate(driverId, {
         isBusy: false,
-        busyUntil: ride.bookingMeta?.endTime || null
+        busyUntil: ride.bookingMeta?.endTime || null,
+        currentRideType: ride.bookingType || null,
+        currentRideId: ride._id
       })
     }
 
@@ -1288,7 +1490,9 @@ const completeRide = async (rideId, fare) => {
         // Reset isBusy for this completed ride
         await Driver.findByIdAndUpdate(driverId, {
           isBusy: false,
-          busyUntil: null
+          busyUntil: null,
+          currentRideType: null,
+          currentRideId: null
         })
         
         logger.info(
@@ -1304,6 +1508,12 @@ const completeRide = async (rideId, fare) => {
           )
         }
       }
+    }
+
+    if (ride.rideType === 'intercity' && ride.driver) {
+      await Driver.findByIdAndUpdate(ride.driver._id || ride.driver, {
+        $inc: { intercityRideCount: 1 }
+      })
     }
 
     // Structured logging for fare calculation
@@ -1756,8 +1966,6 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
 }
 
 // --- Driver in-progress cancellation settlement ---------------------------------
-
-const roundMoney = n => Math.round(Number(n || 0) * 100) / 100
 
 /**
  * Rides where driver cancelled in_progress and rider still owes additionalDue (ledger not finalized).
@@ -2656,6 +2864,51 @@ const recalculateRideFare = async (rideId) => {
   try {
     const ride = await Ride.findById(rideId)
     if (!ride) throw new Error('Ride not found')
+
+    if (isIntercityRide(ride)) {
+      const Settings = require('../Models/Admin/settings.modal.js')
+      const settings = await Settings.findOne()
+      if (!settings) throw new Error('Admin settings not found')
+
+      const vehicleType =
+        ride.vehicleType || mapServiceToVehicleService(ride.service || 'cercaZip')
+      const actualDistance =
+        ride.actualDistanceInKm > 0
+          ? ride.actualDistanceInKm
+          : ride.distanceInKm || ride.estimatedDistanceInKm || 0
+      const actualDuration =
+        ride.actualDuration !== undefined && ride.actualDuration !== null
+          ? ride.actualDuration
+          : ride.estimatedDuration || 0
+
+      const intercityBreakdown = calculateIntercityFareBreakdown({
+        pickupLocation: ride.pickupLocation,
+        dropoffLocation: ride.dropoffLocation,
+        durationMinutes: actualDuration,
+        vehicleType,
+        tripMode: ride.tripMode || 'one_way',
+        tollCharges: ride.fareBreakdown?.tollCharges || 0,
+        parkingCharges: ride.fareBreakdown?.parkingCharges || 0,
+        settings
+      })
+
+      const pickupWaitCharge = roundMoney(ride.pickupWait?.totalPickupWaitCharge || 0)
+      const finalFare = roundMoney(intercityBreakdown.finalFare + pickupWaitCharge)
+
+      return {
+        baseFare: intercityBreakdown.baseFare,
+        distanceFare: intercityBreakdown.distanceFare,
+        timeFare: 0,
+        subtotal: intercityBreakdown.finalFare,
+        fareAfterMinimum: intercityBreakdown.finalFare,
+        discount: 0,
+        pickupWaitCharge,
+        finalFare,
+        tollCharges: intercityBreakdown.tollCharges,
+        parkingCharges: intercityBreakdown.parkingCharges,
+        driverAllowance: intercityBreakdown.driverAllowance
+      }
+    }
 
     // Skip recalculation for special booking types
     if (ride.bookingType !== 'INSTANT') {
@@ -3594,12 +3847,24 @@ const getUpcomingBookingsForDriver = async driverId => {
     const now = new Date()
     const upcomingBookings = await Ride.find({
       driver: driverId,
-      bookingType: { $ne: 'INSTANT' },
       status: 'accepted',
-      'bookingMeta.startTime': { $gt: now }
+      $and: [
+        {
+          $or: [
+            { bookingType: { $ne: 'INSTANT' } },
+            { rideType: 'intercity', scheduleType: 'scheduled' }
+          ]
+        },
+        {
+          $or: [
+            { 'bookingMeta.startTime': { $gt: now } },
+            { scheduledAt: { $gt: now } }
+          ]
+        }
+      ]
     })
       .populate('rider', 'fullName name phone email')
-      .sort({ 'bookingMeta.startTime': 1 })
+      .sort({ scheduledAt: 1, 'bookingMeta.startTime': 1 })
 
     return upcomingBookings
   } catch (error) {
@@ -3617,7 +3882,11 @@ const getScheduledRidesToStart = async () => {
     const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000)
 
     const scheduledRides = await Ride.find({
-      bookingType: { $ne: 'INSTANT' },
+      $or: [
+        { bookingType: { $ne: 'INSTANT' } },
+        { rideType: 'intercity', scheduleType: 'scheduled' }
+      ],
+      rideType: { $ne: 'intercity' },
       status: 'accepted',
       'bookingMeta.startTime': {
         $lte: now,
@@ -3677,6 +3946,9 @@ module.exports = {
   getUpcomingBookingsForDriver,
   getScheduledRidesToStart,
   searchDriversWithProgressiveRadius,
+  calculateIntercityFareBreakdown,
+  getIntercityPricingConfig,
+  getIntercityEligibleDrivers,
   validateAndFixDriverStatus,
   recalculateRideFare,
   // Redis cleanup utilities (multi-instance safe)

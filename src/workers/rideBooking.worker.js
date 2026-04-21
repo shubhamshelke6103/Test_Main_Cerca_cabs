@@ -4,19 +4,77 @@ const { Worker } = require('bullmq')
 const { redis } = require('../../config/redis')
 const logger = require('../../utils/logger')
 
-const { QUEUE_NAME } = require('../queues/rideBooking.queue') // ✅ IMPORTANT
+const { QUEUE_NAME, rideBookingQueue } = require('../queues/rideBooking.queue') // ✅ IMPORTANT
 
 const Ride = require('../../Models/Driver/ride.model')
 const Driver = require('../../Models/Driver/driver.model')
 
 const {
-  searchDriversWithProgressiveRadius,
-  createNotification,
-  cancelRide,
-  clearWorkerLock
+    searchDriversWithProgressiveRadius,
+    getIntercityEligibleDrivers,
+    getIntercityPricingConfig,
+    createNotification,
+    cancelRide,
+    clearWorkerLock
 } = require('../../utils/ride_booking_functions')
 
 const { getSocketIO } = require('../../utils/socket')
+
+const INTERCITY_BATCH_WAIT_SECONDS_FALLBACK = 45
+
+const isIntercityRide = ride => String(ride?.rideType || '').toLowerCase() === 'intercity'
+
+const getIntercityBatchDrivers = async (ride, batchIndex) => {
+  const settings = await require('../../Models/Admin/settings.modal').findOne()
+  const intercityConfig = getIntercityPricingConfig(settings)
+  const batchSize = Math.max(1, intercityConfig.matching.batchSize || 5)
+  const start = batchIndex * batchSize
+  const allDrivers = await getIntercityEligibleDrivers({
+    pickupLocation: ride.pickupLocation,
+    dropoffLocation: ride.dropoffLocation,
+    vehicleType: ride.vehicleType || null,
+    batchSize: 100,
+    excludeDriverIds: ride.rejectedDrivers || [],
+    matchRadiusMeters: 20000
+  })
+
+  return {
+    batchSize,
+    waitSeconds: intercityConfig.matching.batchWaitSeconds || INTERCITY_BATCH_WAIT_SECONDS_FALLBACK,
+    drivers: allDrivers.slice(start, start + batchSize),
+    totalEligible: allDrivers.length
+  }
+}
+
+const notifyIntercityDrivers = async (io, ride, drivers, batchIndex, batchSize) => {
+  const notifiedDriverIds = []
+  for (const driver of drivers) {
+    if (!driver?.socketId) continue
+    io.to(driver.socketId).emit('newRideRequest', ride)
+    notifiedDriverIds.push(driver._id)
+    try {
+      await createNotification({
+        recipientId: driver._id,
+        recipientModel: 'Driver',
+        title: ride.scheduleType === 'scheduled' ? 'Upcoming Intercity Ride' : 'Intercity Ride Request',
+        message: ride.scheduleType === 'scheduled'
+          ? 'A planned intercity ride is available for acceptance.'
+          : 'An intercity ride is available near you.',
+        type: 'ride_request',
+        relatedRide: ride._id.toString(),
+        data: {
+          rideId: ride._id.toString(),
+          batchIndex,
+          batchSize,
+          rideType: 'intercity'
+        }
+      })
+    } catch (err) {
+      logger.warn(`Intercity notification failed for driver ${driver._id}: ${err.message}`)
+    }
+  }
+  return notifiedDriverIds
+}
 
 /**
  * BullMQ Worker — Ride Booking
@@ -59,6 +117,91 @@ const rideBookingWorker = new Worker(
     }
 
     const io = getSocketIO()
+
+    if (isIntercityRide(ride)) {
+      const batchIndex = Number(job.data.batchIndex || ride.intercityMatchState?.batchIndex || 0)
+      const { drivers, batchSize, waitSeconds, totalEligible } = await getIntercityBatchDrivers(ride, batchIndex)
+      const nextBatchIndex = batchIndex + 1
+      const totalBatches = Math.max(1, Math.ceil(totalEligible / batchSize))
+
+      if (!drivers.length) {
+        logger.warn(`No intercity drivers found for ride ${rideId} in batch ${batchIndex}`)
+        if (batchIndex === 0 || batchIndex >= totalBatches) {
+          const cancelledRide = await cancelRide(
+            rideId,
+            'system',
+            'No intercity drivers available'
+          )
+
+          if (ride.userSocketId) {
+            io.to(ride.userSocketId).emit('noDriverFound', {
+              rideId,
+              message: 'No intercity drivers are available right now.'
+            })
+            io.to(ride.userSocketId).emit('rideCancelled', {
+              ride: cancelledRide,
+              reason: 'No intercity drivers available',
+              cancelledBy: 'system'
+            })
+          }
+
+          await createNotification({
+            recipientId: ride.rider._id || ride.rider,
+            recipientModel: 'User',
+            title: 'Ride Cancelled',
+            message: 'No intercity drivers are available right now.',
+            type: 'ride_cancelled',
+            relatedRide: rideId
+          })
+        }
+        return
+      }
+
+      const notifiedDriverIds = await notifyIntercityDrivers(
+        io,
+        ride,
+        drivers,
+        batchIndex,
+        batchSize
+      )
+
+      await Ride.findByIdAndUpdate(rideId, {
+        $set: {
+          notifiedDrivers: ride.scheduleType === 'scheduled'
+            ? [...new Set([...(ride.notifiedDrivers || []).map(String), ...notifiedDriverIds.map(String)])]
+            : notifiedDriverIds,
+          intercityMatchState: {
+            ...(ride.intercityMatchState || {}),
+            batchIndex,
+            lastBatchSentAt: new Date(),
+            currentBatchDriverIds: notifiedDriverIds,
+            nextBatchAt: new Date(Date.now() + waitSeconds * 1000)
+          }
+        }
+      })
+
+      logger.info(
+        `✅ Intercity batch ${batchIndex} sent for ride ${rideId} | drivers: ${notifiedDriverIds.length}/${batchSize}`
+      )
+
+      if (batchIndex + 1 < totalBatches && ride.status === 'requested') {
+        await rideBookingQueue.add(
+          'process-ride',
+          { rideId, mode: 'intercity', batchIndex: nextBatchIndex },
+          {
+            delay: waitSeconds * 1000,
+            jobId: `ride_${rideId}_intercity_batch_${nextBatchIndex}`
+          }
+        )
+      }
+
+      try {
+        await clearWorkerLock(rideId)
+      } catch (cleanupError) {
+        logger.warn(`Failed to clear worker lock for intercity ride ${rideId}: ${cleanupError.message}`)
+      }
+      return
+    }
 
     const vehicleType = ride.vehicleType || null
     const radii = [3000, 6000, 9000, 12000, 15000, 20000]

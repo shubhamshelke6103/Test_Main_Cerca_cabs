@@ -132,8 +132,34 @@ const rideSchema = new mongoose.Schema(
     // =========================
     rideType: {
       type: String,
-      enum: ['normal', 'whole_day', 'custom'],
+      enum: ['normal', 'whole_day', 'custom', 'intercity'],
       default: 'normal'
+    },
+
+    scheduleType: {
+      type: String,
+      enum: ['now', 'scheduled'],
+      default: 'now'
+    },
+
+    scheduledAt: {
+      type: Date,
+      default: null
+    },
+
+    intercityMatchState: {
+      batchIndex: { type: Number, default: 0 },
+      lastBatchSentAt: { type: Date, default: null },
+      currentBatchDriverIds: {
+        type: [mongoose.Schema.Types.ObjectId],
+        ref: 'Driver',
+        default: []
+      },
+      userNotifiedAt: { type: Date, default: null },
+      driverNotifiedAt: { type: Date, default: null },
+      dayReminderSentAt: { type: Date, default: null },
+      hourReminderSentAt: { type: Date, default: null },
+      nextBatchAt: { type: Date, default: null }
     },
 
     bookingType: {
@@ -230,7 +256,10 @@ const rideSchema = new mongoose.Schema(
       fareAfterMinimum: Number,
       discount: Number,
       finalFare: Number,
-      pickupWaitCharge: { type: Number, default: 0 }
+      pickupWaitCharge: { type: Number, default: 0 },
+      tollCharges: { type: Number, default: 0 },
+      parkingCharges: { type: Number, default: 0 },
+      driverAllowance: { type: Number, default: 0 }
     },
 
     riderRating: {
@@ -423,6 +452,7 @@ rideSchema.pre('validate', function (next) {
 ===================================================== */
 
 rideSchema.index({ status: 1, createdAt: -1 })
+rideSchema.index({ rideType: 1, scheduleType: 1, status: 1, scheduledAt: 1 })
 rideSchema.index({
   rider: 1,
   status: 1,

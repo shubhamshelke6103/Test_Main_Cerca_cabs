@@ -12,7 +12,9 @@ const rideBookingFunctions = require('../../utils/ride_booking_functions')
 const {
   mapServiceToVehicleService,
   calculateFareWithTime,
-  calculateHaversineDistance
+  calculateHaversineDistance,
+  calculateIntercityFareBreakdown,
+  getIntercityPricingConfig
 } = rideBookingFunctions
 const Driver = require('../../Models/Driver/driver.model')
 const {
@@ -412,19 +414,26 @@ const createRide = asyncHandler(async (req, res) => {
 
     rideData.estimatedDistanceInKm = distance
     rideData.distanceInKm = distance
+    let vehicleServiceKey = null
 
 
     // ============================
     // Service Validation
     // ============================
-    const selectedService = normalizeServiceName(rideData.service)
+    const rideType = String(rideData.rideType || 'normal').toLowerCase()
+    const scheduleType = String(rideData.scheduleType || 'now').toLowerCase()
+    const isIntercityRide = rideType === 'intercity'
+
+    const selectedService = normalizeServiceName(
+      rideData.service || rideData.vehicleType || ''
+    )
 
     let service = settings.services?.find(
       (s) => normalizeServiceName(s.name) === selectedService
     )
 
     if (!service && selectedService) {
-      const vehicleServiceKey = mapServiceToVehicleService(selectedService)
+      vehicleServiceKey = mapServiceToVehicleService(selectedService)
       const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
       if (vehicleService && vehicleService.enabled !== false) {
         service = {
@@ -437,10 +446,36 @@ const createRide = asyncHandler(async (req, res) => {
       }
     }
 
+    if (!service && isIntercityRide) {
+      vehicleServiceKey = mapServiceToVehicleService(
+        rideData.vehicleType || 'cercaZip'
+      )
+      const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
+      if (vehicleService && vehicleService.enabled !== false) {
+        service = {
+          name: vehicleService.name,
+          price: vehicleService.price || 0
+        }
+      }
+    }
+
     if (!service) {
       throw new AppError('Invalid service selected', 400, {
         code: 'INVALID_SERVICE_SELECTED'
       })
+    }
+
+    if (isIntercityRide) {
+      if (
+        rideData.pickupCity &&
+        rideData.dropCity &&
+        String(rideData.pickupCity).trim().toLowerCase() ===
+          String(rideData.dropCity).trim().toLowerCase()
+      ) {
+        throw new AppError('Intercity rides must be between different cities', 400, {
+          code: 'INTERCITY_SAME_CITY_NOT_ALLOWED'
+        })
+      }
     }
 
 
@@ -449,9 +484,76 @@ const createRide = asyncHandler(async (req, res) => {
     // ============================
     let fare = service.price + distance * perKmRate
     fare = Math.max(fare, minimumFare)
+    let intercityBreakdown = null
 
-    rideData.fare = fare
-    rideData.service = service.name.toLowerCase()
+    if (isIntercityRide) {
+      const intercityConfig = getIntercityPricingConfig(settings)
+      if (!intercityConfig.enabled) {
+        throw new AppError('Intercity rides are currently disabled', 400, {
+          code: 'INTERCITY_DISABLED'
+        })
+      }
+
+      const tripMode =
+        String(rideData.tripMode || (rideData.roundTrip ? 'round_trip' : 'one_way')).toLowerCase() ===
+        'round_trip'
+          ? 'round_trip'
+          : 'one_way'
+
+      const scheduledAt =
+        rideData.scheduledAt ||
+        rideData.bookingMeta?.startTime ||
+        rideData.bookingMeta?.scheduledAt ||
+        null
+
+      if (scheduleType === 'scheduled' && !scheduledAt) {
+        throw new AppError('Scheduled intercity rides require a scheduled time', 400, {
+          code: 'INTERCITY_SCHEDULE_TIME_REQUIRED'
+        })
+      }
+
+      intercityBreakdown = calculateIntercityFareBreakdown({
+        pickupLocation: rideData.pickupLocation,
+        dropoffLocation: rideData.dropoffLocation,
+        durationMinutes:
+          Number(rideData.estimatedDuration || 0) ||
+          Math.ceil((distance / 35) * 60),
+        vehicleType:
+          vehicleServiceKey || mapServiceToVehicleService(selectedService || rideData.vehicleType || 'cercaZip'),
+        tripMode,
+        tollCharges: rideData.tollCharges || 0,
+        parkingCharges: rideData.parkingCharges || 0,
+        settings
+      })
+
+      fare = intercityBreakdown.finalFare
+      rideData.tripMode = tripMode
+      rideData.scheduleType = scheduleType
+      rideData.scheduledAt = scheduledAt ? new Date(scheduledAt) : null
+      rideData.rideType = 'intercity'
+      rideData.vehicleType =
+        vehicleServiceKey ||
+        mapServiceToVehicleService(selectedService || rideData.vehicleType || 'cercaZip')
+      rideData.service = service.name.toLowerCase()
+      rideData.fare = fare
+      rideData.distanceInKm = intercityBreakdown.distanceKm
+      rideData.estimatedDistanceInKm = intercityBreakdown.distanceKm
+      rideData.fareBreakdown = {
+        baseFare: intercityBreakdown.baseFare,
+        distanceFare: intercityBreakdown.distanceFare,
+        timeFare: 0,
+        subtotal: intercityBreakdown.finalFare,
+        fareAfterMinimum: intercityBreakdown.finalFare,
+        discount: 0,
+        finalFare: intercityBreakdown.finalFare,
+        tollCharges: intercityBreakdown.tollCharges,
+        parkingCharges: intercityBreakdown.parkingCharges,
+        driverAllowance: intercityBreakdown.driverAllowance
+      }
+    } else {
+      rideData.fare = fare
+      rideData.service = service.name.toLowerCase()
+    }
 
 
     // ============================
@@ -467,7 +569,23 @@ const createRide = asyncHandler(async (req, res) => {
     // ============================
     // Create Ride
     // ============================
-    const ride = new Ride(rideData)
+    const ride = new Ride({
+      ...rideData,
+      rideType,
+      scheduleType: rideData.scheduleType || 'now',
+      intercityMatchState: isIntercityRide
+        ? {
+            batchIndex: 0,
+            lastBatchSentAt: null,
+            currentBatchDriverIds: [],
+            userNotifiedAt: null,
+            driverNotifiedAt: null,
+            dayReminderSentAt: null,
+            hourReminderSentAt: null,
+            nextBatchAt: null
+          }
+        : rideData.intercityMatchState
+    })
     await ride.save()
 
     logger.info(`Ride created successfully with ID: ${ride._id}`)
@@ -476,13 +594,19 @@ const createRide = asyncHandler(async (req, res) => {
     // ============================
     // Queue Ride For Driver Discovery
     // ============================
-    logger.info(`📥 Queuing ride ${ride._id} for driver discovery`)
+    if (!isIntercityRide || scheduleType === 'now') {
+      logger.info(`📥 Queuing ride ${ride._id} for driver discovery`)
 
-    await rideBookingProducer.add('process-ride', {
-      rideId: ride._id.toString()
-    })
+      await rideBookingProducer.add('process-ride', {
+        rideId: ride._id.toString(),
+        mode: isIntercityRide ? 'intercity-now' : 'standard',
+        batchIndex: 0
+      })
 
-    logger.info(`✅ Ride ${ride._id} successfully added to Redis queue`)
+      logger.info(`✅ Ride ${ride._id} successfully added to Redis queue`)
+    } else {
+      logger.info(`⏭️ Intercity scheduled ride ${ride._id} stored for cron-based matching`)
+    }
 
 
     // ============================
@@ -492,7 +616,8 @@ const createRide = asyncHandler(async (req, res) => {
       ride,
       otpReceiver: ride.otpReceiver,
       startOtp,
-      stopOtp
+      stopOtp,
+      intercityFare: intercityBreakdown
     })
 })
 
@@ -1137,7 +1262,7 @@ const getRidesByDriverId = async (req, res) => {
 
 // Search for nearby drivers based on user location
 const searchRide = async (req, res) => {
-  const { pickupLocation } = req.body // User's pickup location
+  const { pickupLocation, dropoffLocation, rideType, tripMode, scheduleType } = req.body // User's locations
   const lat = pickupLocation?.lat ?? pickupLocation?.latitude
   const lon = pickupLocation?.lon ?? pickupLocation?.longitude
 
@@ -1149,6 +1274,49 @@ const searchRide = async (req, res) => {
   }
 
   try {
+    if (String(rideType || '').toLowerCase() === 'intercity') {
+      if (!dropoffLocation) {
+        return res.status(400).json({
+          success: false,
+          message: 'dropoffLocation is required for intercity rides'
+        })
+      }
+
+      const settings = await Settings.findOne()
+      if (!settings) {
+        return res.status(500).json({
+          success: false,
+          message: 'Admin settings not found'
+        })
+      }
+
+      const intercityConfig = getIntercityPricingConfig(settings)
+      const breakdown = calculateIntercityFareBreakdown({
+        pickupLocation,
+        dropoffLocation,
+        durationMinutes: req.body.estimatedDuration || 0,
+        vehicleType: req.body.vehicleType || 'cercaZip',
+        tripMode: String(tripMode || 'one_way').toLowerCase() === 'round_trip'
+          ? 'round_trip'
+          : 'one_way',
+        tollCharges: req.body.tollCharges || 0,
+        parkingCharges: req.body.parkingCharges || 0,
+        settings
+      })
+
+      return res.status(200).json({
+        success: true,
+        rideType: 'intercity',
+        scheduleType: scheduleType || 'now',
+        data: {
+          distance: breakdown.distanceKm,
+          estimatedDuration: breakdown.durationMinutes,
+          fareBreakdown: breakdown,
+          availableVehicleTypes: Object.keys(intercityConfig.perKmRates || {})
+        }
+      })
+    }
+
     const nearbyDrivers = await Driver.find({
       location: {
         $near: {
@@ -1251,6 +1419,84 @@ const calculateFare = async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Admin settings not found'
+      })
+    }
+
+    const rideType = String(req.body.rideType || 'normal').toLowerCase()
+    const tripMode = String(req.body.tripMode || (req.body.roundTrip ? 'round_trip' : 'one_way')).toLowerCase() === 'round_trip'
+      ? 'round_trip'
+      : 'one_way'
+
+    if (rideType === 'intercity') {
+      const intercityConfig = getIntercityPricingConfig(settings)
+      if (!intercityConfig.enabled) {
+        return res.status(400).json({
+          success: false,
+          message: 'Intercity rides are currently disabled'
+        })
+      }
+
+      if (
+        req.body.pickupCity &&
+        req.body.dropCity &&
+        String(req.body.pickupCity).trim().toLowerCase() === String(req.body.dropCity).trim().toLowerCase()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Intercity rides must be between different cities'
+        })
+      }
+
+      const intercityVehicleKeyMap = {
+        cercaZip: 'cercaZip',
+        cercaGlide: 'cercaGlide',
+        cercaTitan: 'cercaTitan',
+        zip: 'cercaZip',
+        glide: 'cercaGlide',
+        titan: 'cercaTitan'
+      }
+      const vehicleServiceKey =
+        intercityVehicleKeyMap[String(vehicleType || req.body.vehicleType || 'cercaZip').toLowerCase()] ||
+        'cercaZip'
+
+      const breakdown = calculateIntercityFareBreakdown({
+        pickupLocation,
+        dropoffLocation,
+        durationMinutes: duration,
+        vehicleType: vehicleServiceKey,
+        tripMode,
+        tollCharges: req.body.tollCharges || 0,
+        parkingCharges: req.body.parkingCharges || 0,
+        settings
+      })
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          distance: breakdown.distanceKm,
+          estimatedDuration: breakdown.durationMinutes,
+          fareBreakdown: {
+            baseFare: breakdown.baseFare,
+            distanceFare: breakdown.distanceFare,
+            timeFare: 0,
+            subtotal: breakdown.finalFare,
+            minimumFare: 0,
+            fareAfterMinimum: breakdown.finalFare,
+            promoCode: null,
+            discount: 0,
+            finalFare: breakdown.finalFare,
+            tollCharges: breakdown.tollCharges,
+            parkingCharges: breakdown.parkingCharges,
+            driverAllowance: breakdown.driverAllowance,
+            driverEarnings: null,
+            platformFees: null,
+            adminEarnings: null
+          },
+          rideType: 'intercity',
+          tripMode,
+          vehicleType: vehicleServiceKey,
+          availableVehicleTypes: Object.keys(intercityConfig.perKmRates || {})
+        }
       })
     }
 

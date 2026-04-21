@@ -251,6 +251,24 @@ const driverSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  intercityEnabled: {
+    type: Boolean,
+    default: false
+  },
+  currentRideType: {
+    type: String,
+    enum: ['normal', 'intercity', 'whole_day', 'custom', null],
+    default: null
+  },
+  currentRideId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ride',
+    default: null
+  },
+  intercityRideCount: {
+    type: Number,
+    default: 0
+  },
   rating: {
     type: Number,
     default: 0,

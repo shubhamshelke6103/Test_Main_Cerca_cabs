@@ -18,6 +18,34 @@ const SettingsSchema = new mongoose.Schema({
         pickupWaitTier2RatePerMin: { type: Number, default: 2 },
         pickupWaitDriverCancelAfterMinutes: { type: Number, default: 8 },
     },
+    intercityPricingConfigurations: {
+        enabled: { type: Boolean, default: true },
+        baseFare: { type: Number, default: 0 },
+        perKmRates: {
+            cercaZip: { type: Number, default: 10 },
+            cercaGlide: { type: Number, default: 12 },
+            cercaTitan: { type: Number, default: 16 },
+        },
+        tollChargeDefault: { type: Number, default: 0 },
+        parkingChargeDefault: { type: Number, default: 0 },
+        roundTripAllowance: {
+            first24Hours: { type: Number, default: 300 },
+            next24Hours: { type: Number, default: 500 },
+            subsequent24Hours: { type: Number, default: 500 },
+        },
+        dailyDistanceAllowance: {
+            thresholdKm: { type: Number, default: 300 },
+            cercaZipPerKm: { type: Number, default: 10 },
+            cercaGlidePerKm: { type: Number, default: 12 },
+            cercaTitanPerKm: { type: Number, default: 16 },
+        },
+        matching: {
+            batchSize: { type: Number, default: 5 },
+            batchWaitSeconds: { type: Number, default: 45 },
+            scheduledMatchLeadMinutes: { type: Number, default: 1440 },
+            cronIntervalMinutes: { type: Number, default: 5 },
+        },
+    },
     services: [
         {
             name: { type: String, required: true },

@@ -2386,6 +2386,59 @@ const updateDriverBusyStatus = async (req, res) => {
 };
 
 /**
+ * @desc    Enable/disable intercity availability
+ * @route   PATCH /drivers/:id/intercity-toggle
+ */
+const updateDriverIntercityToggle = async (req, res) => {
+    try {
+        const { intercityEnabled } = req.body;
+
+        if (typeof intercityEnabled !== 'boolean') {
+            return res.status(400).json({ message: 'intercityEnabled must be a boolean value' });
+        }
+
+        const driver = await Driver.findById(req.params.id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        if (intercityEnabled) {
+            const standardRideCount = await Ride.countDocuments({
+                driver: driver._id,
+                status: 'completed',
+                $or: [
+                    { rideType: { $ne: 'intercity' } },
+                    { rideType: { $exists: false } }
+                ]
+            });
+
+            if (standardRideCount < 50) {
+                return res.status(400).json({
+                    message: 'Intercity toggle can only be enabled after 50 completed standard rides',
+                    completedStandardRides: standardRideCount,
+                    requiredStandardRides: 50
+                });
+            }
+        }
+
+        const updatedDriver = await Driver.findByIdAndUpdate(
+            driver._id,
+            { intercityEnabled },
+            { new: true }
+        ).select('-password');
+
+        logger.info(`Driver intercity toggle updated: ${driver.email}, intercityEnabled: ${intercityEnabled}`);
+        res.status(200).json({
+            message: 'Intercity toggle updated successfully',
+            driver: updatedDriver
+        });
+    } catch (error) {
+        logger.error('Error updating driver intercity toggle:', error);
+        res.status(500).json({ message: 'Error updating driver intercity toggle', error });
+    }
+};
+
+/**
  * @desc    Mark cash as collected for a ride
  * @route   PATCH /drivers/:driverId/rides/:rideId/mark-cash-collected
  */
@@ -2775,6 +2828,7 @@ module.exports = {
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,
+    updateDriverIntercityToggle,
     markCashCollected,
     uploadPriorityDocument,
     approvePriorityDriver,

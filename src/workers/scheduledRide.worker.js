@@ -15,6 +15,7 @@ const {
   createNotification,
   getScheduledRidesToStart
 } = require('../../utils/ride_booking_functions')
+const { rideBookingQueue } = require('../queues/rideBooking.queue')
 
 /**
  * Initialize Scheduled Ride Worker
@@ -37,6 +38,8 @@ function initScheduledRideWorker () {
       try {
         logger.info('⏰ Scheduled ride check triggered (every 5 minutes)')
         await checkAndStartScheduledRides(io)
+        await queueScheduledIntercityMatches()
+        await sendIntercityReminders(io)
       } catch (error) {
         logger.error('❌ Error in scheduled ride check:', error)
       }
@@ -121,11 +124,130 @@ async function checkAndStartScheduledRides (io) {
   }
 }
 
+async function queueScheduledIntercityMatches () {
+  try {
+    const now = new Date()
+    const Settings = require('../../Models/Admin/settings.modal')
+    const settings = await Settings.findOne()
+    const leadMinutes =
+      settings?.intercityPricingConfigurations?.matching?.scheduledMatchLeadMinutes || 1440
+    const matchWindowStart = new Date(now.getTime() - 5 * 60 * 1000)
+    const matchWindowEnd = new Date(now.getTime() + leadMinutes * 60 * 1000)
+
+    const rides = await Ride.find({
+      rideType: 'intercity',
+      scheduleType: 'scheduled',
+      status: 'requested',
+      scheduledAt: {
+        $gte: matchWindowStart,
+        $lte: matchWindowEnd
+      },
+      'intercityMatchState.lastBatchSentAt': null
+    }).select('_id')
+
+    for (const ride of rides) {
+      await rideBookingQueue.add(
+        'process-ride',
+        { rideId: ride._id.toString(), mode: 'intercity', batchIndex: 0 },
+        { jobId: `ride_${ride._id.toString()}_intercity_batch_0` }
+      )
+    }
+  } catch (error) {
+    logger.error('❌ Error queueing scheduled intercity matches:', error)
+  }
+}
+
+async function sendIntercityReminders (io) {
+  try {
+    const now = new Date()
+    const oneDayAhead = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+    const oneHourAhead = new Date(now.getTime() + 60 * 60 * 1000)
+
+    const rides = await Ride.find({
+      rideType: 'intercity',
+      scheduleType: 'scheduled',
+      status: { $in: ['accepted', 'arrived', 'in_progress'] },
+      scheduledAt: { $gte: now }
+    }).populate('driver rider')
+
+    for (const ride of rides) {
+      const start = new Date(ride.scheduledAt)
+      const dayWindow = Math.abs(start.getTime() - oneDayAhead.getTime()) <= 5 * 60 * 1000
+      const hourWindow = Math.abs(start.getTime() - oneHourAhead.getTime()) <= 5 * 60 * 1000
+
+      if (dayWindow && !ride.intercityMatchState?.dayReminderSentAt) {
+        await sendIntercityReminderNotification(ride, '1 day', io)
+        await Ride.findByIdAndUpdate(ride._id, {
+          $set: { 'intercityMatchState.dayReminderSentAt': now }
+        })
+      }
+
+      if (hourWindow && !ride.intercityMatchState?.hourReminderSentAt) {
+        await sendIntercityReminderNotification(ride, '1 hour', io)
+        await Ride.findByIdAndUpdate(ride._id, {
+          $set: { 'intercityMatchState.hourReminderSentAt': now }
+        })
+      }
+    }
+  } catch (error) {
+    logger.error('❌ Error sending intercity reminders:', error)
+  }
+}
+
+async function sendIntercityReminderNotification (ride, label, io) {
+  const formattedTime = new Date(ride.scheduledAt).toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+
+  if (ride.userSocketId) {
+    io.to(ride.userSocketId).emit('bookingReminder', {
+      rideId: ride._id,
+      message: `Your intercity ride starts in ${label}`,
+      startTime: formattedTime
+    })
+  }
+
+  if (ride.driverSocketId) {
+    io.to(ride.driverSocketId).emit('bookingReminder', {
+      rideId: ride._id,
+      message: `Your intercity ride starts in ${label}`,
+      startTime: formattedTime
+    })
+  }
+
+  await createNotification({
+    recipientId: ride.rider._id,
+    recipientModel: 'User',
+    title: 'Upcoming Intercity Ride',
+    message: `Your intercity ride starts in ${label} at ${formattedTime}`,
+    type: 'ride_started',
+    relatedRide: ride._id.toString()
+  })
+
+  if (ride.driver?._id) {
+    await createNotification({
+      recipientId: ride.driver._id,
+      recipientModel: 'Driver',
+      title: 'Upcoming Intercity Ride',
+      message: `Your intercity ride starts in ${label} at ${formattedTime}`,
+      type: 'ride_started',
+      relatedRide: ride._id.toString()
+    })
+  }
+}
+
 /**
  * Auto-start a scheduled ride
  */
 async function autoStartScheduledRide (ride, io) {
   try {
+    if (ride.rideType === 'intercity') {
+      logger.info(`Skipping auto-start for intercity ride ${ride._id}; driver will use the standard workflow from Upcoming`)
+      return
+    }
     logger.info(`🚀 Auto-starting scheduled ride ${ride._id}`)
     logger.info(`   Booking type: ${ride.bookingType}`)
     logger.info(`   Start time: ${ride.bookingMeta?.startTime}`)
