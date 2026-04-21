@@ -150,6 +150,8 @@ const rideSchema = new mongoose.Schema(
     intercityMatchState: {
       batchIndex: { type: Number, default: 0 },
       lastBatchSentAt: { type: Date, default: null },
+      firstDispatchedAt: { type: Date, default: null },
+      requestExpiresAt: { type: Date, default: null },
       currentBatchDriverIds: {
         type: [mongoose.Schema.Types.ObjectId],
         ref: 'Driver',

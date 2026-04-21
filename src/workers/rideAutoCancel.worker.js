@@ -28,16 +28,17 @@ function initRideAutoCancelWorker () {
 
     // Get configuration from environment variables
     const timeoutMinutes = parseInt(process.env.RIDE_AUTO_CANCEL_TIMEOUT_MINUTES || '5', 10)
+    const intercityTimeoutMinutes = parseInt(process.env.INTERCITY_AUTO_CANCEL_TIMEOUT_MINUTES || '30', 10)
     const checkIntervalMinutes = parseInt(process.env.RIDE_AUTO_CANCEL_CHECK_INTERVAL_MINUTES || '2', 10)
 
-    logger.info(`⏰ Auto-cancellation configured - Timeout: ${timeoutMinutes} minutes, Check Interval: ${checkIntervalMinutes} minutes`)
+    logger.info(`⏰ Auto-cancellation configured - Timeout: ${timeoutMinutes} minutes, Intercity timeout: ${intercityTimeoutMinutes} minutes, Check Interval: ${checkIntervalMinutes} minutes`)
 
     // Run every N minutes (configurable, default 2 minutes)
     const cronExpression = `*/${checkIntervalMinutes} * * * *`
     cron.schedule(cronExpression, async () => {
       try {
         logger.info(`⏰ Auto-cancellation check triggered (every ${checkIntervalMinutes} minutes)`)
-        await checkAndCancelExpiredRides(io, timeoutMinutes)
+        await checkAndCancelExpiredRides(io, timeoutMinutes, intercityTimeoutMinutes)
       } catch (error) {
         logger.error('❌ Error in auto-cancellation check:', error)
       }
@@ -59,19 +60,30 @@ function initRideAutoCancelWorker () {
 /**
  * Check for rides that have been in "requested" status too long and cancel them
  */
-async function checkAndCancelExpiredRides (io, timeoutMinutes) {
+async function checkAndCancelExpiredRides (io, timeoutMinutes, intercityTimeoutMinutes) {
   try {
     const now = new Date()
     const timeoutThreshold = new Date(now.getTime() - timeoutMinutes * 60 * 1000)
+    const intercityTimeoutThreshold = new Date(now.getTime() - intercityTimeoutMinutes * 60 * 1000)
 
     logger.info('🔍 Checking for expired rides to auto-cancel...')
     logger.info(`   Current time: ${now.toISOString()}`)
-    logger.info(`   Timeout threshold: ${timeoutThreshold.toISOString()} (rides created before this will be cancelled)`)
+    logger.info(`   Timeout threshold: ${timeoutThreshold.toISOString()} (normal rides)`)
+    logger.info(`   Intercity timeout threshold: ${intercityTimeoutThreshold.toISOString()}`)
 
     // Query for rides that are still in "requested" status and older than timeout
     const expiredRides = await Ride.find({
       status: 'requested',
-      createdAt: { $lt: timeoutThreshold }
+      $or: [
+        {
+          rideType: 'intercity',
+          createdAt: { $lt: intercityTimeoutThreshold }
+        },
+        {
+          rideType: { $ne: 'intercity' },
+          createdAt: { $lt: timeoutThreshold }
+        }
+      ]
     })
       .populate('rider', 'fullName name phone email')
       .select('+userSocketId')
@@ -113,9 +125,10 @@ async function checkAndCancelExpiredRides (io, timeoutMinutes) {
         const waitTimeMinutes = Math.floor(
           (now.getTime() - ride.createdAt.getTime()) / (60 * 1000)
         )
+        const isIntercityRide = String(ride.rideType || '').toLowerCase() === 'intercity'
 
         // Cancel the ride
-        await autoCancelExpiredRide(ride, io, waitTimeMinutes)
+        await autoCancelExpiredRide(ride, io, waitTimeMinutes, isIntercityRide)
         cancelledCount++
       } catch (error) {
         logger.error(
@@ -138,7 +151,7 @@ async function checkAndCancelExpiredRides (io, timeoutMinutes) {
 /**
  * Auto-cancel an expired ride
  */
-async function autoCancelExpiredRide (ride, io, waitTimeMinutes) {
+async function autoCancelExpiredRide (ride, io, waitTimeMinutes, isIntercityRide = false) {
   try {
     logger.info(`⏰ Auto-cancelling expired ride ${ride._id}`)
     logger.info(`   Wait time: ${waitTimeMinutes} minutes`)
@@ -149,7 +162,9 @@ async function autoCancelExpiredRide (ride, io, waitTimeMinutes) {
     const notifiedCount = ride.notifiedDrivers ? ride.notifiedDrivers.length : 0
 
     // Cancel the ride using existing cancelRide function
-    const cancellationReason = `No driver accepted within ${waitTimeMinutes} minutes`
+    const cancellationReason = isIntercityRide
+      ? 'No driver accepted within 30 minutes'
+      : `No driver accepted within ${waitTimeMinutes} minutes`
     const cancelledRide = await cancelRide(
       ride._id.toString(),
       'system',
@@ -166,11 +181,15 @@ async function autoCancelExpiredRide (ride, io, waitTimeMinutes) {
     // Prepare event data
     const noDriverFoundData = {
       rideId: ride._id,
-      message: `No driver accepted within ${waitTimeMinutes} minutes. Please try again later.`
+      message: isIntercityRide
+        ? 'No driver accepted your intercity ride within 30 minutes. Please try again later.'
+        : `No driver accepted within ${waitTimeMinutes} minutes. Please try again later.`
     }
 
     const rideErrorData = {
-      message: `No driver accepted within ${waitTimeMinutes} minutes. Please try again later.`,
+      message: isIntercityRide
+        ? 'No driver accepted your intercity ride within 30 minutes. Please try again later.'
+        : `No driver accepted within ${waitTimeMinutes} minutes. Please try again later.`,
       code: 'NO_DRIVER_ACCEPTED_TIMEOUT',
       rideId: ride._id
     }
@@ -213,7 +232,9 @@ async function autoCancelExpiredRide (ride, io, waitTimeMinutes) {
       recipientId: ride.rider._id || ride.rider,
       recipientModel: 'User',
       title: 'Ride Cancelled',
-      message: `No driver accepted your ride within ${waitTimeMinutes} minutes. Please try booking again.`,
+      message: isIntercityRide
+        ? 'No driver accepted your intercity ride within 30 minutes. Please try booking again.'
+        : `No driver accepted your ride within ${waitTimeMinutes} minutes. Please try booking again.`,
       type: 'ride_cancelled',
       relatedRide: ride._id.toString()
     })

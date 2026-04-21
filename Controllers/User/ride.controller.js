@@ -577,6 +577,8 @@ const createRide = asyncHandler(async (req, res) => {
         ? {
             batchIndex: 0,
             lastBatchSentAt: null,
+            firstDispatchedAt: null,
+            requestExpiresAt: scheduleType === 'scheduled' ? null : new Date(Date.now() + 30 * 60 * 1000),
             currentBatchDriverIds: [],
             userNotifiedAt: null,
             driverNotifiedAt: null,

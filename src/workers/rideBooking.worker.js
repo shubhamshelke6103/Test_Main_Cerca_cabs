@@ -49,9 +49,8 @@ const getIntercityBatchDrivers = async (ride, batchIndex) => {
 const notifyIntercityDrivers = async (io, ride, drivers, batchIndex, batchSize) => {
   const notifiedDriverIds = []
   for (const driver of drivers) {
-    if (!driver?.socketId) continue
-    io.to(driver.socketId).emit('newRideRequest', ride)
     notifiedDriverIds.push(driver._id)
+
     try {
       await createNotification({
         recipientId: driver._id,
@@ -71,6 +70,10 @@ const notifyIntercityDrivers = async (io, ride, drivers, batchIndex, batchSize) 
       })
     } catch (err) {
       logger.warn(`Intercity notification failed for driver ${driver._id}: ${err.message}`)
+    }
+
+    if (driver?.socketId) {
+      io.to(driver.socketId).emit('newRideRequest', ride)
     }
   }
   return notifiedDriverIds
@@ -123,6 +126,48 @@ const rideBookingWorker = new Worker(
       const { drivers, batchSize, waitSeconds, totalEligible } = await getIntercityBatchDrivers(ride, batchIndex)
       const nextBatchIndex = batchIndex + 1
       const totalBatches = Math.max(1, Math.ceil(totalEligible / batchSize))
+      const expiryAt =
+        ride.intercityMatchState?.requestExpiresAt ||
+        new Date(Date.now() + 30 * 60 * 1000)
+      const firstDispatchedAt =
+        ride.intercityMatchState?.firstDispatchedAt || new Date()
+
+      if (new Date() > new Date(expiryAt)) {
+        logger.warn(`Intercity ride ${rideId} expired before acceptance window ended`)
+        const cancelledRide = await cancelRide(
+          rideId,
+          'system',
+          'No driver accepted within 30 minutes'
+        )
+
+        if (ride.userSocketId) {
+          io.to(ride.userSocketId).emit('noDriverFound', {
+            rideId,
+            message: 'No driver accepted your intercity ride within 30 minutes.'
+          })
+          io.to(ride.userSocketId).emit('rideCancelled', {
+            ride: cancelledRide,
+            reason: 'No driver accepted within 30 minutes',
+            cancelledBy: 'system'
+          })
+        }
+
+        await createNotification({
+          recipientId: ride.rider._id || ride.rider,
+          recipientModel: 'User',
+          title: 'Ride Cancelled',
+          message: 'No driver accepted your intercity ride within 30 minutes.',
+          type: 'ride_cancelled',
+          relatedRide: rideId
+        })
+
+        try {
+          await clearWorkerLock(rideId)
+        } catch (cleanupError) {
+          logger.warn(`Failed to clear worker lock for expired intercity ride ${rideId}: ${cleanupError.message}`)
+        }
+        return
+      }
 
       if (!drivers.length) {
         logger.warn(`No intercity drivers found for ride ${rideId} in batch ${batchIndex}`)
@@ -174,6 +219,8 @@ const rideBookingWorker = new Worker(
             ...(ride.intercityMatchState || {}),
             batchIndex,
             lastBatchSentAt: new Date(),
+            firstDispatchedAt,
+            requestExpiresAt: expiryAt,
             currentBatchDriverIds: notifiedDriverIds,
             nextBatchAt: new Date(Date.now() + waitSeconds * 1000)
           }
