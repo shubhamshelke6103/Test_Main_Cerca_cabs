@@ -1246,6 +1246,31 @@ const getRidesByUserId = async (req, res) => {
 }
 
 /**
+ * @desc    Get upcoming scheduled bookings for a user
+ * @route   GET /rides/user/:userId/upcoming-bookings
+ */
+const getUpcomingBookingsForUser = async (req, res) => {
+  try {
+    const { getUpcomingBookingsForUser: getUpcomingBookings } = require('../../utils/ride_booking_functions')
+    
+    // Check if user exists (optional, but good practice)
+    // You can add user validation here if needed
+    
+    // Get upcoming bookings
+    const upcomingBookings = await getUpcomingBookings(req.params.userId)
+
+    res.status(200).json({
+      message: 'Upcoming bookings retrieved successfully',
+      bookings: upcomingBookings,
+      count: upcomingBookings.length
+    })
+  } catch (error) {
+    logger.error('Error fetching upcoming bookings for user:', error)
+    res.status(500).json({ message: 'Error fetching upcoming bookings for user', error: error.message })
+  }
+}
+
+/**
  * @desc    Get rides for a specific driver by driver ID
  * @route   GET /rides/driver/:driverId
  */
@@ -2441,6 +2466,7 @@ module.exports = {
   updateRide,
   deleteRide,
   getRidesByUserId,
+  getUpcomingBookingsForUser,
   getRidesByDriverId,
   searchRide,
   calculateFare,

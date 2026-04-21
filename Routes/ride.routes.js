@@ -7,6 +7,7 @@ const {
   updateRide,
   deleteRide,
   getRidesByUserId,
+  getUpcomingBookingsForUser,
   getRidesByDriverId,
   searchRide,
   calculateFare,
@@ -104,6 +105,10 @@ router.post('/:rideId/switch-to-cash', switchRideToCash);
 // Get rides for a specific user
 // GET /rides/user/:userId
 router.get('/user/:userId', getRidesByUserId);
+
+// Get upcoming bookings for a specific user
+// GET /rides/user/:userId/upcoming-bookings
+router.get('/user/:userId/upcoming-bookings', getUpcomingBookingsForUser);
 
 // Get rides for a specific driver
 // GET /rides/driver/:driverId

@@ -3892,6 +3892,40 @@ const getUpcomingBookingsForDriver = async driverId => {
 }
 
 /**
+ * Get upcoming scheduled bookings for a user
+ */
+const getUpcomingBookingsForUser = async userId => {
+  try {
+    const now = new Date()
+    const upcomingBookings = await Ride.find({
+      rider: userId,
+      status: 'accepted',
+      $and: [
+        {
+          $or: [
+            { bookingType: { $ne: 'INSTANT' } },
+            { rideType: 'intercity', scheduleType: 'scheduled' }
+          ]
+        },
+        {
+          $or: [
+            { 'bookingMeta.startTime': { $gt: now } },
+            { scheduledAt: { $gt: now } }
+          ]
+        }
+      ]
+    })
+      .populate('driver', 'name phone rating totalTrips profilePic vehicleInfo')
+      .sort({ scheduledAt: 1, 'bookingMeta.startTime': 1 })
+
+    return upcomingBookings
+  } catch (error) {
+    logger.error('Error getting upcoming bookings for user:', error)
+    throw new Error(`Error getting upcoming bookings for user: ${error.message}`)
+  }
+}
+
+/**
  * Get scheduled rides that need to start
  */
 const getScheduledRidesToStart = async () => {
@@ -3962,6 +3996,7 @@ module.exports = {
   resolveEmergency,
   autoAssignDriver,
   getUpcomingBookingsForDriver,
+  getUpcomingBookingsForUser,
   getScheduledRidesToStart,
   searchDriversWithProgressiveRadius,
   calculateIntercityFareBreakdown,
