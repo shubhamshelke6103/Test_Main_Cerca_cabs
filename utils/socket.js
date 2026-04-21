@@ -2766,6 +2766,15 @@ function initializeSocket (server) {
         const startedRide = await startRide(rideId)
         await updateRideStartTime(rideId)
 
+        // For scheduled intercity rides, update driver currentRideId now that ride has started
+        if (startedRide.rideType === 'intercity' && startedRide.scheduleType === 'scheduled') {
+          await Driver.findByIdAndUpdate(startedRide.driver._id || startedRide.driver, {
+            currentRideType: 'intercity',
+            currentRideId: startedRide._id
+          })
+          logger.info(`Updated driver currentRideId for started scheduled intercity ride - rideId: ${rideId}`)
+        }
+
         if (
           startedRide.driver?.location?.coordinates?.length === 2 &&
           startedRide.status === 'in_progress'
