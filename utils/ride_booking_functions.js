@@ -1327,12 +1327,12 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
 
     // 4️⃣ DRIVER BUSY LOGIC
     if (isIntercityRide(ride)) {
-      // For scheduled intercity rides, driver is busy but doesn't have current active ride yet
+      // For scheduled intercity rides, driver is NOT busy - they can accept other rides
       if (ride.scheduleType === 'scheduled') {
         await Driver.findByIdAndUpdate(driverId, {
-          isBusy: true,
-          busyUntil: ride.scheduledAt || null,
-          currentRideType: null, // Not active yet
+          isBusy: false, // Allow accepting other rides
+          busyUntil: null,
+          currentRideType: null,
           currentRideId: null
         })
       } else {

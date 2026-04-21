@@ -1314,6 +1314,29 @@ const getAllRidesOfDriver = async (req, res) => {
         if(rides.length === 0) {
             return res.status(200).json({ message: 'No rides found for this driver', rides: [] });
         }
+
+        // Filter out scheduled rides that are not yet due
+        const now = new Date();
+        const activeRides = rides.filter(ride => {
+            // Include all non-scheduled rides
+            if (ride.scheduleType !== 'scheduled') {
+                return true;
+            }
+            
+            // For scheduled rides, only include if scheduled time has passed or is within 1 hour
+            if (ride.scheduledAt) {
+                const scheduledTime = new Date(ride.scheduledAt);
+                const oneHourBefore = new Date(scheduledTime.getTime() - 60 * 60 * 1000);
+                return now >= oneHourBefore;
+            }
+            
+            // If no scheduledAt, include it (fallback)
+            return true;
+        });
+
+        if(activeRides.length === 0) {
+            return res.status(200).json({ message: 'No active rides found for this driver', rides: [] });
+        }
         
         // Sort rides by status priority: active statuses first, then completed/cancelled
         // Status priority: in_progress > accepted > requested > completed > cancelled
@@ -1325,7 +1348,7 @@ const getAllRidesOfDriver = async (req, res) => {
             'cancelled': 5
         };
         
-        const sortedRides = rides.sort((a, b) => {
+        const sortedRides = activeRides.sort((a, b) => {
             const priorityA = statusPriority[a.status] || 99;
             const priorityB = statusPriority[b.status] || 99;
             
