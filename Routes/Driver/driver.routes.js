@@ -33,6 +33,7 @@ const {
     updateDriverBusyStatus,
     updateDriverIntercityToggle,
     getUpcomingBookings,
+    acceptRide,
     rejectAcceptedRide,
     markCashCollected,
     uploadPriorityDocument,
@@ -160,6 +161,12 @@ router.get('/:id/rides', getAllRidesOfDriver);
 
 // Route to get upcoming scheduled bookings for a driver
 router.get('/:id/upcoming-bookings', getUpcomingBookings);
+
+// Route for a driver to accept a ride (for push notification-based rides)
+router.post(
+    '/:driverId/rides/:rideId/accept',
+    acceptRide
+);
 
 // Route for a driver to reject an accidentally accepted ride before start
 router.patch(

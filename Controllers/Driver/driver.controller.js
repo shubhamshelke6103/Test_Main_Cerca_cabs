@@ -44,7 +44,7 @@ const {
     getRideAccessDefaultsForVehicleType,
 } = require('../../utils/ride_booking_functions.js');
 const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
-const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
+const { getSocketIO, emitRideCancelledToClients, sanitizeRideContactsForDriver, createNotification } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
@@ -1865,6 +1865,176 @@ const rejectAcceptedRide = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Accept a ride (for push notification-based rides)
+ * @route   POST /drivers/:driverId/rides/:rideId/accept
+ */
+const acceptRide = async (req, res) => {
+    try {
+        const { driverId, rideId } = req.params;
+
+        const ride = await Ride.findById(rideId)
+            .populate('rider', 'fullName name phone email')
+            .select('+bookingType +bookingMeta');
+
+        if (!ride) {
+            return res.status(404).json({ message: 'Ride not found' });
+        }
+
+        if (ride.status !== 'requested') {
+            return res.status(400).json({
+                message: `Ride is already ${ride.status}`,
+                status: ride.status
+            });
+        }
+
+        // Check if driver can accept this ride type
+        const driver = await Driver.findById(driverId);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const { driverCanAcceptRideType } = require('../../utils/ride_booking_functions');
+        const canAccept = await driverCanAcceptRideType(driver, ride.vehicleType);
+        if (!canAccept) {
+            return res.status(403).json({
+                message: 'You are not eligible to accept this type of ride'
+            });
+        }
+
+        // Use Redis lock to prevent race conditions
+        const { redis } = require('../../config/redis');
+        const lockKey = `ride_lock:${rideId}`;
+        const locked = await redis.set(lockKey, driverId, 'NX', 'EX', 15);
+
+        if (!locked) {
+            return res.status(409).json({
+                message: 'This ride has already been accepted by another driver',
+                code: 'RIDE_ALREADY_ACCEPTED'
+            });
+        }
+
+        try {
+            // Assign driver to ride
+            const { assignDriverToRide } = require('../../utils/ride_booking_functions');
+            const assignedRide = await assignDriverToRide(rideId, driverId, null); // No socket ID for API calls
+
+            if (!assignedRide) {
+                return res.status(500).json({
+                    message: 'Failed to assign ride',
+                    code: 'ASSIGNMENT_FAILED'
+                });
+            }
+
+            // Emit socket events for the accepted ride
+            const io = getSocketIO();
+            const isFullDayBooking = assignedRide.bookingType === 'FULL_DAY';
+
+            const rideWithMetadata = {
+                ...(assignedRide.toObject ? assignedRide.toObject() : assignedRide),
+                isFullDayBooking
+            };
+
+            const driverRidePayload = sanitizeRideContactsForDriver(rideWithMetadata);
+            const roomName = `ride_${rideId}`;
+
+            // Safely compute rider/driver identifiers
+            const riderIdentifier = assignedRide && assignedRide.rider
+                ? assignedRide.rider._id || assignedRide.rider
+                : null;
+            const driverIdentifier = assignedRide && assignedRide.driver
+                ? assignedRide.driver._id || assignedRide.driver
+                : null;
+
+            // Force join ride room
+            try {
+                if (riderIdentifier) {
+                    io.in(`user_${riderIdentifier}`).socketsJoin(roomName);
+                }
+                if (driverIdentifier) {
+                    io.in(`driver_${driverIdentifier}`).socketsJoin(roomName);
+                }
+            } catch (e) {
+                logger.warn('Auto-join to ride room failed', { err: e.message });
+            }
+
+            // Notify rider
+            if (riderIdentifier) {
+                try {
+                    io.to(`user_${riderIdentifier}`).emit('rideAccepted', driverRidePayload);
+                } catch (e) {
+                    logger.warn('Emit rideAccepted to rider failed', { err: e.message });
+                }
+            }
+
+            // Notify driver (use rideScheduled for intercity/scheduled rides)
+            const shouldUseScheduledEvent = assignedRide.rideType === 'intercity' || assignedRide.scheduleType === 'scheduled';
+
+            if (shouldUseScheduledEvent) {
+                io.to(`driver_${driverIdentifier}`).emit('rideScheduled', driverRidePayload);
+                logger.info(`Emitted rideScheduled to driver for ${assignedRide.rideType}/${assignedRide.scheduleType} ride - rideId: ${rideId}`);
+            } else {
+                io.to(`driver_${driverIdentifier}`).emit('rideAssigned', driverRidePayload);
+            }
+
+            // Broadcast to ride room
+            io.to(roomName).emit('rideAccepted', driverRidePayload);
+
+            // Notify admin
+            io.to('admin').emit('rideStatusUpdated', {
+                rideId,
+                status: 'accepted',
+                ride: rideWithMetadata
+            });
+
+            // Create notifications
+            const passengerName = assignedRide.rideFor === 'OTHER'
+                ? assignedRide.passenger?.name
+                : assignedRide.rider?.fullName || assignedRide.rider?.name;
+
+            await createNotification({
+                recipientId: assignedRide.rider._id,
+                recipientModel: 'User',
+                title: 'Ride Accepted',
+                message: `Your ride has been accepted by ${assignedRide.driver.name}`,
+                type: 'ride_accepted',
+                relatedRide: rideId
+            });
+
+            await createNotification({
+                recipientId: driverId,
+                recipientModel: 'Driver',
+                title: 'Ride Accepted',
+                message: 'You have accepted a new ride',
+                type: 'ride_accepted',
+                relatedRide: rideId
+            });
+
+            logger.info(`Ride accepted successfully via API - rideId: ${rideId}, driverId: ${driverId}`);
+
+            return res.status(200).json({
+                message: 'Ride accepted successfully',
+                ride: driverRidePayload
+            });
+
+        } finally {
+            // Release the lock
+            try {
+                await redis.del(lockKey);
+            } catch (e) {
+                logger.warn(`Failed to release ride lock for ${rideId}:`, e.message);
+            }
+        }
+
+    } catch (error) {
+        logger.error('Error accepting ride via API:', error);
+        return res.status(500).json({
+            message: 'Error accepting ride',
+            error: error.message
+        });
+    }
+};
+
 const deleteDriverVehicle = async (req, res) => {
     try {
         const driver = await Driver.findById(req.params.id);
@@ -2800,6 +2970,7 @@ module.exports = {
     updateDriverIsReadyForRides,
     getAllRidesOfDriver,
     getUpcomingBookings,
+    acceptRide,
     rejectAcceptedRide,
     updateDriverLocation,
     upsertDriverGoToHome,
