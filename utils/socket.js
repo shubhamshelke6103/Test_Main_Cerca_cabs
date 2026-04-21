@@ -2720,6 +2720,27 @@ function initializeSocket (server) {
           return
         }
 
+        // Get ride details to check scheduling constraints
+        const ride = await Ride.findById(rideId)
+        if (!ride) {
+          logger.warn(`rideStarted: Ride not found - rideId: ${rideId}`)
+          socket.emit('rideError', { message: 'Ride not found' })
+          return
+        }
+
+        // Check if this is a scheduled intercity ride that cannot be started yet
+        if (ride.rideType === 'intercity' && ride.scheduleType === 'scheduled') {
+          const now = new Date()
+          if (ride.scheduledAt && now < ride.scheduledAt) {
+            logger.warn(`rideStarted: Cannot start scheduled intercity ride before scheduled time - rideId: ${rideId}, scheduledAt: ${ride.scheduledAt}, now: ${now}`)
+            socket.emit('rideError', { 
+              message: 'This scheduled ride cannot be started before the scheduled time',
+              code: 'SCHEDULED_RIDE_TOO_EARLY'
+            })
+            return
+          }
+        }
+
         // Verify OTP if provided
         if (otp) {
           const { success } = await verifyStartOtp(rideId, otp)
