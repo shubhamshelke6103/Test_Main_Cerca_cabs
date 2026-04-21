@@ -2130,12 +2130,23 @@ function initializeSocket (server) {
         // ============================
         if (assignedRide.driverSocketId) {
           try {
-            io.to(assignedRide.driverSocketId).emit(
-              'rideAssigned',
-              driverRidePayload
-            )
+            // For scheduled intercity rides, emit different event to prevent navigation to active ride screen
+            const isScheduledIntercity = assignedRide.rideType === 'intercity' && assignedRide.scheduleType === 'scheduled';
+            
+            if (isScheduledIntercity) {
+              io.to(assignedRide.driverSocketId).emit(
+                'rideScheduled',
+                driverRidePayload
+              )
+              logger.info(`Emitted rideScheduled to driver for scheduled intercity ride - rideId: ${rideId}`)
+            } else {
+              io.to(assignedRide.driverSocketId).emit(
+                'rideAssigned',
+                driverRidePayload
+              )
+            }
           } catch (e) {
-            logger.warn('Emit rideAssigned to driver socket failed', {
+            logger.warn('Emit ride notification to driver socket failed', {
               err: e.message
             })
           }
