@@ -1165,14 +1165,9 @@ const getIntercityEligibleDrivers = async ({
     .select('name socketId location vehicleInfo assignedFleetVehicleId rideAccess intercityEnabled isBusy isOnline')
     .limit(Math.max(batchSize, 20))
 
-  const filtered = []
-  for (const driver of drivers) {
-    const vehicle = driver.vehicleInfo?.vehicleType || driver.assignedFleetVehicleId?.vehicleType || driver.vehicleInfo?.type || null
-    if (vehicleType && vehicle && String(vehicle) !== String(vehicleType)) {
-      continue
-    }
-    filtered.push(driver)
-  }
+  // For intercity rides, don't filter by vehicle type since all intercity-enabled drivers
+  // can accept any intercity ride (pricing is calculated based on requested vehicle type)
+  const filtered = drivers
 
   return filtered.sort((a, b) => {
     const aCoords = a.location?.coordinates || []
