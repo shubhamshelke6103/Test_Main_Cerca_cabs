@@ -38,13 +38,14 @@ const {
 } = require('../../utils/driverApproval.service.js');
 const {
     sanitizeRideListContactsForDriver,
+    sanitizeRideContactsForDriver,
 } = require('../../utils/rideContactPrivacy.service.js');
 const {
     cancelRide: cancelRideFromBooking,
     getRideAccessDefaultsForVehicleType,
 } = require('../../utils/ride_booking_functions.js');
 const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
-const { getSocketIO, emitRideCancelledToClients, sanitizeRideContactsForDriver, createNotification } = require('../../utils/socket.js');
+const { getSocketIO, emitRideCancelledToClients, createNotification } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
