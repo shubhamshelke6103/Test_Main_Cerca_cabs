@@ -1514,6 +1514,10 @@ const completeRide = async (rideId, fare) => {
       await Driver.findByIdAndUpdate(ride.driver._id || ride.driver, {
         $inc: { intercityRideCount: 1 }
       })
+    } else if (ride.driver) {
+      await Driver.findByIdAndUpdate(ride.driver._id || ride.driver, {
+        $inc: { completedStandardRideCount: 1 }
+      })
     }
 
     // Structured logging for fare calculation

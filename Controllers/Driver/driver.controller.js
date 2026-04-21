@@ -2403,14 +2403,7 @@ const updateDriverIntercityToggle = async (req, res) => {
         }
 
         if (intercityEnabled) {
-            const standardRideCount = await Ride.countDocuments({
-                driver: driver._id,
-                status: 'completed',
-                $or: [
-                    { rideType: { $ne: 'intercity' } },
-                    { rideType: { $exists: false } }
-                ]
-            });
+            const standardRideCount = Number(driver.completedStandardRideCount || 0);
 
             if (standardRideCount < 50) {
                 return res.status(400).json({

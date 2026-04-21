@@ -269,6 +269,10 @@ const driverSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  completedStandardRideCount: {
+    type: Number,
+    default: 0
+  },
   rating: {
     type: Number,
     default: 0,
