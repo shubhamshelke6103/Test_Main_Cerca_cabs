@@ -72,9 +72,11 @@ const notifyIntercityDrivers = async (io, ride, drivers, batchIndex, batchSize) 
       logger.warn(`Intercity notification failed for driver ${driver._id}: ${err.message}`)
     }
 
-    if (driver?.socketId) {
-      io.to(driver.socketId).emit('newRideRequest', ride)
-    }
+    // For intercity rides, don't emit socket events - only use push notifications
+    // Drivers will accept/reject via push notification interaction
+    // if (driver?.socketId) {
+    //   io.to(driver.socketId).emit('newRideRequest', ride)
+    // }
   }
   return notifiedDriverIds
 }
@@ -389,17 +391,22 @@ const rideBookingWorker = new Worker(
     const notifiedDriverIds = []
 
     for (const driver of drivers) {
-      if (!driver.socketId) continue
-
-      io.to(driver.socketId).emit('newRideRequest', ride)
       notifiedDriverIds.push(driver._id)
+
+      // For scheduled rides, don't emit socket events - only use push notifications
+      // Drivers will accept/reject via push notification interaction
+      if (ride.scheduleType !== 'scheduled' && driver.socketId) {
+        io.to(driver.socketId).emit('newRideRequest', ride)
+      }
 
       try {
         await createNotification({
           recipientId: driver._id,
           recipientModel: 'Driver',
-          title: 'New Ride Request',
-          message: 'Ride available near you',
+          title: ride.scheduleType === 'scheduled' ? 'Upcoming Ride Request' : 'New Ride Request',
+          message: ride.scheduleType === 'scheduled' 
+            ? 'A planned ride is available for acceptance.'
+            : 'Ride available near you',
           type: 'ride_request',
           relatedRide: rideId
         })

@@ -2130,15 +2130,15 @@ function initializeSocket (server) {
         // ============================
         if (assignedRide.driverSocketId) {
           try {
-            // For scheduled intercity rides, emit different event to prevent navigation to active ride screen
-            const isScheduledIntercity = assignedRide.rideType === 'intercity' && assignedRide.scheduleType === 'scheduled';
+            // For intercity or scheduled rides, emit different event to prevent navigation to active ride screen
+            const shouldUseScheduledEvent = assignedRide.rideType === 'intercity' || assignedRide.scheduleType === 'scheduled';
             
-            if (isScheduledIntercity) {
+            if (shouldUseScheduledEvent) {
               io.to(assignedRide.driverSocketId).emit(
                 'rideScheduled',
                 driverRidePayload
               )
-              logger.info(`Emitted rideScheduled to driver for scheduled intercity ride - rideId: ${rideId}`)
+              logger.info(`Emitted rideScheduled to driver for ${assignedRide.rideType}/${assignedRide.scheduleType} ride - rideId: ${rideId}`)
             } else {
               io.to(assignedRide.driverSocketId).emit(
                 'rideAssigned',
@@ -2739,11 +2739,11 @@ function initializeSocket (server) {
           return
         }
 
-        // Check if this is a scheduled intercity ride that cannot be started yet
-        if (ride.rideType === 'intercity' && ride.scheduleType === 'scheduled') {
+        // Check if this is a scheduled ride that cannot be started yet
+        if (ride.scheduleType === 'scheduled') {
           const now = new Date()
           if (ride.scheduledAt && now < ride.scheduledAt) {
-            logger.warn(`rideStarted: Cannot start scheduled intercity ride before scheduled time - rideId: ${rideId}, scheduledAt: ${ride.scheduledAt}, now: ${now}`)
+            logger.warn(`rideStarted: Cannot start scheduled ride before scheduled time - rideId: ${rideId}, scheduledAt: ${ride.scheduledAt}, now: ${now}`)
             socket.emit('rideError', { 
               message: 'This scheduled ride cannot be started before the scheduled time',
               code: 'SCHEDULED_RIDE_TOO_EARLY'
@@ -2766,13 +2766,13 @@ function initializeSocket (server) {
         const startedRide = await startRide(rideId)
         await updateRideStartTime(rideId)
 
-        // For scheduled intercity rides, update driver currentRideId now that ride has started
-        if (startedRide.rideType === 'intercity' && startedRide.scheduleType === 'scheduled') {
+        // For scheduled rides, update driver currentRideId now that ride has started
+        if (startedRide.scheduleType === 'scheduled') {
           await Driver.findByIdAndUpdate(startedRide.driver._id || startedRide.driver, {
-            currentRideType: 'intercity',
+            currentRideType: startedRide.rideType,
             currentRideId: startedRide._id
           })
-          logger.info(`Updated driver currentRideId for started scheduled intercity ride - rideId: ${rideId}`)
+          logger.info(`Updated driver currentRideId for started scheduled ride - rideId: ${rideId}`)
         }
 
         if (
