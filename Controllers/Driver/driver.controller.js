@@ -1339,10 +1339,11 @@ const getAllRidesOfDriver = async (req, res) => {
         }
         
         // Sort rides by status priority: active statuses first, then completed/cancelled
-        // Status priority: in_progress > accepted > requested > completed > cancelled
+        // Status priority: in_progress > accepted/upcoming > requested > completed > cancelled
         const statusPriority = {
             'in_progress': 1,
             'accepted': 2,
+            'upcoming': 2,
             'requested': 3,
             'completed': 4,
             'cancelled': 5
@@ -1848,7 +1849,7 @@ const rejectAcceptedRide = async (req, res) => {
             return res.status(403).json({ message: 'You can only reject your own accepted ride' });
         }
 
-        if (ride.status !== 'accepted') {
+        if (ride.status !== 'accepted' && ride.status !== 'upcoming') {
             return res.status(400).json({
                 message: 'This option is only available for rides that are accepted and not yet started',
             });

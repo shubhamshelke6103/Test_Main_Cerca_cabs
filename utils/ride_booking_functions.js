@@ -1325,6 +1325,13 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
 
     logger.info(`✅ Driver ${driverId} assigned to ride ${rideId}`)
 
+    // For scheduled intercity rides, change status to 'upcoming' instead of 'accepted'
+    if (isIntercityRide(ride) && ride.scheduleType === 'scheduled') {
+      await Ride.findByIdAndUpdate(rideId, { status: 'upcoming' })
+      ride.status = 'upcoming'
+      logger.info(`Status updated to 'upcoming' for scheduled intercity ride - rideId: ${rideId}`)
+    }
+
     // 4️⃣ DRIVER BUSY LOGIC
     if (isIntercityRide(ride)) {
       // For scheduled intercity rides, driver is NOT busy - they can accept other rides

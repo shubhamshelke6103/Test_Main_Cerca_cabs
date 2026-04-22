@@ -3460,6 +3460,8 @@ function initializeSocket (server) {
               return
             }
             // allowed: driver withdraws after accept, before arrival
+          } else if (rideForAuth.status === 'upcoming') {
+            // allowed: driver withdraws from scheduled/upcoming ride before scheduled time
           } else if (rideForAuth.status === 'arrived') {
             const {
               getPickupWaitPolicyFromSettings
