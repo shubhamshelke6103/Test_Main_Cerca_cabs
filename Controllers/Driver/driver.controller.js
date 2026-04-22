@@ -48,6 +48,7 @@ const {
 const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
+const { checkAndAssignProximityRides } = require('../../utils/proximityRide.service.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
 const {
@@ -1431,6 +1432,11 @@ const updateDriverLocation = async (req, res) => {
             longitude,
             latitude
         );
+
+        // Check for proximity rides (async, don't wait for response)
+        checkAndAssignProximityRides(req.params.id, [longitude, latitude]).catch(error => {
+            logger.warn('Proximity ride check failed:', error.message);
+        });
 
         res.status(200).json({
             message: 'Driver location updated successfully',

@@ -1,0 +1,11 @@
+{
+  "proximityRideAssignment": {
+    "enabled": true,
+    "maxTravelTimeMinutes": 15,
+    "maxDistanceKm": 5,
+    "searchRadiusKm": 3,
+    "maxConcurrentRides": 1,
+    "notificationCooldownMinutes": 5,
+    "maxProximityRidesPerHour": 10
+  }
+}

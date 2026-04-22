@@ -664,7 +664,7 @@ const createRide = async rideData => {
     }
 
     // Check if vehicle service is enabled
-    if (vehicleService.enabled === false) {
+    if (vehicleService.enabled === true) {
       throw new Error(
         `Vehicle service "${vehicleServiceKey}" is currently disabled. Please select another vehicle type.`
       )
