@@ -1327,8 +1327,14 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
 
     // For scheduled intercity rides, change status to 'upcoming' instead of 'accepted'
     if (isIntercityRide(ride) && ride.scheduleType === 'scheduled') {
-      await Ride.findByIdAndUpdate(rideId, { status: 'upcoming' })
-      ride.status = 'upcoming'
+      const updatedRide = await Ride.findByIdAndUpdate(
+        rideId,
+        { status: 'upcoming' },
+        { new: true }
+      ).populate('driver rider')
+      if (updatedRide) {
+        Object.assign(ride, updatedRide.toObject ? updatedRide.toObject() : updatedRide)
+      }
       logger.info(`Status updated to 'upcoming' for scheduled intercity ride - rideId: ${rideId}`)
     }
 

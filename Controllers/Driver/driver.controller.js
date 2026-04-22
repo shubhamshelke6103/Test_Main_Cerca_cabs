@@ -2009,7 +2009,7 @@ const acceptRide = async (req, res) => {
             // Notify admin
             io.to('admin').emit('rideStatusUpdated', {
                 rideId,
-                status: 'accepted',
+                status: assignedRide.status,
                 ride: rideWithMetadata
             });
 
