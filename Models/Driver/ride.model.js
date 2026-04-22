@@ -166,7 +166,7 @@ const rideSchema = new mongoose.Schema(
 
     bookingType: {
       type: String,
-      enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'DATE_WISE'],
+      enum: ['INSTANT', 'FULL_DAY', 'RENTAL', 'INTERCITY', 'DATE_WISE'],
       default: 'INSTANT'
     },
 
