@@ -123,13 +123,10 @@ const driverProfilePicUpload = multer({
 
 // Routes for driver management
 router.post('/me/leave-vendor', authenticateDriver, vendorController.leaveVendorAsDriver);
-<<<<<<< Updated upstream
 router.post('/register', driverProfilePicUpload.single('profilePic'), registerDriver);
 router.post('/', addDriver); // Add a new driver (JSON)
-=======
 router.post('/me/unassign-fleet', authenticateDriver, vendorController.unassignFleetVehicleAsDriver);
 router.post('/', addDriver); // Add a new driver with documents
->>>>>>> Stashed changes
 router.post('/login', loginDriver); // Login driver
 router.get('/', getAllDrivers); // Get all drivers
 router.get('/:id', getDriverById); // Get a driver by ID
