@@ -1327,8 +1327,8 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
 
     logger.info(`✅ Driver ${driverId} assigned to ride ${rideId}`)
 
-    // For scheduled intercity rides, change status to 'upcoming' instead of 'accepted'
-    if (isIntercityRide(ride) && ride.scheduleType === 'scheduled') {
+    // For intercity rides, change status to 'upcoming' instead of 'accepted'
+    if (isIntercityRide(ride)) {
       const updatedRide = await Ride.findByIdAndUpdate(
         rideId,
         { status: 'upcoming' },
@@ -1337,28 +1337,18 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
       if (updatedRide) {
         Object.assign(ride, updatedRide.toObject ? updatedRide.toObject() : updatedRide)
       }
-      logger.info(`Status updated to 'upcoming' for scheduled intercity ride - rideId: ${rideId}`)
+      logger.info(`Status updated to 'upcoming' for intercity ride - rideId: ${rideId}`)
     }
 
     // 4️⃣ DRIVER BUSY LOGIC
     if (isIntercityRide(ride)) {
-      // For scheduled intercity rides, driver is NOT busy - they can accept other rides
-      if (ride.scheduleType === 'scheduled') {
-        await Driver.findByIdAndUpdate(driverId, {
-          isBusy: false, // Allow accepting other rides
-          busyUntil: null,
-          currentRideType: null,
-          currentRideId: null
-        })
-      } else {
-        // For now intercity rides, driver has active ride
-        await Driver.findByIdAndUpdate(driverId, {
-          isBusy: true,
-          busyUntil: null,
-          currentRideType: 'intercity',
-          currentRideId: ride._id
-        })
-      }
+      // For all intercity rides, driver is NOT busy - they can accept other rides until they start the ride
+      await Driver.findByIdAndUpdate(driverId, {
+        isBusy: false, // Allow accepting other rides
+        busyUntil: null,
+        currentRideType: null,
+        currentRideId: null
+      })
     } else if (ride.scheduleType === 'scheduled') {
       // For scheduled non-intercity rides, driver is busy but doesn't have current active ride yet
       await Driver.findByIdAndUpdate(driverId, {
@@ -3880,18 +3870,17 @@ const getUpcomingBookingsForDriver = async driverId => {
     const now = new Date()
     const upcomingBookings = await Ride.find({
       driver: driverId,
-      status: 'accepted',
+      $or: [
+        { status: 'accepted', bookingType: { $ne: 'INSTANT' } },
+        { status: 'accepted', rideType: 'intercity', scheduleType: 'scheduled' },
+        { status: 'upcoming', rideType: 'intercity' }
+      ],
       $and: [
         {
           $or: [
-            { bookingType: { $ne: 'INSTANT' } },
-            { rideType: 'intercity', scheduleType: 'scheduled' }
-          ]
-        },
-        {
-          $or: [
             { 'bookingMeta.startTime': { $gt: now } },
-            { scheduledAt: { $gt: now } }
+            { scheduledAt: { $gt: now } },
+            { rideType: 'intercity' } // Include all intercity rides regardless of time
           ]
         }
       ]
@@ -3914,18 +3903,17 @@ const getUpcomingBookingsForUser = async userId => {
     const now = new Date()
     const upcomingBookings = await Ride.find({
       rider: userId,
-      status: 'accepted',
+      $or: [
+        { status: 'accepted', bookingType: { $ne: 'INSTANT' } },
+        { status: 'accepted', rideType: 'intercity', scheduleType: 'scheduled' },
+        { status: 'upcoming', rideType: 'intercity' }
+      ],
       $and: [
         {
           $or: [
-            { bookingType: { $ne: 'INSTANT' } },
-            { rideType: 'intercity', scheduleType: 'scheduled' }
-          ]
-        },
-        {
-          $or: [
             { 'bookingMeta.startTime': { $gt: now } },
-            { scheduledAt: { $gt: now } }
+            { scheduledAt: { $gt: now } },
+            { rideType: 'intercity' } // Include all intercity rides regardless of time
           ]
         }
       ]
