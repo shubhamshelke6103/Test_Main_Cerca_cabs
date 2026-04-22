@@ -551,6 +551,16 @@ const driverSchema = new mongoose.Schema({
     default: null
   },
 
+  goToDailyActivations: {
+    type: Number,
+    default: 0
+  },
+
+  goToLastActivationDate: {
+    type: Date,
+    default: null
+  },
+
   vendorId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "Vendor",

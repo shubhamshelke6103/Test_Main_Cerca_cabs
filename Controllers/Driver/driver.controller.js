@@ -1491,6 +1491,25 @@ const activateDriverGoTo = async (req, res) => {
         const driver = await getDriverOr404(req.params.id, res);
         if (!driver) return;
 
+        // Check daily GoTo activation limits
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+        // Reset counter if it's a new day
+        if (!driver.goToLastActivationDate || driver.goToLastActivationDate < startOfToday || driver.goToLastActivationDate > endOfToday) {
+            driver.goToDailyActivations = 0;
+            driver.goToLastActivationDate = startOfToday;
+        }
+
+        // Check limits for non-priority drivers
+        if (!driver.isPriorityDriver && driver.goToDailyActivations >= 2) {
+            return res.status(400).json({
+                message: 'Daily GoTo activation limit reached (2 per day for non-priority drivers)',
+                error: 'DAILY_GOTO_LIMIT_EXCEEDED',
+            });
+        }
+
         const originCoordinates = normalizeLocationCoordinates(driver.location);
         const { homeAddress, homeLocation, corridorRadiusMeters } =
             resolveHomeLocationPayload(req.body, driver);
@@ -1501,6 +1520,9 @@ const activateDriverGoTo = async (req, res) => {
             homeAddress,
             corridorRadiusMeters,
         });
+
+        // Increment activation counter after successful route build
+        driver.goToDailyActivations += 1;
 
         await driver.save();
 
