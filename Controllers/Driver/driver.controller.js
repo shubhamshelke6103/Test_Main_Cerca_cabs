@@ -679,6 +679,47 @@ const serializeOwnedVehicles = (driver) => (
     getOwnedVehicleRecords(driver).map(vehicle => toPlainVehicleRecord(vehicle))
 );
 
+/** Max vehicles in active garage (matches driver app). */
+const MAX_GARAGE_VEHICLES = 5;
+
+const serializeArchivedVehicles = (driver) => (
+    Array.isArray(driver?.archivedVehicles)
+        ? driver.archivedVehicles.map((v) => toPlainVehicleRecord(v))
+        : []
+);
+
+/**
+ * Snapshot a garage subdocument into archivedVehicles before removal.
+ */
+const pushArchivedSnapshot = (driver, sub) => {
+    if (!sub) return;
+    const plain = toPlainVehicleRecord(sub);
+    if (!Array.isArray(driver.archivedVehicles)) {
+        driver.archivedVehicles = [];
+    }
+    driver.archivedVehicles.push({
+        sourceVehicleId: sub._id,
+        archivedAt: new Date(),
+        make: plain.make,
+        model: plain.model,
+        year: plain.year,
+        color: plain.color,
+        licensePlate: plain.licensePlate,
+        vehicleType: plain.vehicleType || 'sedan',
+        documents: Array.isArray(plain.documents) ? [...plain.documents] : [],
+        approvalStatus: plain.approvalStatus || 'UNDER_APPROVAL',
+        approvalRoutedTo: plain.approvalRoutedTo ?? null,
+        submittedAt: plain.submittedAt || new Date(),
+        approvedAt: plain.approvedAt,
+        rejectedAt: plain.rejectedAt,
+        rejectionReason: plain.rejectionReason,
+        allowDocumentResubmit: plain.allowDocumentResubmit ?? false,
+        vendorPreApprovedAt: plain.vendorPreApprovedAt,
+        approvedBy: plain.approvedBy ?? null,
+        isActive: false,
+    });
+};
+
 const serializeVehicleState = (driver) => {
     const activeRec = getActiveOwnedVehicleRecord(driver);
     return {
@@ -686,6 +727,7 @@ const serializeVehicleState = (driver) => {
         pendingVehicle: driver.pendingVehicleInfo || null,
         vehicleStatus: resolveVehicleStatus(driver),
         vehicles: serializeOwnedVehicles(driver),
+        archivedVehicles: serializeArchivedVehicles(driver),
         activeVehicleId: activeRec && activeRec._id ? String(activeRec._id) : null,
         activeVehicleType: activeRec?.vehicleType || driver?.vehicleInfo?.vehicleType || null,
         rideAccess: driver.rideAccess || null,
@@ -713,6 +755,7 @@ const clearDriverVehicleState = (driver) => {
     };
 
     if (targetVehicle) {
+        pushArchivedSnapshot(driver, targetVehicle);
         driver.vehicles = vehicles.filter(
             vehicle => String(vehicle._id) !== String(targetVehicle._id)
         );
@@ -2091,12 +2134,6 @@ const deleteDriverVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        if (driver.vendorId) {
-            return res.status(403).json({
-                message: 'Only the vendor can remove the vehicle for a vendor-registered driver',
-            });
-        }
-
         if (!hasDriverVehicleState(driver)) {
             return res.status(400).json({ message: 'No vehicle found for this driver' });
         }
@@ -2237,16 +2274,12 @@ const deleteDriverGarageVehicle = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        if (driver.vendorId) {
-            return res.status(403).json({
-                message: 'Only the vendor can manage vehicles for vendor-registered drivers',
-            });
-        }
-
         const sub = driver.vehicles.id(vehicleId);
         if (!sub) {
             return res.status(404).json({ message: 'Vehicle not found on this driver' });
         }
+
+        pushArchivedSnapshot(driver, sub);
 
         const wasActiveApproved = sub.approvalStatus === 'APPROVED' && sub.isActive;
         driver.vehicles.pull({ _id: sub._id });
@@ -2275,6 +2308,93 @@ const deleteDriverGarageVehicle = async (req, res) => {
     } catch (error) {
         logger.error('Error deleting garage vehicle:', error);
         return res.status(500).json({ message: 'Error deleting garage vehicle', error: error.message });
+    }
+};
+
+/**
+ * @desc    Restore a vehicle from archivedVehicles into the active garage (driver JWT)
+ * @route   POST /drivers/:id/vehicles/restore
+ */
+const restoreGarageVehicleFromArchive = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const archiveId = req.body?.archiveId ?? req.body?.archive_id;
+        if (!archiveId || typeof archiveId !== 'string') {
+            return res.status(400).json({ message: 'archiveId is required' });
+        }
+
+        const driver = await Driver.findById(id);
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const arch = driver.archivedVehicles.id(archiveId);
+        if (!arch) {
+            return res.status(404).json({ message: 'Archived vehicle not found' });
+        }
+
+        if (getOwnedVehicleRecords(driver).length >= MAX_GARAGE_VEHICLES) {
+            return res.status(400).json({ message: 'Garage is full' });
+        }
+
+        const hasPending = getOwnedVehicleRecords(driver).some(
+            (v) => v.approvalStatus === 'UNDER_APPROVAL'
+        );
+        if (hasPending) {
+            return res.status(400).json({
+                message: 'Cannot restore while another vehicle is under review',
+            });
+        }
+
+        const plainArch = toPlainVehicleRecord(arch);
+
+        driver.archivedVehicles.pull({ _id: arch._id });
+
+        const newVehicle = {
+            make: plainArch.make,
+            model: plainArch.model,
+            year: plainArch.year,
+            color: plainArch.color,
+            licensePlate: plainArch.licensePlate,
+            vehicleType: plainArch.vehicleType || 'sedan',
+            documents: Array.isArray(plainArch.documents) ? [...plainArch.documents] : [],
+            approvalStatus: plainArch.approvalStatus,
+            approvalRoutedTo: plainArch.approvalRoutedTo ?? null,
+            submittedAt: plainArch.submittedAt || new Date(),
+            approvedAt: plainArch.approvedAt,
+            rejectedAt: plainArch.rejectedAt,
+            rejectionReason: plainArch.rejectionReason,
+            allowDocumentResubmit: plainArch.allowDocumentResubmit ?? false,
+            vendorPreApprovedAt: plainArch.vendorPreApprovedAt,
+            approvedBy: plainArch.approvedBy ?? null,
+            isActive: false,
+        };
+
+        if (newVehicle.approvalStatus === 'APPROVED') {
+            getOwnedVehicleRecords(driver).forEach((v) => {
+                if (v.approvalStatus === 'APPROVED') {
+                    v.isActive = false;
+                }
+            });
+            newVehicle.isActive = true;
+        }
+
+        driver.vehicles.push(newVehicle);
+        driver.pendingVehicleInfo = null;
+        syncLegacyVehicleState(driver);
+        await driver.save();
+
+        logger.info(`Driver restored garage vehicle from archive: ${driver.email} archiveId=${archiveId}`);
+        return res.status(200).json({
+            message: 'Vehicle restored to garage',
+            ...serializeVehicleState(driver),
+        });
+    } catch (error) {
+        logger.error('Error restoring garage vehicle from archive:', error);
+        return res.status(500).json({
+            message: 'Error restoring vehicle',
+            error: error.message,
+        });
     }
 };
 
@@ -3030,6 +3150,7 @@ module.exports = {
     updateDriverVehicle,
     deleteDriverVehicle,
     deleteDriverGarageVehicle,
+    restoreGarageVehicleFromArchive,
     setDriverActiveOwnedVehicle,
     approveDriverVehicle,
     rejectDriverVehicle,

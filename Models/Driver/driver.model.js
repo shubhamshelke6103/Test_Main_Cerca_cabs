@@ -149,6 +149,22 @@ const driverVehicleSchema = new mongoose.Schema(
   { _id: true }
 )
 
+/** Snapshots removed from the active garage; does not block vendor assignment. */
+const archivedDriverVehicleSchema = new mongoose.Schema(
+  {
+    ...driverVehicleSchema.obj,
+    archivedAt: {
+      type: Date,
+      default: Date.now
+    },
+    sourceVehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true
+    }
+  },
+  { _id: true }
+)
+
 const driverApprovalWorkflowSchema = new mongoose.Schema(
   {
     status: {
@@ -342,6 +358,10 @@ const driverSchema = new mongoose.Schema({
   },
   vehicles: {
     type: [driverVehicleSchema],
+    default: []
+  },
+  archivedVehicles: {
+    type: [archivedDriverVehicleSchema],
     default: []
   },
   approvalWorkflow: {

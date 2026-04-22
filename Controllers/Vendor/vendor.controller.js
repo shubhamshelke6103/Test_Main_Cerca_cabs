@@ -873,7 +873,10 @@ const serializeVehicleState = (driver) => ({
   approvedVehicle: driver.vehicleInfo || driver.assignedFleetVehicleId || null,
   pendingVehicle: driver.pendingVehicleInfo || null,
   vehicleStatus: resolveDriverVehicleStatus(driver),
-  vehicles: getDriverVehicleRecords(driver).map(vehicle => toPlainDriverVehicleRecord(vehicle))
+  vehicles: getDriverVehicleRecords(driver).map(vehicle => toPlainDriverVehicleRecord(vehicle)),
+  archivedVehicles: Array.isArray(driver?.archivedVehicles)
+    ? driver.archivedVehicles.map(vehicle => toPlainDriverVehicleRecord(vehicle))
+    : []
 })
 
 const hasDriverVehicleState = driver =>
@@ -1115,6 +1118,11 @@ const serializeDriverForResponse = (driver, req) => {
     vehicles: getDriverVehicleRecords(driver).map(vehicle =>
       normalizeVehicleDocuments(toPlainDriverVehicleRecord(vehicle), req)
     ),
+    archivedVehicles: Array.isArray(driver.archivedVehicles)
+      ? driver.archivedVehicles.map(vehicle =>
+          normalizeVehicleDocuments(toPlainDriverVehicleRecord(vehicle), req)
+        )
+      : [],
     vehicleStatus: resolveDriverVehicleStatus(driver),
     approvalStatus: getDriverApprovalSummary(driver).status,
     approvalWorkflow: getDriverApprovalSummary(driver),
@@ -1927,6 +1935,32 @@ exports.leaveVendorAsDriver = async (req, res) => {
     return res.json({
       success: true,
       message: 'You have left the vendor',
+      driver: serializeDriverForResponse(driver, req)
+    })
+  } catch (error) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
+/** Driver JWT: clear vendor fleet assignment only (stay on vendor roster). */
+exports.unassignFleetVehicleAsDriver = async (req, res) => {
+  try {
+    const driver = await Driver.findById(req.driverId)
+    if (!driver) {
+      return res.status(404).json({ message: 'Driver not found' })
+    }
+    if (!driver.vendorId) {
+      return res.status(400).json({ message: 'You are not assigned to a vendor' })
+    }
+    if (!driver.assignedFleetVehicleId) {
+      return res.status(400).json({ message: 'No fleet vehicle is assigned' })
+    }
+    const vendorId = String(driver.vendorId)
+    await detachVendorFleetFromDriver(driver, vendorId)
+    await driver.save()
+    return res.json({
+      success: true,
+      message: 'Fleet assignment removed',
       driver: serializeDriverForResponse(driver, req)
     })
   } catch (error) {
