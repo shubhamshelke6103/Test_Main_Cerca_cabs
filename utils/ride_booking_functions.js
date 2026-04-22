@@ -852,6 +852,8 @@ const createRide = async rideData => {
       distanceInKm: Math.round(distance * 100) / 100, // Round to 2 decimal places
       estimatedDuration: estimatedDuration || null, // Store estimated duration
       rideType: rideData.rideType || 'normal',
+      scheduleType: rideData.scheduleType || 'now',
+      scheduledAt: rideData.scheduledAt ? new Date(rideData.scheduledAt) : null,
       bookingType: rideData.bookingType || 'INSTANT',
       bookingMeta: rideData.bookingMeta || {},
       userSocketId: rideData.userSocketId,
