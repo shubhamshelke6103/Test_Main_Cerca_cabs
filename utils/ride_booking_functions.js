@@ -1645,10 +1645,10 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
     let cancellationFee = 0
     const shouldApplyCancellationFee = 
       // Fee applies only if:
-      // - Original ride status is 'accepted' or 'arrived' (driver was assigned)
+      // - Ride has not started yet (startOtpVerifiedAt is null)
       // - AND cancelled by rider (not system or driver)
       // - AND not a system cancellation reason
-      (originalStatus === 'accepted' || originalStatus === 'arrived') &&
+      !ride.startOtpVerifiedAt &&
       cancelledBy === 'rider' &&
       cancellationReason !== 'NO_DRIVER_FOUND' &&
       cancellationReason !== 'NO_DRIVER_ACCEPTED_TIMEOUT' &&
@@ -1656,7 +1656,7 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
 
     if (shouldApplyCancellationFee) {
       cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
-      logger.info(`processWalletRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
+      logger.info(`processWalletRefund: Cancellation fee applies - ₹${cancellationFee} (ride not started, cancelled by: ${cancelledBy})`)
     } else {
       logger.info(`processWalletRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
     }
