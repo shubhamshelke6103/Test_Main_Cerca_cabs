@@ -1493,7 +1493,7 @@ function initializeSocket (server) {
       try {
         logger.info(
           `newRideRequest event - riderId: ${
-            data?.rider || data?.riderId
+            data?.rider || data?.riderIdq
           }, service: ${data?.service}`
         )
 

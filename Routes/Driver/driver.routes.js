@@ -27,6 +27,7 @@ const {
     updateDriverVehicle,
     deleteDriverVehicle,
     deleteDriverGarageVehicle,
+    restoreGarageVehicleFromArchive,
     setDriverActiveOwnedVehicle,
     getDriverStats,
     getNearbyDrivers,
@@ -124,6 +125,8 @@ const driverProfilePicUpload = multer({
 router.post('/me/leave-vendor', authenticateDriver, vendorController.leaveVendorAsDriver);
 router.post('/register', driverProfilePicUpload.single('profilePic'), registerDriver);
 router.post('/', addDriver); // Add a new driver (JSON)
+router.post('/me/unassign-fleet', authenticateDriver, vendorController.unassignFleetVehicleAsDriver);
+router.post('/', addDriver); // Add a new driver with documents
 router.post('/login', loginDriver); // Login driver
 router.get('/', getAllDrivers); // Get all drivers
 router.get('/:id', getDriverById); // Get a driver by ID
@@ -248,6 +251,12 @@ router.delete(
     authenticateDriver,
     requireOwnDriver,
     deleteDriverGarageVehicle
+);
+router.post(
+    '/:id/vehicles/restore',
+    authenticateDriver,
+    requireOwnDriver,
+    restoreGarageVehicleFromArchive
 );
 
 // Route to update driver vehicle information (submit new vehicle for approval)
