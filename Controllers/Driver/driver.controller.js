@@ -27,6 +27,12 @@ const {
     sanitizeGoToResponse,
 } = require('../../utils/goToRoute.service.js');
 const { persistDriverLocationWithGoTo } = require('../../utils/driverLocationPersistence.js');
+const {
+    computeGoToHandling,
+    getGoToQuotaDayKey,
+    buildNonPriorityGoToActivateFilter,
+    buildNonPriorityGoToActivatePipeline,
+} = require('../../utils/goToQuotaWindow.js');
 const { notifyAdminsRegistrationEvent } = require('../../utils/adminRegistrationNotify.js');
 const { resolveAggregateVehicleStatus: resolveVehicleStatus } = require('../../utils/driverVehicleAggregateStatus.js');
 const {
@@ -705,7 +711,7 @@ const pushArchivedSnapshot = (driver, sub) => {
         year: plain.year,
         color: plain.color,
         licensePlate: plain.licensePlate,
-        vehicleType: plain.vehicleType || 'sedan',
+        vehicleType: plain.vehicleType || 'cercaGlide',
         documents: Array.isArray(plain.documents) ? [...plain.documents] : [],
         approvalStatus: plain.approvalStatus || 'UNDER_APPROVAL',
         approvalRoutedTo: plain.approvalRoutedTo ?? null,
@@ -1503,18 +1509,27 @@ const upsertDriverGoToHome = async (req, res) => {
             resolveHomeLocationPayload(req.body, driver);
         const currentGoTo = driver.goTo?.toObject?.() || driver.goTo || {};
 
-        driver.goTo = {
+        const goToPayload = {
             ...currentGoTo,
             homeAddress,
             homeLocation,
             corridorRadiusMeters,
         };
 
-        await driver.save();
+        // Atomic $set avoids full-document save() validation on legacy fields (e.g. old vehicleType enums).
+        const updated = await Driver.findByIdAndUpdate(
+            req.params.id,
+            { $set: { goTo: goToPayload } },
+            { new: true, runValidators: true }
+        );
+        if (!updated) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
 
         res.status(200).json({
             message: 'Driver GO TO home destination updated successfully',
-            goTo: sanitizeGoToResponse(driver.goTo),
+            goTo: sanitizeGoToResponse(updated.goTo),
+            goToHandling: computeGoToHandling(updated),
         });
     } catch (error) {
         logger.error('Error updating GO TO home destination:', error);
@@ -1534,44 +1549,71 @@ const activateDriverGoTo = async (req, res) => {
         const driver = await getDriverOr404(req.params.id, res);
         if (!driver) return;
 
-        // Check daily GoTo activation limits
-        const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
-        // Reset counter if it's a new day
-        if (!driver.goToLastActivationDate || driver.goToLastActivationDate < startOfToday || driver.goToLastActivationDate > endOfToday) {
-            driver.goToDailyActivations = 0;
-            driver.goToLastActivationDate = startOfToday;
-        }
-
-        // Check limits for non-priority drivers
-        if (!driver.isPriorityDriver && driver.goToDailyActivations >= 2) {
+        const handlingPreview = computeGoToHandling(driver);
+        if (
+            !handlingPreview.isPriorityDriver &&
+            handlingPreview.activationsRemainingToday === 0
+        ) {
             return res.status(400).json({
                 message: 'Daily GoTo activation limit reached (2 per day for non-priority drivers)',
                 error: 'DAILY_GOTO_LIMIT_EXCEEDED',
+                goToHandling: handlingPreview,
             });
         }
+
+        const now = new Date();
+        const todayKey = getGoToQuotaDayKey(now);
 
         const originCoordinates = normalizeLocationCoordinates(driver.location);
         const { homeAddress, homeLocation, corridorRadiusMeters } =
             resolveHomeLocationPayload(req.body, driver);
 
-        driver.goTo = await buildGoToRouteSnapshot({
+        const goToSnapshot = await buildGoToRouteSnapshot({
             origin: { coordinates: originCoordinates },
             destination: homeLocation,
             homeAddress,
             corridorRadiusMeters,
         });
 
-        // Increment activation counter after successful route build
-        driver.goToDailyActivations += 1;
+        let updated = null;
+        if (driver.isPriorityDriver) {
+            updated = await Driver.findOneAndUpdate(
+                { _id: driver._id, isPriorityDriver: true },
+                {
+                    $set: {
+                        goTo: goToSnapshot,
+                        goToLastActivationDate: now,
+                    },
+                },
+                { new: true, runValidators: true }
+            );
+        }
+        if (!updated) {
+            const filter = buildNonPriorityGoToActivateFilter(driver._id, todayKey);
+            const pipeline = buildNonPriorityGoToActivatePipeline(
+                todayKey,
+                goToSnapshot,
+                now
+            );
+            updated = await Driver.findOneAndUpdate(filter, pipeline, {
+                new: true,
+            });
+        }
 
-        await driver.save();
+        if (!updated) {
+            const fresh = await Driver.findById(driver._id);
+            const handling = fresh ? computeGoToHandling(fresh) : handlingPreview;
+            return res.status(400).json({
+                message: 'Daily GoTo activation limit reached (2 per day for non-priority drivers)',
+                error: 'DAILY_GOTO_LIMIT_EXCEEDED',
+                goToHandling: handling,
+            });
+        }
 
         res.status(200).json({
             message: 'GO TO activated successfully',
-            goTo: sanitizeGoToResponse(driver.goTo),
+            goTo: sanitizeGoToResponse(updated.goTo),
+            goToHandling: computeGoToHandling(updated),
         });
     } catch (error) {
         logger.error('Error activating GO TO:', error);
@@ -1607,6 +1649,7 @@ const deactivateDriverGoTo = async (req, res) => {
         res.status(200).json({
             message: 'GO TO deactivated successfully',
             goTo: sanitizeGoToResponse(updated.goTo),
+            goToHandling: computeGoToHandling(updated),
         });
     } catch (error) {
         logger.error('Error deactivating GO TO:', error);
@@ -1629,6 +1672,7 @@ const getDriverGoToStatus = async (req, res) => {
         res.status(200).json({
             message: 'Driver GO TO status fetched successfully',
             goTo: sanitizeGoToResponse(driver.goTo),
+            goToHandling: computeGoToHandling(driver),
         });
     } catch (error) {
         logger.error('Error fetching GO TO status:', error);
@@ -2356,7 +2400,7 @@ const restoreGarageVehicleFromArchive = async (req, res) => {
             year: plainArch.year,
             color: plainArch.color,
             licensePlate: plainArch.licensePlate,
-            vehicleType: plainArch.vehicleType || 'sedan',
+            vehicleType: plainArch.vehicleType || 'cercaGlide',
             documents: Array.isArray(plainArch.documents) ? [...plainArch.documents] : [],
             approvalStatus: plainArch.approvalStatus,
             approvalRoutedTo: plainArch.approvalRoutedTo ?? null,

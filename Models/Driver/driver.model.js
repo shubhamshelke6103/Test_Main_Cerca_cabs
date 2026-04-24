@@ -581,6 +581,12 @@ const driverSchema = new mongoose.Schema({
     default: null
   },
 
+  /** YYYY-MM-DD in GOTO_QUOTA_TIMEZONE; aligns daily activation counter with driver-local calendar day */
+  goToQuotaDayKey: {
+    type: String,
+    default: null
+  },
+
   vendorId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "Vendor",

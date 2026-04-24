@@ -18,6 +18,9 @@ const Vendor = require('../Models/vendor/vendor.models')
 const logger = require('./logger')
 const { redis } = require('../config/redis')
 const razorpay = require('razorpay')
+const {
+  resolveCanonicalVehicleTier
+} = require('./vehicleServicesKeys')
 
 // Initialize Razorpay instance
 // Live keys (default fallback)
@@ -469,13 +472,16 @@ const getDriverRideAccessProfile = async (driver) => {
 }
 
 const driverCanAcceptRideType = async (driver, requestedVehicleType) => {
-  const normalizedRequestedType = String(requestedVehicleType || '').trim()
-  if (!DRIVER_RIDE_TYPE_ORDER.includes(normalizedRequestedType)) {
+  const tier = resolveCanonicalVehicleTier(requestedVehicleType)
+  if (tier === null) {
     return true
+  }
+  if (tier === false) {
+    return false
   }
 
   const profile = await getDriverRideAccessProfile(driver)
-  return profile.allowedRideTypes.includes(normalizedRequestedType)
+  return profile.allowedRideTypes.includes(tier)
 }
 
 /**
@@ -650,7 +656,7 @@ const createRide = async rideData => {
       )
     }
 
-    // Map service name to vehicleService key (e.g., 'sedan' → 'cercaMedium')
+    // Map service name to vehicleService key (canonical tier keys)
     const vehicleServiceKey = mapServiceToVehicleService(selectedService)
     const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
 

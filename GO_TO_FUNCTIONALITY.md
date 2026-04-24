@@ -4,6 +4,7 @@ This document describes **Go-To**: how it is stored, computed, exposed over HTTP
 
 Implementation anchors:
 
+- Daily activation quota (priority vs non-priority): [`utils/goToQuotaWindow.js`](utils/goToQuotaWindow.js) (`GOTO_QUOTA_TIMEZONE`, default `Asia/Kolkata`)
 - Core logic: [`utils/goToRoute.service.js`](utils/goToRoute.service.js)
 - Location + refresh orchestration: [`utils/driverLocationPersistence.js`](utils/driverLocationPersistence.js)
 - HTTP handlers: [`Controllers/Driver/driver.controller.js`](Controllers/Driver/driver.controller.js)
@@ -164,11 +165,26 @@ Normalized via `normalizeGeoPoint` / `normalizeLocationCoordinates` from `goToRo
 
 - **`upsertDriverGoToHome`**: Merges `homeAddress`, `homeLocation`, `corridorRadiusMeters` into current `goTo` **without** calling Directions. Response: `{ message, goTo: sanitizeGoToResponse(...) }`.
 
-- **`activateDriverGoTo`**: Origin = **current** `driver.location` (normalized). Home = `resolveHomeLocationPayload(req.body, driver)`. Calls `buildGoToRouteSnapshot`, replaces `driver.goTo` with result, saves. On Directions/validation errors → **400** with message (no `STALE` path in this handler).
+- **`activateDriverGoTo`**: Origin = **current** `driver.location` (normalized). Home = `resolveHomeLocationPayload(req.body, driver)`. Calls `buildGoToRouteSnapshot`, then persists `goTo` with an **atomic** update for non-priority drivers so the daily activation counter cannot race past the limit. On Directions/validation errors → **400** with message (no `STALE` path in this handler).
 
-- **`deactivateDriverGoTo`**: `driver.goTo = deactivateGoToState(...)`, save, sanitized `goTo` in response.
+  **Daily activation quota (non-priority only):** Drivers with `isPriorityDriver !== true` may complete at most **2 successful activations** per **calendar day** in `GOTO_QUOTA_TIMEZONE` (default `Asia/Kolkata`). Each **POST activate** that builds a route counts **one** activation; **POST deactivate** does not. Priority drivers have **no** daily cap. The driver document stores `goToDailyActivations`, `goToQuotaDayKey` (`YYYY-MM-DD`), and `goToLastActivationDate` for auditing and legacy alignment.
 
-- **`getDriverGoToStatus`**: Returns sanitized `goTo` (or null fields inside sanitizer for empty state).
+  When the limit is exceeded, response **400** includes `error: "DAILY_GOTO_LIMIT_EXCEEDED"` and `goToHandling` (see below).
+
+- **`deactivateDriverGoTo`**: `driver.goTo = deactivateGoToState(...)`, save, sanitized `goTo` in response, plus `goToHandling`.
+
+- **`getDriverGoToStatus`**: Returns sanitized `goTo` (or null fields inside sanitizer for empty state) and **`goToHandling`**.
+
+#### `goToHandling` JSON shape
+
+Returned on **`GET /drivers/:id/go-to`**, **`POST .../activate`** (success), **`POST .../deactivate`**, and on activate **limit** errors:
+
+| Field | Type | Meaning |
+|--------|------|--------|
+| `isPriorityDriver` | boolean | When true, daily GO TO activation cap does not apply. |
+| `dailyActivationLimit` | number \| null | `2` for capped drivers; `null` means unlimited (priority). |
+| `activationsUsedToday` | number \| null | Successful activations counted for the current quota day; `null` when priority. |
+| `activationsRemainingToday` | number \| null | Activations left before cap; `null` when priority. |
 
 - **`updateDriverLocation`**: Body `coordinates: [lng, lat]`. Calls **`persistDriverLocationWithGoTo`**, responds with `location`, **`goTo: sanitizeGoToResponse(...)`**, and **`goToRouteRefreshed`** boolean.
 
@@ -205,9 +221,10 @@ If **`dropoffLocation` is not** passed in options, this **Go-To filter block is 
 
 | Layer | Responsibility |
 |--------|----------------|
-| [`GoToService`](../driver_cerca/lib/services/go_to_service.dart) | Bearer `GET/PUT/POST` to the four Go-To endpoints; parses top-level `goTo` from JSON. |
+| [`GoToService`](../driver_cerca/lib/services/go_to_service.dart) | Bearer `GET/PUT/POST` to the four Go-To endpoints; parses `goTo` plus optional **`goToHandling`** into [`GoToSessionResult`](../driver_cerca/lib/models/go_to_session_result.dart); `isDailyGoToLimitExceeded` / `parseGoToHandlingFromError` for **400** `DAILY_GOTO_LIMIT_EXCEEDED`. |
 | [`GoToStateModel`](../driver_cerca/lib/models/go_to_state_model.dart) | Maps sanitized fields; `isActiveRoute` (`isEnabled && status == ACTIVE`), `isStale`. |
-| [`GoToScreen`](../driver_cerca/lib/screens/go_to_screen.dart) | UI: load status, address, map / “my location”, `upsertHome`, `activate`, `deactivate`; errors via `GoToService.messageFromError`. |
+| [`GoToHandlingModel`](../driver_cerca/lib/models/go_to_handling_model.dart) | Maps `goToHandling` quota fields for UI (priority vs daily cap). |
+| [`GoToScreen`](../driver_cerca/lib/screens/go_to_screen.dart) | UI: load status, quota banner, address, map / “my location”, `upsertHome`, `activate`, `deactivate`; disables activate when non-priority quota exhausted; link to Priority Driver flow. |
 | [`profile_screen.dart`](../driver_cerca/lib/screens/profile_screen.dart) | Navigates to `GoToScreen`. |
 
 The client **does not** deserialize `routePoints`; it only sees **`routePointCount`** and related metadata from the API. On-device maps are for **setting home**, not for rendering the server polyline.

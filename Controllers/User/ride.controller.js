@@ -10,6 +10,11 @@ const mongoose = require('mongoose')
 const rideBookingProducer = require('../../src/queues/rideBooking.producer')
 const rideBookingFunctions = require('../../utils/ride_booking_functions')
 const {
+  normalizeVehicleServicesForResponse,
+  VEHICLE_SERVICE_KEYS,
+  resolveCanonicalVehicleTier
+} = require('../../utils/vehicleServicesKeys')
+const {
   mapServiceToVehicleService,
   calculateFareWithTime,
   calculateHaversineDistance,
@@ -1530,16 +1535,21 @@ const calculateFare = async (req, res) => {
     const { perKmRate, minimumFare, platformFees, driverCommissions } =
       settings.pricingConfigurations
 
-    // Map vehicle type directly to vehicleService keys
-    const vehicleServiceKeyMap = {
-      small: 'cercaSmall',
-      medium: 'cercaMedium',
-      large: 'cercaLarge'
+    const vehicleServicesNorm = normalizeVehicleServicesForResponse(
+      settings.vehicleServices || {}
+    )
+    const rawTierInput = vehicleType ?? req.body.service
+    const tierResolved = resolveCanonicalVehicleTier(rawTierInput)
+    if (tierResolved === false) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vehicle type'
+      })
     }
-    const vehicleServiceKey = vehicleServiceKeyMap[vehicleType] || 'cercaSmall'
+    const vehicleServiceKey =
+      tierResolved === null ? 'cercaZip' : tierResolved
 
-    // Get vehicle service directly from vehicleServices
-    const vehicleService = settings.vehicleServices?.[vehicleServiceKey]
+    const vehicleService = vehicleServicesNorm[vehicleServiceKey]
 
     if (!vehicleService || !vehicleService.enabled) {
       return res.status(400).json({
@@ -1631,7 +1641,7 @@ const calculateFare = async (req, res) => {
           platformFees: platformFee,
           adminEarnings: adminEarnings
         },
-        vehicleType: vehicleType || 'small',
+        vehicleType: vehicleServiceKey,
         vehicleServiceKey: vehicleServiceKey
       }
     })
@@ -1726,13 +1736,14 @@ const calculateAllFares = async (req, res) => {
 
     const { perKmRate, minimumFare, platformFees, driverCommissions } =
       settings.pricingConfigurations
-    const vehicleServices = settings.vehicleServices || {}
+    const vehicleServices = normalizeVehicleServicesForResponse(
+      settings.vehicleServices || {}
+    )
 
     // Calculate fare for each enabled vehicle service
     const fares = {}
-    const vehicleServiceKeys = ['cercaSmall', 'cercaMedium', 'cercaLarge']
 
-    for (const vehicleServiceKey of vehicleServiceKeys) {
+    for (const vehicleServiceKey of VEHICLE_SERVICE_KEYS) {
       const vehicleService = vehicleServices[vehicleServiceKey]
 
       // Skip if service doesn't exist or is disabled
