@@ -45,6 +45,7 @@ const {
   autoAssignDriver,
   searchDriversWithProgressiveRadius,
   getDriverRideAccessProfile,
+  normalizeRideAccessPreferences,
   validateAndFixDriverStatus,
   checkAndCleanStaleRideLocks,
   clearRideRedisKeys
@@ -1296,15 +1297,32 @@ function initializeSocket (server) {
           allowGlide: Boolean(driver?.rideAccess?.allowGlide)
         }
 
-        const nextRideAccess = {
+        const requestedRideAccess = {
           allowZip: profile.availableToggles.includes('allowZip')
             ? (parsePreferenceBoolean(rawZip) ?? currentRideAccess.allowZip)
             : false,
           allowGlide: profile.availableToggles.includes('allowGlide')
             ? (parsePreferenceBoolean(rawGlide) ?? currentRideAccess.allowGlide)
-            : false,
+            : false
+        }
+
+        const normalizedRideAccess = normalizeRideAccessPreferences(
+          requestedRideAccess,
+          profile.vehicleType
+        )
+
+        const nextRideAccess = {
+          ...normalizedRideAccess,
           updatedAt: new Date()
         }
+
+        logger.info('driverRidePreferenceUpdate: applying ride access toggle', {
+          driverId,
+          vehicleType: profile.vehicleType,
+          requestedRideAccess,
+          normalizedRideAccess,
+          availableRideToggles: profile.availableToggles
+        })
 
         const updatedDriver = await Driver.findByIdAndUpdate(
           driverId,

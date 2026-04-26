@@ -371,10 +371,32 @@ const mapServiceToDriverType = (serviceName) => {
 
 const DRIVER_RIDE_TYPE_ORDER = ['cercaZip', 'cercaGlide', 'cercaTitan']
 
-const normalizeRideAccessPreferences = (rideAccess) => ({
-  allowZip: Boolean(rideAccess?.allowZip),
-  allowGlide: Boolean(rideAccess?.allowGlide)
-})
+const normalizeRideAccessPreferences = (rideAccess, vehicleType) => {
+  const defaults = getRideAccessDefaultsForVehicleType(vehicleType)
+  const availableToggles = defaults.availableToggles || []
+  const normalized = String(vehicleType || '').trim()
+
+  const allowZip = availableToggles.includes('allowZip')
+    ? Boolean(rideAccess?.allowZip)
+    : defaults.allowZip
+  const allowGlide = availableToggles.includes('allowGlide')
+    ? Boolean(rideAccess?.allowGlide)
+    : defaults.allowGlide
+
+  // Glide must keep at least one feed enabled. If both are false, default back
+  // to receiving Glide rides so dispatch never becomes empty unexpectedly.
+  if (normalized === 'cercaGlide' && !allowZip && !allowGlide) {
+    return {
+      allowZip: false,
+      allowGlide: true
+    }
+  }
+
+  return {
+    allowZip,
+    allowGlide
+  }
+}
 
 const getRideAccessDefaultsForVehicleType = (vehicleType) => {
   const normalized = String(vehicleType || '').trim()
@@ -382,15 +404,15 @@ const getRideAccessDefaultsForVehicleType = (vehicleType) => {
   if (normalized === 'cercaGlide') {
     return {
       allowZip: false,
-      allowGlide: false,
-      availableToggles: ['allowZip']
+      allowGlide: true,
+      availableToggles: ['allowGlide', 'allowZip']
     }
   }
 
   if (normalized === 'cercaTitan') {
     return {
-      allowZip: false,
-      allowGlide: false,
+      allowZip: true,
+      allowGlide: true,
       availableToggles: ['allowGlide', 'allowZip']
     }
   }
@@ -438,19 +460,25 @@ const resolveDriverVehicleType = async (driver) => {
 
 const getDriverRideAccessProfile = async (driver) => {
   const vehicleType = await resolveDriverVehicleType(driver)
-  const preferences = normalizeRideAccessPreferences(driver?.rideAccess)
+  const preferences = normalizeRideAccessPreferences(driver?.rideAccess, vehicleType)
   const defaults = getRideAccessDefaultsForVehicleType(vehicleType)
 
   const allowedRideTypes = []
-  if (vehicleType) {
-    allowedRideTypes.push(vehicleType)
-  }
-
-  if (vehicleType === 'cercaGlide' && preferences.allowZip) {
+  if (vehicleType === 'cercaZip') {
     allowedRideTypes.push('cercaZip')
   }
 
+  if (vehicleType === 'cercaGlide') {
+    if (preferences.allowGlide) {
+      allowedRideTypes.push('cercaGlide')
+    }
+    if (preferences.allowZip) {
+      allowedRideTypes.push('cercaZip')
+    }
+  }
+
   if (vehicleType === 'cercaTitan') {
+    allowedRideTypes.push('cercaTitan')
     if (preferences.allowGlide) {
       allowedRideTypes.push('cercaGlide')
     }
