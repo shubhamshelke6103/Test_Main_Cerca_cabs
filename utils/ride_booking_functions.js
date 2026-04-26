@@ -538,6 +538,53 @@ const calculateFareWithTime = (basePrice, distance, duration, perKmRate, perMinu
   }
 }
 
+const DEFAULT_SUBSTANTIVE_MIN_DURATION_MIN = 2
+const DEFAULT_SUBSTANTIVE_MIN_DISTANCE_KM = 0.3
+const DEFAULT_SUBSTANTIVE_ESTIMATE_DISTANCE_FRACTION = 0.05
+
+/**
+ * Resolved substantive-trip thresholds from admin pricing (with safe defaults).
+ * @param {object} [pricingConfigurations]
+ */
+const getPricingSubstantiveThresholds = (pricingConfigurations = {}) => {
+  const pc = pricingConfigurations || {}
+  const minDuration = Number.isFinite(Number(pc.substantiveTripMinDurationMinutes))
+    ? Math.max(0, Number(pc.substantiveTripMinDurationMinutes))
+    : DEFAULT_SUBSTANTIVE_MIN_DURATION_MIN
+  const minKm = Number.isFinite(Number(pc.substantiveTripMinDistanceKm))
+    ? Math.max(0, Number(pc.substantiveTripMinDistanceKm))
+    : DEFAULT_SUBSTANTIVE_MIN_DISTANCE_KM
+  const estFrac = Number.isFinite(Number(pc.substantiveTripEstimateDistanceFraction))
+    ? Math.max(0, Number(pc.substantiveTripEstimateDistanceFraction))
+    : DEFAULT_SUBSTANTIVE_ESTIMATE_DISTANCE_FRACTION
+  return { minDuration, minKm, estFrac }
+}
+
+/**
+ * Whether an INSTANT ride consumed enough actual time and distance to apply fareAtBooking as a floor.
+ * No actual start (0 duration) or tiny distance → false (bill on actuals + minimumFare).
+ */
+const evaluateSubstantiveInstantTrip = ({
+  thresholds,
+  actualDurationMinutes,
+  actualDistanceKm,
+  estimatedDistanceKm
+}) => {
+  const { minDuration, minKm, estFrac } = thresholds
+  const estimated = Math.max(0, Number(estimatedDistanceKm) || 0)
+  const minDistanceKmRequired = Math.max(minKm, estimated * estFrac)
+  const dur = Number(actualDurationMinutes) || 0
+  const dist = Number(actualDistanceKm) || 0
+  const durationOk = dur >= minDuration
+  const distanceOk = dist >= minDistanceKmRequired
+  return {
+    substantiveTrip: durationOk && distanceOk,
+    minDistanceKmRequired,
+    durationOk,
+    distanceOk
+  }
+}
+
 const createRide = async rideData => {
   const riderId = rideData.riderId || rideData.rider
   if (!riderId) throw new Error('riderId (or rider) is required')
@@ -1522,15 +1569,47 @@ const completeRide = async (rideId, fare) => {
       // Use provided fare if recalculation fails
     }
 
-    if (agreedAtBookingForComplete > 0 && recalculatedFare < agreedAtBookingForComplete) {
-      logger.info('fare.lineage', {
-        rideId: String(rideId),
-        phase: 'completeRide_floor',
-        recalculatedFare,
-        agreedAtBooking: agreedAtBookingForComplete,
-        flooredTo: agreedAtBookingForComplete
-      })
-      recalculatedFare = agreedAtBookingForComplete
+    if (
+      !fareBreakdown &&
+      agreedAtBookingForComplete > 0 &&
+      recalculatedFare < agreedAtBookingForComplete
+    ) {
+      try {
+        const Settings = require('../Models/Admin/settings.modal.js')
+        const settings = await Settings.findOne()
+        const thresholds = getPricingSubstantiveThresholds(settings?.pricingConfigurations)
+        const estimatedKmForSubstantive =
+          currentRide.estimatedDistanceInKm != null &&
+          Number(currentRide.estimatedDistanceInKm) > 0
+            ? Number(currentRide.estimatedDistanceInKm)
+            : Number(currentRide.distanceInKm) || measuredDistanceInKm || 0
+        const substantiveEval = evaluateSubstantiveInstantTrip({
+          thresholds,
+          actualDurationMinutes: actualDuration,
+          actualDistanceKm: measuredDistanceInKm,
+          estimatedDistanceKm: estimatedKmForSubstantive
+        })
+        const instantBooking =
+          currentRide.bookingType === 'INSTANT' || !currentRide.bookingType
+        if (instantBooking && substantiveEval.substantiveTrip) {
+          logger.info('fare.lineage', {
+            rideId: String(rideId),
+            phase: 'completeRide_floor_recalc_failed',
+            substantiveTrip: true,
+            quoteFloorApplied: true,
+            recalculatedFare,
+            agreedAtBooking: agreedAtBookingForComplete,
+            actualDistanceKm: measuredDistanceInKm,
+            estimatedDistanceInKm: estimatedKmForSubstantive,
+            actualDurationMinutes: actualDuration
+          })
+          recalculatedFare = agreedAtBookingForComplete
+        }
+      } catch (floorErr) {
+        logger.warn(
+          `[Fare Recalculation] completeRide quote floor skipped (settings): ${floorErr.message}`
+        )
+      }
     }
 
     // Update ride with recalculated fare, fare breakdown, end time, duration, and status
@@ -3181,19 +3260,43 @@ const recalculateRideFare = async (rideId) => {
       ride.fareAtBooking != null && ride.fareAtBooking > 0
         ? Number(ride.fareAtBooking)
         : Number(ride.fare || 0)
-    if (
-      (ride.bookingType === 'INSTANT' || !ride.bookingType) &&
-      agreedTripFare > 0 &&
-      tripFinalAfterCap < agreedTripFare
-    ) {
-      logger.info('fare.lineage', {
-        rideId: String(rideId),
-        phase: 'recalculateRideFare_floor_to_agreed',
-        agreedTripFare,
-        rawRecalculatedTrip: tripFinalAfterCap
-      })
+
+    const thresholds = getPricingSubstantiveThresholds(settings.pricingConfigurations)
+    const estimatedKmForSubstantive =
+      ride.estimatedDistanceInKm != null && Number(ride.estimatedDistanceInKm) > 0
+        ? Number(ride.estimatedDistanceInKm)
+        : 0
+    const substantiveEval = evaluateSubstantiveInstantTrip({
+      thresholds,
+      actualDurationMinutes: actualDuration,
+      actualDistanceKm: distance,
+      estimatedDistanceKm: estimatedKmForSubstantive
+    })
+    const instantBooking = ride.bookingType === 'INSTANT' || !ride.bookingType
+    const quoteFloorEligible =
+      instantBooking && agreedTripFare > 0 && tripFinalAfterCap < agreedTripFare
+    const quoteFloorApplied = quoteFloorEligible && substantiveEval.substantiveTrip
+    const tripFareBeforeQuoteFloor = tripFinalAfterCap
+    if (quoteFloorApplied) {
       tripFinalAfterCap = agreedTripFare
     }
+    logger.info('fare.lineage', {
+      rideId: String(rideId),
+      phase: 'recalculateRideFare_instant_quote_floor',
+      substantiveTrip: substantiveEval.substantiveTrip,
+      quoteFloorEligible,
+      quoteFloorApplied,
+      actualDistanceKm: distance,
+      estimatedDistanceInKm: estimatedKmForSubstantive,
+      actualDurationMinutes: actualDuration,
+      estimatedDurationMinutes: originalEstimatedDuration,
+      agreedTripFare,
+      tripFareBeforeQuoteFloor,
+      tripFareAfterQuoteFloor: tripFinalAfterCap,
+      minDistanceKmRequired: substantiveEval.minDistanceKmRequired,
+      durationOk: substantiveEval.durationOk,
+      distanceOk: substantiveEval.distanceOk
+    })
 
     const finalFareWithWait = roundMoney(tripFinalAfterCap + pickupWaitCharge)
 
@@ -4080,6 +4183,8 @@ module.exports = {
   getDriverRideAccessProfile,
   driverCanAcceptRideType,
   calculateFareWithTime,
+  getPricingSubstantiveThresholds,
+  evaluateSubstantiveInstantTrip,
   calculateHaversineDistance,
   createRide,
   assignDriverToRide,

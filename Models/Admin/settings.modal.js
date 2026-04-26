@@ -19,6 +19,15 @@ const SettingsSchema = new mongoose.Schema({
         pickupWaitDriverCancelAfterMinutes: { type: Number, default: 8 },
         /** Used when client omits estimatedDuration: duration ≈ distance / speed (km/h). */
         estimatedAverageSpeedKmh: { type: Number, default: 35 },
+        /**
+         * INSTANT completion: fareAtBooking is used as a floor only when the trip is "substantive"
+         * (actual time and distance both meet thresholds). Short/no-travel trips bill on actuals
+         * with minimumFare only—reduces mis-tap / abuse while keeping quote protection on real trips.
+         */
+        substantiveTripMinDurationMinutes: { type: Number, default: 2 },
+        substantiveTripMinDistanceKm: { type: Number, default: 0.3 },
+        /** Required actual km ≥ max(substantiveTripMinDistanceKm, this × estimatedDistanceInKm). */
+        substantiveTripEstimateDistanceFraction: { type: Number, default: 0.05 },
     },
     intercityPricingConfigurations: {
         enabled: { type: Boolean, default: true },
