@@ -45,7 +45,8 @@ const updateSettings = async (req, res) => {
                     minimumFare: 100,
                     cancellationFees: 50,
                     platformFees: 10,
-                    driverCommissions: 90
+                    driverCommissions: 90,
+                    estimatedAverageSpeedKmh: 35
                 };
             }
             
@@ -377,7 +378,8 @@ const getPublicSettings = async (req, res) => {
                     minimumFare: 100,
                     cancellationFees: 50,
                     platformFees: 10,
-                    driverCommissions: 90
+                    driverCommissions: 90,
+                    estimatedAverageSpeedKmh: 35
                 },
                 vehicleServices: {
                     cercaZip: {
@@ -458,7 +460,8 @@ const getPublicSettings = async (req, res) => {
                 minimumFare: 100,
                 cancellationFees: 50,
                 platformFees: 10,
-                driverCommissions: 90
+                driverCommissions: 90,
+                estimatedAverageSpeedKmh: 35
             },
             vehicleServices: vehicleServices
         });

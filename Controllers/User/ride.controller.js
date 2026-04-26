@@ -1438,20 +1438,22 @@ const calculateFare = async (req, res) => {
       dropoffLng
     )
 
-    // Estimate duration if not provided (using average speed of 35 km/h for city driving)
-    let duration = estimatedDuration
-    if (!duration || duration <= 0) {
-      const averageSpeedKmh = 35.0
-      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
-    }
-
-    // Fetch admin settings
     const settings = await Settings.findOne()
     if (!settings) {
       return res.status(500).json({
         success: false,
         message: 'Admin settings not found'
       })
+    }
+
+    let duration = estimatedDuration
+    if (!duration || duration <= 0) {
+      const pc = settings.pricingConfigurations || {}
+      const averageSpeedKmh =
+        Number(pc.estimatedAverageSpeedKmh) > 0
+          ? Number(pc.estimatedAverageSpeedKmh)
+          : 35
+      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
     }
 
     const rideType = String(req.body.rideType || 'normal').toLowerCase()
@@ -1718,20 +1720,22 @@ const calculateAllFares = async (req, res) => {
       dropoffLng
     )
 
-    // Estimate duration if not provided (using average speed of 35 km/h for city driving)
-    let duration = estimatedDuration
-    if (!duration || duration <= 0) {
-      const averageSpeedKmh = 35.0
-      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
-    }
-
-    // Fetch admin settings
     const settings = await Settings.findOne()
     if (!settings) {
       return res.status(500).json({
         success: false,
         message: 'Admin settings not found'
       })
+    }
+
+    let duration = estimatedDuration
+    if (!duration || duration <= 0) {
+      const pc = settings.pricingConfigurations || {}
+      const averageSpeedKmh =
+        Number(pc.estimatedAverageSpeedKmh) > 0
+          ? Number(pc.estimatedAverageSpeedKmh)
+          : 35
+      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
     }
 
     const { perKmRate, minimumFare, platformFees, driverCommissions } =

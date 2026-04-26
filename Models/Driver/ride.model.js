@@ -100,6 +100,8 @@ const rideSchema = new mongoose.Schema(
     userSocketId: String,
 
     fare: Number,
+    /** Agreed trip fare at booking (INSTANT); completion recalc must not collect below this + additive wait. */
+    fareAtBooking: { type: Number, default: null },
     estimatedDistanceInKm: Number,
     actualDistanceInKm: Number,
     distanceInKm: Number,

@@ -1,6 +1,9 @@
 /**
  * Canonical vehicle tier keys (Zip / Glide / Titan).
  * Legacy persisted keys cercaSmall|cercaMedium|cercaLarge are remapped for reads/writes.
+ *
+ * priceDefaultForKey / perMinuteDefaultForKey: bootstrap fallbacks when merging
+ * incomplete payloads only — live fare calculations must use Mongo `Settings.vehicleServices`.
  */
 
 const VEHICLE_SERVICE_KEYS = ['cercaZip', 'cercaGlide', 'cercaTitan']

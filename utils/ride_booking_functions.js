@@ -671,6 +671,8 @@ const createRide = async rideData => {
       throw new Error('Admin settings not found. Please configure pricing.')
     }
 
+    // INSTANT fare kernel: perKmRate + minimumFare from pricingConfigurations;
+    // tier base + perMinuteRate from settings.vehicleServices[vehicleServiceKey].
     const { perKmRate, minimumFare } = settings.pricingConfigurations
 
     // Validate service and map to vehicleService
@@ -883,6 +885,7 @@ const createRide = async rideData => {
       pickupLocation: { type: 'Point', coordinates: pickupLngLat },
       dropoffLocation: { type: 'Point', coordinates: dropoffLngLat },
       fare: finalFare,
+      fareAtBooking: finalFare,
       distanceInKm: Math.round(distance * 100) / 100, // Round to 2 decimal places
       estimatedDuration: estimatedDuration || null, // Store estimated duration
       rideType: rideData.rideType || 'normal',
@@ -1463,19 +1466,40 @@ const completeRide = async (rideId, fare) => {
     )
 
     // Recalculate fare with actual duration and actual route distance
-    let recalculatedFare = fare
+    let recalculatedFare =
+      fare != null && Number.isFinite(Number(fare)) ? Number(fare) : Number(currentRide?.fare) || 0
     let fareBreakdown = null
     let oldFare = currentRide?.fare || fare || 0
+    const agreedAtBookingForComplete =
+      currentRide?.fareAtBooking != null && currentRide.fareAtBooking > 0
+        ? Number(currentRide.fareAtBooking)
+        : Number(currentRide?.fare || oldFare || 0)
 
     const actualDistanceFromRoute = calculateRouteDistanceInKm(
       currentRide?.routePoints || []
     )
-    const measuredDistanceInKm =
+    let measuredDistanceInKm =
       currentRide?.actualDistanceInKm > 0
         ? currentRide.actualDistanceInKm
         : actualDistanceFromRoute > 0
         ? actualDistanceFromRoute
         : currentRide.distanceInKm || 0
+
+    if (!measuredDistanceInKm || measuredDistanceInKm <= 0) {
+      const p = currentRide?.pickupLocation?.coordinates
+      const d = currentRide?.dropoffLocation?.coordinates
+      if (Array.isArray(p) && p.length >= 2 && Array.isArray(d) && d.length >= 2) {
+        measuredDistanceInKm = calculateHaversineDistance(
+          p[1],
+          p[0],
+          d[1],
+          d[0]
+        )
+        logger.info(
+          `[Fare Tracking] measuredDistance was 0; using haversine pickup→drop ${measuredDistanceInKm}km for rideId ${rideId}`
+        )
+      }
+    }
 
     await Ride.findByIdAndUpdate(rideId, {
       actualDistanceInKm: measuredDistanceInKm,
@@ -1498,6 +1522,17 @@ const completeRide = async (rideId, fare) => {
       // Use provided fare if recalculation fails
     }
 
+    if (agreedAtBookingForComplete > 0 && recalculatedFare < agreedAtBookingForComplete) {
+      logger.info('fare.lineage', {
+        rideId: String(rideId),
+        phase: 'completeRide_floor',
+        recalculatedFare,
+        agreedAtBooking: agreedAtBookingForComplete,
+        flooredTo: agreedAtBookingForComplete
+      })
+      recalculatedFare = agreedAtBookingForComplete
+    }
+
     // Update ride with recalculated fare, fare breakdown, end time, duration, and status
     const updateData = {
       status: 'completed',
@@ -1515,7 +1550,7 @@ const completeRide = async (rideId, fare) => {
         fareAfterMinimum: fareBreakdown.fareAfterMinimum,
         discount: fareBreakdown.discount,
         pickupWaitCharge: fareBreakdown.pickupWaitCharge || 0,
-        finalFare: fareBreakdown.finalFare
+        finalFare: recalculatedFare
       }
       // Update discount if promo code was re-applied
       if (fareBreakdown.discount > 0) {
@@ -1583,6 +1618,8 @@ const completeRide = async (rideId, fare) => {
       finalFare: recalculatedFare,
       minimumFareApplied: recalculatedFare > (fareBreakdown?.subtotal || 0),
       oldFare,
+      fareAtBooking: currentRide?.fareAtBooking,
+      agreedAtBooking: agreedAtBookingForComplete,
       fareDifference: recalculatedFare - oldFare,
       timestamp: new Date().toISOString()
     })
@@ -1689,7 +1726,13 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
       cancellationReason !== 'ALL_DRIVERS_REJECTED'
 
     if (shouldApplyCancellationFee) {
-      cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
+      const rawFee = Number(settings?.pricingConfigurations?.cancellationFees)
+      cancellationFee = Number.isFinite(rawFee) && rawFee >= 0 ? rawFee : 0
+      if (!Number.isFinite(rawFee) || rawFee < 0) {
+        logger.warn(
+          'processWalletRefund: cancellationFees missing or invalid in settings; using 0'
+        )
+      }
       logger.info(`processWalletRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
     } else {
       logger.info(`processWalletRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
@@ -1854,7 +1897,13 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
       cancellationReason !== 'ALL_DRIVERS_REJECTED'
 
     if (shouldApplyCancellationFee) {
-      cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
+      const rawFeeRz = Number(settings?.pricingConfigurations?.cancellationFees)
+      cancellationFee = Number.isFinite(rawFeeRz) && rawFeeRz >= 0 ? rawFeeRz : 0
+      if (!Number.isFinite(rawFeeRz) || rawFeeRz < 0) {
+        logger.warn(
+          'processRazorpayRefund: cancellationFees missing or invalid in settings; using 0'
+        )
+      }
       logger.info(`processRazorpayRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
     } else {
       logger.info(`processRazorpayRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
@@ -2155,8 +2204,17 @@ async function getDriverVehicleSnapshotForEarnings (driverId) {
 async function computeDriverInProgressCancelSettlement (originalRide) {
   const Settings = require('../Models/Admin/settings.modal.js')
   const settings = await Settings.findOne()
-  const penalty = settings?.pricingConfigurations?.cancellationFees ?? 50
-  const perKmRate = settings?.pricingConfigurations?.perKmRate ?? 12
+  if (!settings?.pricingConfigurations) {
+    throw new Error('Admin pricing settings not found')
+  }
+  const penalty = Number(settings.pricingConfigurations.cancellationFees)
+  const perKmRate = Number(settings.pricingConfigurations.perKmRate)
+  if (!Number.isFinite(penalty) || penalty < 0) {
+    throw new Error('Invalid cancellationFees in admin settings')
+  }
+  if (!Number.isFinite(perKmRate) || perKmRate < 0) {
+    throw new Error('Invalid perKmRate in admin settings')
+  }
 
   const driverDoc =
     originalRide.driver && originalRide.driver._id
@@ -3116,8 +3174,27 @@ const recalculateRideFare = async (rideId) => {
       }
     }
 
-    const tripFinalAfterCap = Math.round(finalFare * 100) / 100
+    let tripFinalAfterCap = Math.round(finalFare * 100) / 100
     const pickupWaitCharge = roundMoney(ride.pickupWait?.totalPickupWaitCharge || 0)
+
+    const agreedTripFare =
+      ride.fareAtBooking != null && ride.fareAtBooking > 0
+        ? Number(ride.fareAtBooking)
+        : Number(ride.fare || 0)
+    if (
+      (ride.bookingType === 'INSTANT' || !ride.bookingType) &&
+      agreedTripFare > 0 &&
+      tripFinalAfterCap < agreedTripFare
+    ) {
+      logger.info('fare.lineage', {
+        rideId: String(rideId),
+        phase: 'recalculateRideFare_floor_to_agreed',
+        agreedTripFare,
+        rawRecalculatedTrip: tripFinalAfterCap
+      })
+      tripFinalAfterCap = agreedTripFare
+    }
+
     const finalFareWithWait = roundMoney(tripFinalAfterCap + pickupWaitCharge)
 
     return {

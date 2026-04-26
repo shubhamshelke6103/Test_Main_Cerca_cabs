@@ -17,6 +17,8 @@ const SettingsSchema = new mongoose.Schema({
         pickupWaitTier1RatePerMin: { type: Number, default: 4 },
         pickupWaitTier2RatePerMin: { type: Number, default: 2 },
         pickupWaitDriverCancelAfterMinutes: { type: Number, default: 8 },
+        /** Used when client omits estimatedDuration: duration ≈ distance / speed (km/h). */
+        estimatedAverageSpeedKmh: { type: Number, default: 35 },
     },
     intercityPricingConfigurations: {
         enabled: { type: Boolean, default: true },
