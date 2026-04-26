@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 const Settings = require('../Models/Admin/settings.modal');
+const {
+    VEHICLE_SERVICE_KEYS,
+    remapVehicleServicesInput,
+    perMinuteDefaultForKey,
+    priceDefaultForKey
+} = require('../utils/vehicleServicesKeys');
 
 /**
  * @desc    Get all settings
@@ -126,27 +132,28 @@ const updateSettings = async (req, res) => {
 
         // Handle vehicleServices merge - preserve existing fields if not provided
         if (req.body.vehicleServices) {
-            const vehicleServices = { ...existingSettings.vehicleServices };
-            
-            // Merge each vehicle service, preserving required fields
-            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
-                if (req.body.vehicleServices[serviceKey]) {
+            const incoming = remapVehicleServicesInput({ ...req.body.vehicleServices });
+            const vehicleServices = remapVehicleServicesInput({
+                ...(existingSettings.vehicleServices || {})
+            });
+
+            VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
+                if (incoming[serviceKey]) {
                     vehicleServices[serviceKey] = {
-                        ...existingSettings.vehicleServices[serviceKey],
-                        ...req.body.vehicleServices[serviceKey],
-                        // Ensure required fields are preserved
-                        perMinuteRate: req.body.vehicleServices[serviceKey].perMinuteRate !== undefined
-                            ? req.body.vehicleServices[serviceKey].perMinuteRate
-                            : existingSettings.vehicleServices[serviceKey]?.perMinuteRate || 
-                              (serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4),
-                        price: req.body.vehicleServices[serviceKey].price !== undefined
-                            ? req.body.vehicleServices[serviceKey].price
-                            : existingSettings.vehicleServices[serviceKey]?.price || 
-                              (serviceKey === 'cercaSmall' ? 299 : serviceKey === 'cercaMedium' ? 499 : 699),
+                        ...vehicleServices[serviceKey],
+                        ...incoming[serviceKey],
+                        perMinuteRate: incoming[serviceKey].perMinuteRate !== undefined
+                            ? incoming[serviceKey].perMinuteRate
+                            : vehicleServices[serviceKey]?.perMinuteRate ||
+                              perMinuteDefaultForKey(serviceKey),
+                        price: incoming[serviceKey].price !== undefined
+                            ? incoming[serviceKey].price
+                            : vehicleServices[serviceKey]?.price ||
+                              priceDefaultForKey(serviceKey),
                     };
                 }
             });
-            
+
             updateData.vehicleServices = vehicleServices;
         }
 
@@ -178,7 +185,7 @@ const updateSettings = async (req, res) => {
             const vehicleServices = updateData.vehicleServices;
             
             // Validate all required fields exist
-            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+            VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
                 if (vehicleServices[serviceKey]) {
                     const service = vehicleServices[serviceKey];
                     if (service.price === undefined || service.price < 0) {
@@ -431,14 +438,14 @@ const getPublicSettings = async (req, res) => {
 
         // Ensure perMinuteRate exists for each service
         if (settings.vehicleServices) {
-            vehicleServices = { ...settings.vehicleServices };
-            ['cercaSmall', 'cercaMedium', 'cercaLarge'].forEach(serviceKey => {
+            vehicleServices = remapVehicleServicesInput({ ...settings.vehicleServices });
+            VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
                 if (vehicleServices[serviceKey]) {
                     vehicleServices[serviceKey] = {
                         ...vehicleServices[serviceKey],
-                        perMinuteRate: vehicleServices[serviceKey].perMinuteRate !== undefined 
+                        perMinuteRate: vehicleServices[serviceKey].perMinuteRate !== undefined
                             ? vehicleServices[serviceKey].perMinuteRate
-                            : (serviceKey === 'cercaSmall' ? 2 : serviceKey === 'cercaMedium' ? 3 : 4)
+                            : perMinuteDefaultForKey(serviceKey)
                     };
                 }
             });

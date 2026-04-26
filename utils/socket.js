@@ -45,6 +45,7 @@ const {
   autoAssignDriver,
   searchDriversWithProgressiveRadius,
   getDriverRideAccessProfile,
+  normalizeRideAccessPreferences,
   validateAndFixDriverStatus,
   checkAndCleanStaleRideLocks,
   clearRideRedisKeys
@@ -107,6 +108,10 @@ const sanitizeSocketRatingPayload = rating => ({
     phone: maskPhone(rating?.ratedToSnapshot?.phone)
   }
 })
+
+const _DRIVER_LOC_EMIT_AT = new Map()
+const _DRIVER_LOC_MIN_MS = 250
+let _DRIVER_LOC_EMIT_PRUNE = 0
 
 /**
  * Helper function to broadcast ride updates to shared ride rooms
@@ -1296,15 +1301,32 @@ function initializeSocket (server) {
           allowGlide: Boolean(driver?.rideAccess?.allowGlide)
         }
 
-        const nextRideAccess = {
+        const requestedRideAccess = {
           allowZip: profile.availableToggles.includes('allowZip')
             ? (parsePreferenceBoolean(rawZip) ?? currentRideAccess.allowZip)
             : false,
           allowGlide: profile.availableToggles.includes('allowGlide')
             ? (parsePreferenceBoolean(rawGlide) ?? currentRideAccess.allowGlide)
-            : false,
+            : false
+        }
+
+        const normalizedRideAccess = normalizeRideAccessPreferences(
+          requestedRideAccess,
+          profile.vehicleType
+        )
+
+        const nextRideAccess = {
+          ...normalizedRideAccess,
           updatedAt: new Date()
         }
+
+        logger.info('driverRidePreferenceUpdate: applying ride access toggle', {
+          driverId,
+          vehicleType: profile.vehicleType,
+          requestedRideAccess,
+          normalizedRideAccess,
+          availableRideToggles: profile.availableToggles
+        })
 
         const updatedDriver = await Driver.findByIdAndUpdate(
           driverId,
@@ -1365,6 +1387,43 @@ function initializeSocket (server) {
           return
         }
 
+        const dKey = String(data.driverId)
+        const tnow = Date.now()
+        const lastE = _DRIVER_LOC_EMIT_AT.get(dKey) || 0
+        if (tnow - lastE < _DRIVER_LOC_MIN_MS) {
+          return
+        }
+        _DRIVER_LOC_EMIT_AT.set(dKey, tnow)
+        _DRIVER_LOC_EMIT_PRUNE += 1
+        if (_DRIVER_LOC_EMIT_PRUNE > 20000) {
+          _DRIVER_LOC_EMIT_AT.clear()
+          _DRIVER_LOC_EMIT_PRUNE = 0
+        }
+
+        let rideForPipe = null
+        if (data.rideId) {
+          try {
+            rideForPipe = await Ride.findById(data.rideId)
+              .select('driver status')
+              .lean()
+            if (!rideForPipe) {
+              logger.warn(`driverLocationUpdate: invalid rideId ${data.rideId}`)
+              return
+            }
+            if (String(rideForPipe.driver) !== dKey) {
+              logger.warn(
+                'driverLocationUpdate: driver is not assigned to this ride, ignoring'
+              )
+              return
+            }
+          } catch (e) {
+            logger.warn(
+              `driverLocationUpdate: ride check failed: ${e.message || e}`
+            )
+            return
+          }
+        }
+
         logger.info(
           `driverLocationUpdate - driverId: ${data.driverId}, rideId: ${
             data?.rideId || 'none'
@@ -1379,12 +1438,9 @@ function initializeSocket (server) {
         // ============================
         // PERSIST ROUTE POINT TO THE RIDE
         // ============================
-        if (data.rideId) {
+        if (data.rideId && rideForPipe?.status === 'in_progress') {
           try {
-            const ride = await Ride.findById(data.rideId).select('status')
-            if (ride?.status === 'in_progress') {
-              await appendRideRoutePoint(data.rideId, data.location)
-            }
+            await appendRideRoutePoint(data.rideId, data.location)
           } catch (routeError) {
             logger.warn(
               `driverLocationUpdate: Failed to append route point for ride ${data.rideId}: ${routeError.message}`
@@ -1413,7 +1469,13 @@ function initializeSocket (server) {
         // ============================
         // BROADCAST TO RIDE ROOM
         // ============================
-        if (data.rideId) {
+        const st = rideForPipe ? rideForPipe.status : null
+        if (
+          data.rideId &&
+          rideForPipe &&
+          st !== 'completed' &&
+          st !== 'cancelled'
+        ) {
           io.to(`ride_${data.rideId}`).emit('driverLocationUpdate', {
             ...data,
             location: {
