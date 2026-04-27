@@ -21,6 +21,12 @@ const razorpay = require('razorpay')
 const {
   resolveCanonicalVehicleTier
 } = require('./vehicleServicesKeys')
+const {
+  CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  normalizeCancellationReasonCode,
+  shouldBlockCancelWithinDropRadius
+} = require('./cancellationPolicy')
 
 // Initialize Razorpay instance
 // Live keys (default fallback)
@@ -2694,7 +2700,53 @@ async function riderVerifyRazorpayDriverInProgressCancel (rideId, userId, razorp
   return finalizeDriverInProgressCancelLedger(rideId)
 }
 
-const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
+const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
+  const ride = await Ride.findById(rideId)
+    .select('status dropoffLocation routePoints driver')
+    .populate('driver', 'location')
+    .lean()
+  if (!ride) {
+    return { allowed: false, code: 'RIDE_NOT_FOUND', message: 'Ride not found' }
+  }
+  if (ride.status !== 'in_progress') return { allowed: true }
+
+  const dropoffCoords = ride.dropoffLocation?.coordinates
+  if (!dropoffCoords || dropoffCoords.length < 2) return { allowed: true }
+
+  let currentCoords = null
+  if (ride.driver?.location?.coordinates?.length >= 2) {
+    currentCoords = ride.driver.location.coordinates
+  } else if (Array.isArray(ride.routePoints) && ride.routePoints.length > 0) {
+    const lastPoint = ride.routePoints[ride.routePoints.length - 1]
+    if (lastPoint?.coordinates?.length >= 2) currentCoords = lastPoint.coordinates
+  }
+  if (!currentCoords) return { allowed: true }
+
+  const [curLng, curLat] = currentCoords
+  const [dropLng, dropLat] = dropoffCoords
+  const distanceKm = calculateHaversineDistance(curLat, curLng, dropLat, dropLng)
+  const distanceMeters = Math.round(distanceKm * 1000)
+
+  if (shouldBlockCancelWithinDropRadius(distanceMeters)) {
+    return {
+      allowed: false,
+      code: 'CANCEL_BLOCKED_NEAR_DROPOFF',
+      message: `${actor === 'driver' ? 'Driver' : 'Rider'} cannot cancel within ${CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS}m of drop. Please use End Ride.`,
+      meta: {
+        distanceToDropMeters: distanceMeters,
+        blockedRadiusMeters: CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS
+      }
+    }
+  }
+  return { allowed: true }
+}
+
+const cancelRide = async (
+  rideId,
+  cancelledBy,
+  cancellationReason = null,
+  cancellationMeta = {}
+) => {
   try {
     // Fetch ride BEFORE updating to get original status for refund calculation
     const originalRide = await Ride.findById(rideId).populate('driver rider')
@@ -2735,10 +2787,26 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
       status: 'cancelled',
       cancelledBy: normalizedCancelledBy
     }
+    updateData.cancellationReasonCode = normalizeCancellationReasonCode(
+      cancellationMeta?.reasonCode
+    )
 
     // Add cancellation reason if provided
     if (cancellationReason) {
       updateData.cancellationReason = cancellationReason
+    }
+    if (cancellationMeta?.requestedPickupShiftMeters || cancellationMeta?.note) {
+      const shiftMeters = Number(cancellationMeta?.requestedPickupShiftMeters)
+      updateData.cancellationContext = {
+        requestedPickupShiftMeters: Number.isFinite(shiftMeters)
+          ? shiftMeters
+          : null,
+        note:
+          typeof cancellationMeta?.note === 'string' &&
+          cancellationMeta.note.trim()
+            ? cancellationMeta.note.trim().slice(0, 500)
+            : null
+      }
     }
 
     if (driverInProgressSettlementSnapshot) {
@@ -4229,11 +4297,16 @@ module.exports = {
   clearRideLock,
   clearWorkerLock,
   appendRideRoutePoint,
+  evaluateRideCancellationPolicy,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,
   riderAcknowledgeDriverInProgressCancel,
   riderConfirmCashDriverInProgressCancel,
   riderPayWalletDriverInProgressCancel,
   riderVerifyRazorpayDriverInProgressCancel,
-  getPendingDriverInProgressCancelSettlements
+  getPendingDriverInProgressCancelSettlements,
+  normalizeCancellationReasonCode,
+  shouldBlockCancelWithinDropRadius,
+  CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS
 }

@@ -48,7 +48,10 @@ const {
   normalizeRideAccessPreferences,
   validateAndFixDriverStatus,
   checkAndCleanStaleRideLocks,
-  clearRideRedisKeys
+  clearRideRedisKeys,
+  evaluateRideCancellationPolicy,
+  normalizeCancellationReasonCode,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS
 } = require('./ride_booking_functions')
 
 const Emergency = require('../Models/User/emergency.model')
@@ -150,14 +153,19 @@ async function emitRideCancelledToClients (
   cancellationReason = ''
 ) {
   const rideId = cancelledRide._id.toString()
-  ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
+  const riderSafePayload = {
+    ...(cancelledRide.toObject?.() || cancelledRide),
+    driverInProgressCancelSettlement: undefined,
+    settlementHiddenForRider: true
+  }
+  ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', riderSafePayload)
   ioInstance.to('admin').emit('rideStatusUpdated', {
     rideId,
     status: 'cancelled',
     ride: cancelledRide
   })
   if (cancelledRide.userSocketId) {
-    ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', cancelledRide)
+    ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', riderSafePayload)
   }
   if (cancelledRide.driverSocketId) {
     ioInstance.to(cancelledRide.driverSocketId).emit('rideCancelled', cancelledRide)
@@ -3485,7 +3493,13 @@ function initializeSocket (server) {
         logger.info(
           `rideCancelled event - rideId: ${data?.rideId}, cancelledBy: ${data?.cancelledBy}`
         )
-        const { rideId, reason } = data || {}
+        const {
+          rideId,
+          reason,
+          reasonCode: rawReasonCode,
+          requestedPickupShiftMeters,
+          note
+        } = data || {}
         if (!rideId) {
           logger.warn('rideCancelled: rideId is missing')
           socket.emit('rideError', { message: 'Ride ID is required to cancel' })
@@ -3582,6 +3596,19 @@ function initializeSocket (server) {
           return
         }
 
+        const policy = await evaluateRideCancellationPolicy({
+          rideId,
+          actor: serverCancelledBy
+        })
+        if (!policy.allowed) {
+          socket.emit('rideError', {
+            code: policy.code,
+            message: policy.message,
+            ...(policy.meta || {})
+          })
+          return
+        }
+
         // Validate and set cancellation reason (backward compatible)
         let cancellationReason = reason
         if (!cancellationReason || cancellationReason.trim() === '') {
@@ -3591,12 +3618,34 @@ function initializeSocket (server) {
           )
         }
 
+        const reasonCode = normalizeCancellationReasonCode(rawReasonCode)
+        const parsedShiftMeters = Number(requestedPickupShiftMeters)
+        if (
+          reasonCode === 'RIDER_PICKUP_SHIFT_TOO_FAR' &&
+          (!Number.isFinite(parsedShiftMeters) ||
+            parsedShiftMeters < PICKUP_SHIFT_REASON_THRESHOLD_METERS)
+        ) {
+          socket.emit('rideError', {
+            code: 'INVALID_PICKUP_SHIFT_DISTANCE',
+            message: `Pickup displacement reason requires at least ${PICKUP_SHIFT_REASON_THRESHOLD_METERS}m`,
+            minimumMeters: PICKUP_SHIFT_REASON_THRESHOLD_METERS
+          })
+          return
+        }
+
         // Cancel ride with reason (use server-derived cancelledBy for refund/fee logic)
         // cancelRide also calls clearRideRedisKeys automatically
         const cancelledRide = await cancelRide(
           rideId,
           serverCancelledBy,
-          cancellationReason
+          cancellationReason,
+          {
+            reasonCode,
+            requestedPickupShiftMeters: Number.isFinite(parsedShiftMeters)
+              ? parsedShiftMeters
+              : null,
+            note
+          }
         )
         logger.info(
           `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${serverCancelledBy}, reason: ${cancellationReason}`

@@ -294,6 +294,21 @@ const rideSchema = new mongoose.Schema(
       type: String,
       maxlength: 500
     },
+    cancellationReasonCode: {
+      type: String,
+      enum: [
+        'GENERAL',
+        'DRIVER_WITHDREW_BEFORE_ARRIVAL',
+        'DRIVER_ENDED_AT_PICKUP',
+        'DRIVER_ENDED_DURING_TRIP',
+        'RIDER_PICKUP_SHIFT_TOO_FAR'
+      ],
+      default: 'GENERAL'
+    },
+    cancellationContext: {
+      requestedPickupShiftMeters: { type: Number, default: null },
+      note: { type: String, default: null, maxlength: 500 }
+    },
 
     cancellationFee: {
       type: Number,
