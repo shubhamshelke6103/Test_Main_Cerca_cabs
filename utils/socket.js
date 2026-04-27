@@ -2319,9 +2319,16 @@ function initializeSocket (server) {
       } catch (err) {
         logger.error('rideAccepted error:', err)
 
+        const mappedCode =
+          err?.code ||
+          (String(err?.message || '').includes('queued ride')
+            ? 'ALREADY_HAS_QUEUED_RIDE'
+            : String(err?.message || '').includes('not eligible')
+              ? 'NOT_ELIGIBLE_STACKED'
+              : 'RIDE_ACCEPTANCE_FAILED')
         socket.emit('rideError', {
           message: err.message || 'Failed to accept ride',
-          code: 'RIDE_ACCEPTANCE_FAILED',
+          code: mappedCode,
           rideId
         })
       }

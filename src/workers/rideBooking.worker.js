@@ -396,7 +396,15 @@ const rideBookingWorker = new Worker(
       // For scheduled rides, don't emit socket events - only use push notifications
       // Drivers will accept/reject via push notification interaction
       if (ride.scheduleType !== 'scheduled' && driver.socketId) {
-        io.to(driver.socketId).emit('newRideRequest', ride)
+        const ridePayload = {
+          ...(ride.toObject ? ride.toObject() : ride),
+          // Backward-compatible: consumers that don't know this field still work.
+          offerContext:
+            String(ride?.discoveryPhase || '').toLowerCase() === 'destination_reach'
+              ? 'destination_reach'
+              : 'standard'
+        }
+        io.to(driver.socketId).emit('newRideRequest', ridePayload)
       }
 
       try {
