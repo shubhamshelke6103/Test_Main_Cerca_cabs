@@ -3120,6 +3120,8 @@ function initializeSocket (server) {
           `rideCompleted event - rideId: ${data?.rideId}, fare: ${data?.fare}`
         )
         const { rideId, fare, otp, confirmEarlyEnd, idempotencyToken } = data || {}
+        const isInProgressStatus = status =>
+          status === 'in_progress' || status === 'ongoing'
         if (!rideId) {
           logger.warn('rideCompleted: rideId is missing')
           return
@@ -3156,7 +3158,7 @@ function initializeSocket (server) {
           return
         }
 
-        if (ENABLE_EARLY_END_CONFIRM && currentRide.status === 'in_progress') {
+        if (ENABLE_EARLY_END_CONFIRM && isInProgressStatus(currentRide.status)) {
           const rideForDistance = await Ride.findById(rideId)
             .select('dropoffLocation routePoints driver')
             .populate('driver', 'location')
@@ -3199,7 +3201,7 @@ function initializeSocket (server) {
         if (otp) {
           // Double-check ride status is still in_progress before verifying OTP
           const statusCheck = await Ride.findById(rideId).select('status')
-          if (statusCheck.status !== 'in_progress') {
+          if (!isInProgressStatus(statusCheck.status)) {
             logger.warn(`Ride ${rideId} status changed to ${statusCheck.status} before OTP verification`)
             socket.emit('rideError', { 
               message: `Ride is not in progress (status: ${statusCheck.status})` 
@@ -3225,7 +3227,7 @@ function initializeSocket (server) {
 
         // completeRide internally calls updateRideEndTime and recalculates fare
         const completionOptions = {}
-        if (ENABLE_EARLY_END_CONFIRM && currentRide.status === 'in_progress' && confirmEarlyEnd) {
+        if (ENABLE_EARLY_END_CONFIRM && isInProgressStatus(currentRide.status) && confirmEarlyEnd) {
           completionOptions.earlyEndConfirmed = true
         }
         const completedRide = await completeRide(rideId, fare, completionOptions)
