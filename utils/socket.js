@@ -51,7 +51,9 @@ const {
   clearRideRedisKeys,
   evaluateRideCancellationPolicy,
   normalizeCancellationReasonCode,
-  PICKUP_SHIFT_REASON_THRESHOLD_METERS
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  calculateHaversineDistance,
+  IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM
 } = require('./ride_booking_functions')
 
 const Emergency = require('../Models/User/emergency.model')
@@ -72,6 +74,12 @@ const {
 
 let io
 const DISCONNECT_GRACE_MS = Number(process.env.SOCKET_DISCONNECT_GRACE_MS || 45000)
+const ENABLE_EARLY_END_CONFIRM =
+  String(process.env.FEATURE_EARLY_END_CONFIRM || 'true').toLowerCase() !==
+  'false'
+const ENABLE_SINGLE_PATH_CHAT_SEND =
+  String(process.env.FEATURE_SINGLE_PATH_CHAT_SEND || 'true').toLowerCase() !==
+  'false'
 const pendingUserDisconnects = new Map()
 const pendingDriverDisconnects = new Map()
 
@@ -166,9 +174,11 @@ async function emitRideCancelledToClients (
   })
   if (cancelledRide.userSocketId) {
     ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', riderSafePayload)
+    ioInstance.to(cancelledRide.userSocketId).emit('rideStatusUpdated', riderSafePayload)
   }
   if (cancelledRide.driverSocketId) {
     ioInstance.to(cancelledRide.driverSocketId).emit('rideCancelled', cancelledRide)
+    ioInstance.to(cancelledRide.driverSocketId).emit('rideStatusUpdated', cancelledRide)
   }
   if (cancelledRide.rider) {
     const reasonStr = String(cancellationReason || '')
@@ -3109,7 +3119,7 @@ function initializeSocket (server) {
         logger.info(
           `rideCompleted event - rideId: ${data?.rideId}, fare: ${data?.fare}`
         )
-        const { rideId, fare, otp } = data || {}
+        const { rideId, fare, otp, confirmEarlyEnd, idempotencyToken } = data || {}
         if (!rideId) {
           logger.warn('rideCompleted: rideId is missing')
           return
@@ -3146,6 +3156,45 @@ function initializeSocket (server) {
           return
         }
 
+        if (ENABLE_EARLY_END_CONFIRM && currentRide.status === 'in_progress') {
+          const rideForDistance = await Ride.findById(rideId)
+            .select('dropoffLocation routePoints driver')
+            .populate('driver', 'location')
+            .lean()
+          const drop = rideForDistance?.dropoffLocation?.coordinates
+          let cur = rideForDistance?.driver?.location?.coordinates
+          if ((!cur || cur.length < 2) && Array.isArray(rideForDistance?.routePoints)) {
+            const last = rideForDistance.routePoints[rideForDistance.routePoints.length - 1]
+            cur = last?.coordinates
+          }
+          if (drop?.length >= 2 && cur?.length >= 2) {
+            const remainingKm = calculateHaversineDistance(
+              cur[1],
+              cur[0],
+              drop[1],
+              drop[0]
+            )
+            if (remainingKm > 0.1 && !confirmEarlyEnd) {
+              logger.info(
+                `metric.ride.early_completion_confirmation_required rideId=${rideId}`
+              )
+              socket.emit('rideCompletionConfirmationRequired', {
+                code: 'EARLY_END_CONFIRM_REQUIRED',
+                message:
+                  'You have not yet reached the destination; do you still wish to end the ride?',
+                rideId: String(rideId),
+                remainingDistanceKm: Number(remainingKm.toFixed(3))
+              })
+              return
+            }
+            if (remainingKm > 0.1 && confirmEarlyEnd) {
+              logger.info(
+                `rideCompleted: early end confirmed for ride ${rideId} token=${idempotencyToken || 'none'}`
+              )
+            }
+          }
+        }
+
         // Verify OTP if provided (only if ride is still in progress)
         if (otp) {
           // Double-check ride status is still in_progress before verifying OTP
@@ -3175,7 +3224,11 @@ function initializeSocket (server) {
         )
 
         // completeRide internally calls updateRideEndTime and recalculates fare
-        const completedRide = await completeRide(rideId, fare)
+        const completionOptions = {}
+        if (ENABLE_EARLY_END_CONFIRM && currentRide.status === 'in_progress' && confirmEarlyEnd) {
+          completionOptions.earlyEndConfirmed = true
+        }
+        const completedRide = await completeRide(rideId, fare, completionOptions)
 
         logger.info(
           `Ride completed successfully - rideId: ${rideId}, finalFare stored in ride: ₹${completedRide.fare}`
@@ -3479,6 +3532,17 @@ function initializeSocket (server) {
 
         // Redundant emit to ride room (same as Strategy 1) for compatibility
         io.to(rideRoom).emit('rideCompleted', completedRide)
+        if (ENABLE_EARLY_END_CONFIRM && confirmEarlyEnd && completedRide?.rider?._id) {
+          logger.info(`metric.ride.early_completion_confirmed rideId=${rideId}`)
+          await createNotification({
+            recipientId: completedRide.rider._id,
+            recipientModel: 'User',
+            title: 'Ride Ended Early',
+            message: 'Driver ended the ride before destination. Please complete payment.',
+            type: 'ride_completed',
+            relatedRide: rideId
+          })
+        }
       } catch (err) {
         logger.error('rideCompleted error:', err)
         socket.emit('rideError', { message: 'Failed to complete ride' })
@@ -3605,6 +3669,33 @@ function initializeSocket (server) {
             code: policy.code,
             message: policy.message,
             ...(policy.meta || {})
+          })
+          return
+        }
+
+        if (
+          serverCancelledBy === 'driver' &&
+          rideForAuth.status === 'in_progress' &&
+          policy.meta?.distanceToDropMeters != null &&
+          Number(policy.meta.distanceToDropMeters) <=
+            IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM * 1000
+        ) {
+          const completedRide = await completeRide(rideId, undefined, {
+            forceFareMode: 'full_fare_to_destination',
+            completionSource: 'driver_cancel_near_destination'
+          })
+          const rideRoom = `ride_${completedRide._id}`
+          io.to(rideRoom).emit('rideCompleted', completedRide)
+          if (completedRide.userSocketId) {
+            io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+          }
+          if (completedRide.driverSocketId) {
+            io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+          }
+          socket.emit('rideError', {
+            code: 'CANCEL_CONVERTED_TO_COMPLETION',
+            message:
+              'Destination is within 1 km. Cancellation converted to ride completion with full fare.'
           })
           return
         }
@@ -4124,21 +4215,14 @@ function initializeSocket (server) {
         io.to(roomName).emit('receiveMessage', populatedMessage)
         logger.info(`✅ [Socket] Message delivered to room: ${roomName}`)
 
-        // Fallback: Also try direct socket emission if room fails (for backward compatibility)
-        const receiverSocketId =
-          data.receiverModel === 'Driver'
-            ? (await Driver.findById(data.receiverId))?.socketId
-            : (await User.findById(data.receiverId))?.socketId
-
-        if (receiverSocketId) {
-          logger.info(
-            `🔌 [Socket] Fallback: Also emitting to receiver socket: ${receiverSocketId}`
-          )
-          io.to(receiverSocketId).emit('receiveMessage', populatedMessage)
-        } else {
-          logger.info(
-            `ℹ️ [Socket] Receiver socket not found (may be offline or not connected)`
-          )
+        if (!ENABLE_SINGLE_PATH_CHAT_SEND) {
+          const receiverSocketId =
+            data.receiverModel === 'Driver'
+              ? (await Driver.findById(data.receiverId))?.socketId
+              : (await User.findById(data.receiverId))?.socketId
+          if (receiverSocketId) {
+            io.to(receiverSocketId).emit('receiveMessage', populatedMessage)
+          }
         }
 
         logger.info('🔔 [Socket] Emitting unread count update...')

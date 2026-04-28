@@ -435,6 +435,29 @@ const rideSchema = new mongoose.Schema(
       ledgerFinalizedAt: { type: Date, default: null },
       settlementVersion: { type: Number, default: 1 },
       razorpaySettlementPaymentId: { type: String, default: null }
+    },
+    // Rider cancellation before start OTP while driver is en-route to pickup.
+    beforeStartCancelSettlement: {
+      travelledDistanceKm: { type: Number, default: null },
+      perKmRateUsed: { type: Number, default: null },
+      travelledAmount: { type: Number, default: null },
+      fixedPenaltyAmount: { type: Number, default: 20 },
+      totalCharge: { type: Number, default: null },
+      walletDebited: { type: Number, default: 0 },
+      outstandingDue: { type: Number, default: 0 },
+      driverCoordsAtCancel: {
+        type: [Number],
+        default: null
+      },
+      riderPaymentStatus: {
+        type: String,
+        enum: ['pending', 'partially_paid', 'none_due'],
+        default: null
+      },
+      settlementVersion: { type: Number, default: 1 },
+      computedAt: { type: Date, default: null },
+      computedByFlow: { type: String, default: null },
+      idempotencyToken: { type: String, default: null }
     }
   },
   {

@@ -28,6 +28,15 @@ const {
   shouldBlockCancelWithinDropRadius
 } = require('./cancellationPolicy')
 
+const BEFORE_START_FIXED_PENALTY_RUPEES = 20
+const IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM = 1
+const ENABLE_BEFORE_START_PARTIAL_CHARGE =
+  String(process.env.FEATURE_BEFORE_START_PARTIAL_CHARGE || 'true').toLowerCase() !==
+  'false'
+const ENABLE_IN_PROGRESS_THRESHOLD_CANCEL =
+  String(process.env.FEATURE_IN_PROGRESS_THRESHOLD_CANCEL || 'true').toLowerCase() !==
+  'false'
+
 // Initialize Razorpay instance
 // Live keys (default fallback)
 const razorpayInstance = new razorpay({
@@ -1485,7 +1494,7 @@ const startRide = async rideId => {
   }
 }
 
-const completeRide = async (rideId, fare) => {
+const completeRide = async (rideId, fare, options = {}) => {
   try {
     // Log fare information
     logger.info(
@@ -1561,18 +1570,24 @@ const completeRide = async (rideId, fare) => {
         currentRide.estimatedDistanceInKm || currentRide.distanceInKm || measuredDistanceInKm
     })
 
-    try {
-      const recalculated = await recalculateRideFare(rideId)
-      recalculatedFare = recalculated.finalFare
-      fareBreakdown = recalculated
+    if (options?.forceFareMode === 'full_fare_to_destination') {
       logger.info(
-        `[Fare Recalculation] Fare recalculated - rideId: ${rideId}, oldFare: ₹${oldFare}, newFare: ₹${recalculatedFare}`
+        `[Fare Recalculation] forceFareMode=full_fare_to_destination for rideId ${rideId}; skipping recalculation`
       )
-    } catch (recalcError) {
-      logger.warn(
-        `[Fare Recalculation] Failed to recalculate fare for rideId ${rideId}, using provided fare: ${recalcError.message}`
-      )
-      // Use provided fare if recalculation fails
+    } else {
+      try {
+        const recalculated = await recalculateRideFare(rideId)
+        recalculatedFare = recalculated.finalFare
+        fareBreakdown = recalculated
+        logger.info(
+          `[Fare Recalculation] Fare recalculated - rideId: ${rideId}, oldFare: ₹${oldFare}, newFare: ₹${recalculatedFare}`
+        )
+      } catch (recalcError) {
+        logger.warn(
+          `[Fare Recalculation] Failed to recalculate fare for rideId ${rideId}, using provided fare: ${recalcError.message}`
+        )
+        // Use provided fare if recalculation fails
+      }
     }
 
     if (
@@ -2157,6 +2172,159 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
 }
 
 // --- Driver in-progress cancellation settlement ---------------------------------
+function resolveRideCurrentCoordinates (ride) {
+  if (ride?.driver?.location?.coordinates?.length >= 2) {
+    return ride.driver.location.coordinates
+  }
+  if (Array.isArray(ride?.routePoints) && ride.routePoints.length > 0) {
+    const last = ride.routePoints[ride.routePoints.length - 1]
+    if (last?.coordinates?.length >= 2) {
+      return last.coordinates
+    }
+  }
+  return null
+}
+
+async function getPerKmRateFromSettings () {
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  const perKmRate = Number(settings?.pricingConfigurations?.perKmRate)
+  if (!Number.isFinite(perKmRate) || perKmRate < 0) {
+    throw new Error('Invalid perKmRate in admin settings')
+  }
+  return perKmRate
+}
+
+async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
+  const perKmRate = await getPerKmRateFromSettings()
+  const pickupCoords = originalRide?.pickupLocation?.coordinates
+  const currentCoords = resolveRideCurrentCoordinates(originalRide)
+
+  let travelledDistanceKm = 0
+  if (
+    Array.isArray(pickupCoords) &&
+    pickupCoords.length >= 2 &&
+    Array.isArray(currentCoords) &&
+    currentCoords.length >= 2
+  ) {
+    travelledDistanceKm = calculateHaversineDistance(
+      pickupCoords[1],
+      pickupCoords[0],
+      currentCoords[1],
+      currentCoords[0]
+    )
+  }
+
+  const travelledAmount = roundMoney(travelledDistanceKm * perKmRate)
+  const fixedPenaltyAmount = roundMoney(BEFORE_START_FIXED_PENALTY_RUPEES)
+  const totalCharge = roundMoney(travelledAmount + fixedPenaltyAmount)
+
+  return {
+    travelledDistanceKm: roundMoney(travelledDistanceKm),
+    perKmRateUsed: perKmRate,
+    travelledAmount,
+    fixedPenaltyAmount,
+    totalCharge,
+    walletDebited: 0,
+    outstandingDue: totalCharge,
+    driverCoordsAtCancel: currentCoords,
+    riderPaymentStatus: totalCharge > 0 ? 'pending' : 'none_due',
+    settlementVersion: 1,
+    computedAt: new Date(),
+    computedByFlow: 'rider_cancel_before_start_otp',
+    idempotencyToken: `before-start-${originalRide._id}`
+  }
+}
+
+async function applyWalletAndOutstandingForBeforeStartCancel (rideId, riderId, settlement) {
+  const due = Number(settlement?.totalCharge || 0)
+  if (due <= 0) {
+    return {
+      walletDebited: 0,
+      outstandingDue: 0,
+      riderPaymentStatus: 'none_due'
+    }
+  }
+
+  const user = await User.findById(riderId)
+  if (!user) {
+    throw new Error('User not found')
+  }
+
+  const balanceBefore = Number(user.walletBalance || 0)
+  const walletDebit = roundMoney(Math.min(balanceBefore, due))
+  const outstandingDue = roundMoney(Math.max(0, due - walletDebit))
+
+  if (walletDebit > 0) {
+    const existingTxn = await WalletTransaction.findOne({
+      relatedRide: rideId,
+      transactionType: 'CANCELLATION_FEE',
+      status: 'COMPLETED',
+      'metadata.beforeStartOtpRiderCancel': true
+    })
+
+    if (!existingTxn) {
+      const balanceAfter = roundMoney(balanceBefore - walletDebit)
+      user.walletBalance = balanceAfter
+      await user.save()
+      await WalletTransaction.create({
+        user: riderId,
+        transactionType: 'CANCELLATION_FEE',
+        amount: walletDebit,
+        balanceBefore,
+        balanceAfter,
+        relatedRide: rideId,
+        paymentMethod: 'WALLET',
+        status: 'COMPLETED',
+        description: `Before-start cancellation charge ₹${walletDebit}`,
+        metadata: {
+          beforeStartOtpRiderCancel: true,
+          totalCharge: due
+        }
+      })
+    }
+  }
+
+  return {
+    walletDebited: walletDebit,
+    outstandingDue,
+    riderPaymentStatus:
+      outstandingDue > 0
+        ? walletDebit > 0
+          ? 'partially_paid'
+          : 'pending'
+        : 'none_due'
+  }
+}
+
+async function creditDriverForBeforeStartCancel (ride, settlement) {
+  const driverAmount = roundMoney(Number(settlement?.travelledAmount || 0))
+  if (driverAmount <= 0) return
+
+  const driverId = ride.driver?._id || ride.driver
+  const riderId = ride.rider?._id || ride.rider
+  if (!driverId || !riderId) return
+
+  const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
+  await AdminEarnings.findOneAndUpdate(
+    { rideId: ride._id },
+    {
+      rideId: ride._id,
+      driverId,
+      riderId,
+      grossFare: driverAmount,
+      platformFee: 0,
+      driverEarning: driverAmount,
+      rideDate: new Date(),
+      vehicleSnapshot,
+      paymentStatus: 'completed',
+      settlementType: 'rider_cancel_before_start_otp',
+      vendorFineCredit: 0,
+      riderPenaltyAmount: roundMoney(Number(settlement?.fixedPenaltyAmount || 0))
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  )
+}
 
 /**
  * Rides where driver cancelled in_progress and rider still owes additionalDue (ledger not finalized).
@@ -2709,6 +2877,9 @@ const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
     return { allowed: false, code: 'RIDE_NOT_FOUND', message: 'Ride not found' }
   }
   if (ride.status !== 'in_progress') return { allowed: true }
+  if (!ENABLE_IN_PROGRESS_THRESHOLD_CANCEL) {
+    return { allowed: true }
+  }
 
   const dropoffCoords = ride.dropoffLocation?.coordinates
   if (!dropoffCoords || dropoffCoords.length < 2) return { allowed: true }
@@ -2727,18 +2898,36 @@ const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
   const distanceKm = calculateHaversineDistance(curLat, curLng, dropLat, dropLng)
   const distanceMeters = Math.round(distanceKm * 1000)
 
-  if (shouldBlockCancelWithinDropRadius(distanceMeters)) {
-    return {
-      allowed: false,
-      code: 'CANCEL_BLOCKED_NEAR_DROPOFF',
-      message: `${actor === 'driver' ? 'Driver' : 'Rider'} cannot cancel within ${CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS}m of drop. Please use End Ride.`,
-      meta: {
-        distanceToDropMeters: distanceMeters,
-        blockedRadiusMeters: CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS
+  const distanceKm = distanceMeters / 1000
+  if (distanceKm > IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM) {
+    if (actor === 'driver') {
+      return {
+        allowed: true,
+        settlementMode: 'driver_cancel_in_progress_partial',
+        meta: { distanceToDropMeters: distanceMeters }
       }
     }
+    return {
+      allowed: false,
+      code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS_GT_1KM',
+      message: 'Rider cannot cancel while trip is in progress and destination is more than 1 km away.',
+      meta: { distanceToDropMeters: distanceMeters }
+    }
   }
-  return { allowed: true }
+
+  if (actor === 'driver') {
+    return {
+      allowed: true,
+      settlementMode: 'driver_cancel_in_progress_full_fare',
+      meta: { distanceToDropMeters: distanceMeters }
+    }
+  }
+  return {
+    allowed: false,
+    code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS_LT_1KM',
+    message: 'Rider cannot cancel near destination while trip is in progress.',
+    meta: { distanceToDropMeters: distanceMeters }
+  }
 }
 
 const cancelRide = async (
@@ -2769,6 +2958,7 @@ const cancelRide = async (
 
     let skipStandardRefunds = false
     let driverInProgressSettlementSnapshot = null
+    let beforeStartSettlementSnapshot = null
 
     if (normalizedCancelledBy === 'driver' && originalStatus === 'in_progress') {
       if (
@@ -2779,6 +2969,32 @@ const cancelRide = async (
       }
       driverInProgressSettlementSnapshot = await computeDriverInProgressCancelSettlement(
         originalRide
+      )
+      skipStandardRefunds = true
+    }
+
+    const isBeforeStartOtpWindow = ['accepted', 'arrived', 'upcoming'].includes(
+      originalStatus
+    )
+    if (
+      ENABLE_BEFORE_START_PARTIAL_CHARGE &&
+      normalizedCancelledBy === 'rider' &&
+      isBeforeStartOtpWindow
+    ) {
+      beforeStartSettlementSnapshot =
+        await buildBeforeStartOtpRiderCancelSettlement(originalRide)
+      const riderId = originalRide.rider?._id || originalRide.rider
+      const walletResult = await applyWalletAndOutstandingForBeforeStartCancel(
+        originalRide._id,
+        riderId,
+        beforeStartSettlementSnapshot
+      )
+      beforeStartSettlementSnapshot = {
+        ...beforeStartSettlementSnapshot,
+        ...walletResult
+      }
+      logger.info(
+        `metric.ride.before_start_cancel_settlement rideId=${rideId} total=${beforeStartSettlementSnapshot.totalCharge} walletDebited=${beforeStartSettlementSnapshot.walletDebited} outstanding=${beforeStartSettlementSnapshot.outstandingDue}`
       )
       skipStandardRefunds = true
     }
@@ -2812,6 +3028,10 @@ const cancelRide = async (
     if (driverInProgressSettlementSnapshot) {
       updateData.driverInProgressCancelSettlement = driverInProgressSettlementSnapshot
       updateData.cancellationFee = driverInProgressSettlementSnapshot.riderPenaltyAmount
+    }
+    if (beforeStartSettlementSnapshot) {
+      updateData.beforeStartCancelSettlement = beforeStartSettlementSnapshot
+      updateData.cancellationFee = beforeStartSettlementSnapshot.fixedPenaltyAmount
     }
 
     const ride = await Ride.findByIdAndUpdate(rideId, updateData, {
@@ -2907,6 +3127,8 @@ const cancelRide = async (
           if (driverInProgressSettlementSnapshot.additionalDue <= 0) {
             await finalizeDriverInProgressCancelLedger(rideId)
           }
+        } else if (skipStandardRefunds && beforeStartSettlementSnapshot) {
+          await creditDriverForBeforeStartCancel(ride, beforeStartSettlementSnapshot)
         } else if (!skipStandardRefunds) {
 
         // Check for Razorpay payment (either pure RAZORPAY or hybrid with Razorpay portion)
@@ -3020,10 +3242,10 @@ const verifyStartOtp = async (rideId, providedOtp) => {
     const ride = await Ride.findById(rideId)
     if (!ride) throw new Error('Ride not found')
 
-    // Allow OTP verification when ride is in 'accepted' or 'arrived' status
+    // Allow OTP verification when ride is in accepted lifecycle states before trip start.
     // Driver can verify OTP after marking as arrived
-    if (ride.status !== 'accepted' && ride.status !== 'arrived') {
-      throw new Error('Ride is not in accepted or arrived state')
+    if (ride.status !== 'accepted' && ride.status !== 'arrived' && ride.status !== 'upcoming') {
+      throw new Error('Ride is not in accepted, arrived, or upcoming state')
     }
 
     if (ride.startOtp !== providedOtp) {
@@ -4308,5 +4530,7 @@ module.exports = {
   normalizeCancellationReasonCode,
   shouldBlockCancelWithinDropRadius,
   CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
-  PICKUP_SHIFT_REASON_THRESHOLD_METERS
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  BEFORE_START_FIXED_PENALTY_RUPEES,
+  IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM
 }
