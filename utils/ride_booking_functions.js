@@ -2898,7 +2898,6 @@ const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
   const distanceKm = calculateHaversineDistance(curLat, curLng, dropLat, dropLng)
   const distanceMeters = Math.round(distanceKm * 1000)
 
-  const distanceKm = distanceMeters / 1000
   if (distanceKm > IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM) {
     if (actor === 'driver') {
       return {
