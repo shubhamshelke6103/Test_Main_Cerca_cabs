@@ -363,6 +363,17 @@ const rideSchema = new mongoose.Schema(
       }
     ],
 
+    // Subset of notifiedDrivers who received this offer with offerContext
+    // 'destination_reach' (i.e. were near their own active-trip drop-off when
+    // the offer was dispatched). The accept handler validates against this
+    // list before allowing a stacked accept (driver.queuedRideId path).
+    destinationReachDrivers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Driver'
+      }
+    ],
+
     // Priority driver discovery phase: 'priority' | 'normal' | null
     discoveryPhase: {
       type: String,

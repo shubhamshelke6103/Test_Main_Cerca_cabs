@@ -281,6 +281,14 @@ const driverSchema = new mongoose.Schema({
     ref: 'Ride',
     default: null
   },
+  // Destination-reach stacked offer: a driver near their active drop-off may
+  // accept ONE additional ride that becomes their next trip after the current
+  // one completes. Cleared on completeRide promotion or queued-ride cancel.
+  queuedRideId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ride',
+    default: null
+  },
   intercityRideCount: {
     type: Number,
     default: 0

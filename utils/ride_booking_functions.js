@@ -1485,6 +1485,132 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
   }
 }
 
+/**
+ * Stacked / destination-reach driver assignment.
+ *
+ * The driver is currently busy on a normal INSTANT ride and is near the
+ * active drop-off. We assign them this ride as their NEXT trip without
+ * disturbing their current trip's busy state. The ride moves to status
+ * 'accepted' (so other drivers stop seeing it), and the driver record gets
+ * `queuedRideId` populated. On `completeRide` of the active trip the
+ * promotion logic flips this queued ride into the new active ride.
+ *
+ * Errors thrown here are mapped to socket `rideError` codes by the caller:
+ *   - 'queued ride'  → ALREADY_HAS_QUEUED_RIDE
+ *   - 'not eligible' → NOT_ELIGIBLE_STACKED
+ */
+const assignStackedDriverToRide = async (rideId, driverId, driverSocketId) => {
+  try {
+    if (!rideId || !driverId) {
+      throw new Error('Ride ID and Driver ID are required (stacked accept)')
+    }
+
+    const driverDoc = await Driver.findById(driverId)
+      .select('isBusy currentRideId currentRideType queuedRideId')
+      .lean()
+
+    if (!driverDoc) {
+      throw new Error('Driver not found')
+    }
+
+    if (driverDoc.queuedRideId) {
+      const err = new Error('Driver already has a queued ride')
+      err.code = 'ALREADY_HAS_QUEUED_RIDE'
+      throw err
+    }
+
+    if (
+      !driverDoc.isBusy ||
+      !driverDoc.currentRideId ||
+      driverDoc.currentRideType !== 'normal'
+    ) {
+      const err = new Error('Driver is not eligible for stacked acceptance')
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    const targetRide = await Ride.findById(rideId)
+      .select('status driver destinationReachDrivers bookingType')
+      .lean()
+
+    if (!targetRide) {
+      throw new Error('Ride not found')
+    }
+    if (targetRide.bookingType && targetRide.bookingType !== 'INSTANT') {
+      const err = new Error(
+        'Stacked accept is only supported for INSTANT rides'
+      )
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    const isAuthorizedForStacked = (targetRide.destinationReachDrivers || [])
+      .map(id => String(id))
+      .includes(String(driverId))
+
+    if (!isAuthorizedForStacked) {
+      const err = new Error(
+        'Driver was not offered this ride as a destination-reach candidate'
+      )
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    // Atomic ride assignment: only succeed if still requested and unassigned.
+    const ride = await Ride.findOneAndUpdate(
+      { _id: rideId, status: 'requested', driver: { $exists: false } },
+      {
+        $set: {
+          driver: driverId,
+          driverSocketId,
+          status: 'accepted',
+          acceptedAt: new Date()
+        }
+      },
+      { new: true, runValidators: true }
+    ).populate('driver rider')
+
+    if (!ride) {
+      const currentRide = await Ride.findById(rideId)
+        .select('status driver')
+        .lean()
+      if (currentRide?.status !== 'requested' || currentRide?.driver) {
+        throw new Error('Ride already accepted by another driver')
+      }
+      throw new Error('Ride no longer available')
+    }
+
+    // Atomic driver update: only succeed if queuedRideId is still null. This
+    // is a second guard against a race between two stacked accepts.
+    const driverUpdate = await Driver.findOneAndUpdate(
+      { _id: driverId, queuedRideId: null },
+      { $set: { queuedRideId: ride._id } },
+      { new: true }
+    )
+
+    if (!driverUpdate) {
+      // Another stacked accept won the race; roll back the ride assignment so
+      // the offer can re-circulate.
+      await Ride.findByIdAndUpdate(ride._id, {
+        $unset: { driver: '', driverSocketId: '' },
+        $set: { status: 'requested' }
+      })
+      const err = new Error('Driver already has a queued ride')
+      err.code = 'ALREADY_HAS_QUEUED_RIDE'
+      throw err
+    }
+
+    logger.info(
+      `✅ Stacked assignment - rideId: ${rideId} queued for driver ${driverId} (currentRideId=${driverDoc.currentRideId})`
+    )
+
+    return ride
+  } catch (error) {
+    if (error.code) throw error
+    throw new Error(`Error assigning stacked driver: ${error.message}`)
+  }
+}
+
 
 const startRide = async rideId => {
   try {
@@ -1681,8 +1807,55 @@ const completeRide = async (rideId, fare, options = {}) => {
       
       // Ensure driver exists before updating
       const driverExists = await Driver.findById(driverId)
+        .select('queuedRideId')
+        .lean()
       if (!driverExists) {
         logger.warn(`completeRide: Driver ${driverId} not found, skipping isBusy reset`)
+      } else if (driverExists.queuedRideId) {
+        // ============================
+        // PROMOTE QUEUED RIDE
+        // ============================
+        // Driver finished an active ride and has a destination-reach queued
+        // ride waiting. Atomically promote it to the active slot and emit
+        // `rideAssigned` so the driver app navigates to the new ActiveRideScreen.
+        const queuedId = driverExists.queuedRideId
+        await Driver.findByIdAndUpdate(driverId, {
+          isBusy: true,
+          busyUntil: null,
+          currentRideType: 'normal',
+          currentRideId: queuedId,
+          queuedRideId: null
+        })
+        logger.info(
+          `✅ completeRide: Driver ${driverId} promoted queued ride ${queuedId} to active`
+        )
+
+        try {
+          const promoted = await Ride.findById(queuedId).populate(
+            'driver rider'
+          )
+          if (promoted) {
+            const { getSocketIO } = require('./socket.js')
+            const io = getSocketIO()
+            const promotedSocketId =
+              promoted.driverSocketId || ride.driver?.socketId
+            const payload = promoted.toObject
+              ? promoted.toObject()
+              : promoted
+            if (promotedSocketId) {
+              io.to(promotedSocketId).emit('rideAssigned', payload)
+              logger.info(
+                `📤 Emitted rideAssigned for promoted queued ride ${queuedId} to driver socket ${promotedSocketId}`
+              )
+            } else {
+              io.to(`driver_${driverId}`).emit('rideAssigned', payload)
+            }
+          }
+        } catch (promoteErr) {
+          logger.warn(
+            `⚠️ Failed to emit rideAssigned for promoted queued ride: ${promoteErr.message}`
+          )
+        }
       } else {
         // Reset isBusy for this completed ride
         await Driver.findByIdAndUpdate(driverId, {
@@ -3157,26 +3330,80 @@ const cancelRide = async (
           
           // Ensure driver exists before updating
           const driverExists = await Driver.findById(driverId)
+            .select('isBusy currentRideId queuedRideId')
+            .lean()
           if (!driverExists) {
             logger.warn(`cancelRide: Driver ${driverId} not found, skipping isBusy reset`)
           } else {
-            // Reset isBusy for this cancelled ride
-            await Driver.findByIdAndUpdate(driverId, {
-              isBusy: false,
-              busyUntil: null
-            })
-            
-            logger.info(
-              `✅ cancelRide: Driver ${driverId} isBusy reset to false after ride ${rideId} cancellation`
-            )
+            const cancelledRideIdStr = String(ride._id)
+            const isCancellingActive =
+              String(driverExists.currentRideId || '') === cancelledRideIdStr
+            const isCancellingQueued =
+              String(driverExists.queuedRideId || '') === cancelledRideIdStr
 
-            // Validate driver status to check for OTHER active rides
-            // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
-            const validationResult = await validateAndFixDriverStatus(driverId)
-            if (validationResult.corrected) {
+            if (isCancellingQueued) {
+              // The cancelled ride was the driver's queued (next) ride. Just
+              // clear queuedRideId; the active ride is unaffected.
+              await Driver.findByIdAndUpdate(driverId, { queuedRideId: null })
               logger.info(
-                `✅ cancelRide: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+                `✅ cancelRide: cleared queuedRideId for driver ${driverId} (queued ride ${rideId} cancelled)`
               )
+            } else if (isCancellingActive && driverExists.queuedRideId) {
+              // The active ride was cancelled while a queued ride exists.
+              // Promote the queued ride into the active slot so the driver
+              // continues with their next pickup.
+              const queuedId = driverExists.queuedRideId
+              await Driver.findByIdAndUpdate(driverId, {
+                isBusy: true,
+                busyUntil: null,
+                currentRideType: 'normal',
+                currentRideId: queuedId,
+                queuedRideId: null
+              })
+              logger.info(
+                `✅ cancelRide: Driver ${driverId} promoted queued ride ${queuedId} after active cancel`
+              )
+              try {
+                const promoted = await Ride.findById(queuedId).populate(
+                  'driver rider'
+                )
+                if (promoted) {
+                  const { getSocketIO } = require('./socket.js')
+                  const io = getSocketIO()
+                  const promotedSocketId = promoted.driverSocketId
+                  const payload = promoted.toObject
+                    ? promoted.toObject()
+                    : promoted
+                  if (promotedSocketId) {
+                    io.to(promotedSocketId).emit('rideAssigned', payload)
+                  } else {
+                    io.to(`driver_${driverId}`).emit('rideAssigned', payload)
+                  }
+                }
+              } catch (promoteErr) {
+                logger.warn(
+                  `⚠️ Failed to emit rideAssigned for promoted queued ride after active cancel: ${promoteErr.message}`
+                )
+              }
+            } else {
+              // Reset isBusy for this cancelled ride (standard path)
+              await Driver.findByIdAndUpdate(driverId, {
+                isBusy: false,
+                busyUntil: null
+              })
+              
+              logger.info(
+                `✅ cancelRide: Driver ${driverId} isBusy reset to false after ride ${rideId} cancellation`
+              )
+
+              // Validate driver status to check for OTHER active rides
+              // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
+              const validationResult = await validateAndFixDriverStatus(driverId)
+              if (validationResult.corrected) {
+                logger.info(
+                  `✅ cancelRide: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+                )
+              }
             }
           }
 
@@ -3773,10 +4000,19 @@ const validateAndFixDriverStatus = async driverId => {
     }
 
     // Query for active rides assigned to this driver
-    const activeRides = await Ride.find({
+    // EXCLUDE the destination-reach queued ride: it is 'accepted' but the
+    // driver is still busy on a different currentRideId, so it must not be
+    // treated as an additional active ride for isBusy purposes.
+    const activeRideQuery = {
       driver: driverId,
       status: { $in: ['requested', 'accepted', 'arrived', 'in_progress'] }
-    }).select('_id status bookingType').lean()
+    }
+    if (driver.queuedRideId) {
+      activeRideQuery._id = { $ne: driver.queuedRideId }
+    }
+    const activeRides = await Ride.find(activeRideQuery)
+      .select('_id status bookingType')
+      .lean()
 
     const hasActiveRides = activeRides.length > 0
     const currentIsBusy = driver.isBusy || false
@@ -4326,6 +4562,11 @@ const searchDriversWithProgressiveRadius = async (
         .select('socketId goTo location vehicleInfo assignedFleetVehicleId rideAccess') // Select ride-access and vehicle state for eligibility filtering
         .limit(50) // Pull a wider pool, then filter down by ride access
 
+      // Mark Pool A candidates as standard offers (non-stacked).
+      drivers.forEach(d => {
+        d._isDestinationReach = false
+      })
+
       const filterDescription = (() => {
         let desc = 'isActive: true, isOnline: true, socketId exists'
         if (bookingType === 'FULL_DAY' || bookingType === 'RENTAL') {
@@ -4356,6 +4597,120 @@ const searchDriversWithProgressiveRadius = async (
       logger.info(
         `   ✅ Found ${drivers.length} drivers after applying filters (${filterDescription})`
       )
+
+      // ============================
+      // POOL B — destination-reach stacked candidates (INSTANT only)
+      // ============================
+      // Drivers who are currently busy on a normal INSTANT ride, do not yet
+      // have a queued ride, and whose live location is within the admin
+      // configured radius of THEIR active drop-off. These are eligible to
+      // receive the new offer with offerContext='destination_reach' so it can
+      // be queued as their next trip.
+      if (bookingType === 'INSTANT') {
+        try {
+          const SettingsForStacked = require('../Models/Admin/settings.modal.js')
+          const stackedSettings = await SettingsForStacked.findOne().lean()
+          const stackedEnabled =
+            stackedSettings?.rideMatching?.stackedAccept?.enabled !== false
+          const destinationReachRadiusM = Number(
+            stackedSettings?.rideMatching?.destinationReachRadiusMeters
+          )
+
+          if (
+            stackedEnabled &&
+            Number.isFinite(destinationReachRadiusM) &&
+            destinationReachRadiusM > 0
+          ) {
+            const poolBQuery = {
+              ...driverQuery,
+              isBusy: true,
+              currentRideType: 'normal',
+              currentRideId: { $ne: null },
+              queuedRideId: null
+            }
+            // Reset the isBusy: false from the INSTANT branch above (and any
+            // FULL_DAY/RENTAL $or that overrides isBusy).
+            delete poolBQuery.$or
+
+            let busyCandidates = await Driver.find(poolBQuery)
+              .select(
+                'socketId goTo location vehicleInfo assignedFleetVehicleId rideAccess currentRideId'
+              )
+              .limit(50)
+
+            if (vehicleType && busyCandidates.length) {
+              const filteredByVehicle = []
+              for (const d of busyCandidates) {
+                if (await driverCanAcceptRideType(d, vehicleType)) {
+                  filteredByVehicle.push(d)
+                }
+              }
+              busyCandidates = filteredByVehicle
+            }
+
+            if (busyCandidates.length) {
+              const activeRideIds = busyCandidates
+                .map(d => d.currentRideId)
+                .filter(Boolean)
+              const activeRides = await Ride.find({
+                _id: { $in: activeRideIds }
+              })
+                .select('_id status dropoffLocation')
+                .lean()
+              const activeRideById = new Map(
+                activeRides.map(r => [String(r._id), r])
+              )
+
+              const poolBDrivers = []
+              const existingIds = new Set(drivers.map(d => String(d._id)))
+              for (const d of busyCandidates) {
+                if (existingIds.has(String(d._id))) continue
+                const activeRide = activeRideById.get(String(d.currentRideId))
+                if (!activeRide?.dropoffLocation?.coordinates) continue
+                if (
+                  !['accepted', 'arrived', 'in_progress'].includes(
+                    activeRide.status
+                  )
+                ) {
+                  continue
+                }
+                const driverCoords = d.location?.coordinates
+                if (!Array.isArray(driverCoords) || driverCoords.length !== 2) {
+                  continue
+                }
+                const [dLng, dLat] = driverCoords
+                const [adLng, adLat] = activeRide.dropoffLocation.coordinates
+                const distKm = calculateHaversineDistance(
+                  dLat,
+                  dLng,
+                  adLat,
+                  adLng
+                )
+                const distM = distKm * 1000
+                if (distM <= destinationReachRadiusM) {
+                  d._isDestinationReach = true
+                  poolBDrivers.push(d)
+                }
+              }
+
+              if (poolBDrivers.length) {
+                logger.info(
+                  `   🎯 Pool B: ${poolBDrivers.length} destination-reach stacked candidate(s) within ${destinationReachRadiusM}m of their active drop-off`
+                )
+                drivers = drivers.concat(poolBDrivers)
+              }
+            }
+          } else {
+            logger.info(
+              `   ℹ️ Stacked accept disabled (enabled=${stackedEnabled}, radius=${destinationReachRadiusM})`
+            )
+          }
+        } catch (e) {
+          logger.warn(
+            `   ⚠️ Pool B (destination-reach) search failed: ${e.message}`
+          )
+        }
+      }
 
       if (options?.dropoffLocation && drivers.length > 0) {
         const routeFilteredDrivers = []
@@ -4590,6 +4945,7 @@ module.exports = {
   calculateHaversineDistance,
   createRide,
   assignDriverToRide,
+  assignStackedDriverToRide,
   startRide,
   completeRide,
   cancelRide,

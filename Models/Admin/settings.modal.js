@@ -81,6 +81,20 @@ const SettingsSchema = new mongoose.Schema({
         },
         processingDays: { type: Number, default: 3 }, // Business days
     },
+    /**
+     * Ride matching configuration. Currently controls the destination-reach
+     * stacked-offer feature: while a driver is on an active INSTANT trip, they
+     * can receive ONE additional offer if their live location is within
+     * `destinationReachRadiusMeters` of the active drop-off and they don't
+     * already have a queued ride. Setting `stackedAccept.enabled` to false
+     * (or `destinationReachRadiusMeters` to 0) disables the feature globally.
+     */
+    rideMatching: {
+        destinationReachRadiusMeters: { type: Number, default: 1500 },
+        stackedAccept: {
+            enabled: { type: Boolean, default: true },
+        },
+    },
     vehicleServices: {
         cercaZip: {
             name: { type: String, default: 'Cerca Zip' },
