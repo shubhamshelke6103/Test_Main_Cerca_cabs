@@ -78,7 +78,6 @@ const userSchema = new Schema(
     walletBalance: {
       type: Number,
       default: 0,
-      min: 0,
     },
     preferredPaymentMethod: {
       type: String,

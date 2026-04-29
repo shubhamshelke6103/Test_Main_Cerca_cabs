@@ -27,6 +27,21 @@ const {
   normalizeCancellationReasonCode,
   shouldBlockCancelWithinDropRadius
 } = require('./cancellationPolicy')
+const {
+  resolveTravelledDistanceKmBeforeStart,
+  splitBeforeStartCancelPrepaid,
+  walletBalanceAfterBeforeStartCancel,
+  computePlatformSplitFromGrossFare
+} = require('./beforeStartCancelSettlement')
+
+const BEFORE_START_ROUTE_POINTS_MAX = Number(
+  process.env.BEFORE_START_ROUTE_POINTS_MAX || 4000
+)
+const BEFORE_START_DISTANCE_POLICY =
+  String(process.env.BEFORE_START_DISTANCE_POLICY || 'max').toLowerCase() ===
+  'polyline_first'
+    ? 'polyline_first'
+    : 'max'
 
 const BEFORE_START_FIXED_PENALTY_RUPEES = 20
 const IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM = 1
@@ -1334,9 +1349,14 @@ const appendRideRoutePoint = async (rideId, location) => {
       {
         $push: {
           routePoints: {
-            type: 'Point',
-            coordinates: [lng, lat],
-            recordedAt: new Date()
+            $each: [
+              {
+                type: 'Point',
+                coordinates: [lng, lat],
+                recordedAt: new Date()
+              }
+            ],
+            $slice: -BEFORE_START_ROUTE_POINTS_MAX
           }
         }
       },
@@ -1482,6 +1502,132 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
     return ride
   } catch (error) {
     throw new Error(`Error assigning driver: ${error.message}`)
+  }
+}
+
+/**
+ * Stacked / destination-reach driver assignment.
+ *
+ * The driver is currently busy on a normal INSTANT ride and is near the
+ * active drop-off. We assign them this ride as their NEXT trip without
+ * disturbing their current trip's busy state. The ride moves to status
+ * 'accepted' (so other drivers stop seeing it), and the driver record gets
+ * `queuedRideId` populated. On `completeRide` of the active trip the
+ * promotion logic flips this queued ride into the new active ride.
+ *
+ * Errors thrown here are mapped to socket `rideError` codes by the caller:
+ *   - 'queued ride'  → ALREADY_HAS_QUEUED_RIDE
+ *   - 'not eligible' → NOT_ELIGIBLE_STACKED
+ */
+const assignStackedDriverToRide = async (rideId, driverId, driverSocketId) => {
+  try {
+    if (!rideId || !driverId) {
+      throw new Error('Ride ID and Driver ID are required (stacked accept)')
+    }
+
+    const driverDoc = await Driver.findById(driverId)
+      .select('isBusy currentRideId currentRideType queuedRideId')
+      .lean()
+
+    if (!driverDoc) {
+      throw new Error('Driver not found')
+    }
+
+    if (driverDoc.queuedRideId) {
+      const err = new Error('Driver already has a queued ride')
+      err.code = 'ALREADY_HAS_QUEUED_RIDE'
+      throw err
+    }
+
+    if (
+      !driverDoc.isBusy ||
+      !driverDoc.currentRideId ||
+      driverDoc.currentRideType !== 'normal'
+    ) {
+      const err = new Error('Driver is not eligible for stacked acceptance')
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    const targetRide = await Ride.findById(rideId)
+      .select('status driver destinationReachDrivers bookingType')
+      .lean()
+
+    if (!targetRide) {
+      throw new Error('Ride not found')
+    }
+    if (targetRide.bookingType && targetRide.bookingType !== 'INSTANT') {
+      const err = new Error(
+        'Stacked accept is only supported for INSTANT rides'
+      )
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    const isAuthorizedForStacked = (targetRide.destinationReachDrivers || [])
+      .map(id => String(id))
+      .includes(String(driverId))
+
+    if (!isAuthorizedForStacked) {
+      const err = new Error(
+        'Driver was not offered this ride as a destination-reach candidate'
+      )
+      err.code = 'NOT_ELIGIBLE_STACKED'
+      throw err
+    }
+
+    // Atomic ride assignment: only succeed if still requested and unassigned.
+    const ride = await Ride.findOneAndUpdate(
+      { _id: rideId, status: 'requested', driver: { $exists: false } },
+      {
+        $set: {
+          driver: driverId,
+          driverSocketId,
+          status: 'accepted',
+          acceptedAt: new Date()
+        }
+      },
+      { new: true, runValidators: true }
+    ).populate('driver rider')
+
+    if (!ride) {
+      const currentRide = await Ride.findById(rideId)
+        .select('status driver')
+        .lean()
+      if (currentRide?.status !== 'requested' || currentRide?.driver) {
+        throw new Error('Ride already accepted by another driver')
+      }
+      throw new Error('Ride no longer available')
+    }
+
+    // Atomic driver update: only succeed if queuedRideId is still null. This
+    // is a second guard against a race between two stacked accepts.
+    const driverUpdate = await Driver.findOneAndUpdate(
+      { _id: driverId, queuedRideId: null },
+      { $set: { queuedRideId: ride._id } },
+      { new: true }
+    )
+
+    if (!driverUpdate) {
+      // Another stacked accept won the race; roll back the ride assignment so
+      // the offer can re-circulate.
+      await Ride.findByIdAndUpdate(ride._id, {
+        $unset: { driver: '', driverSocketId: '' },
+        $set: { status: 'requested' }
+      })
+      const err = new Error('Driver already has a queued ride')
+      err.code = 'ALREADY_HAS_QUEUED_RIDE'
+      throw err
+    }
+
+    logger.info(
+      `✅ Stacked assignment - rideId: ${rideId} queued for driver ${driverId} (currentRideId=${driverDoc.currentRideId})`
+    )
+
+    return ride
+  } catch (error) {
+    if (error.code) throw error
+    throw new Error(`Error assigning stacked driver: ${error.message}`)
   }
 }
 
@@ -1681,8 +1827,55 @@ const completeRide = async (rideId, fare, options = {}) => {
       
       // Ensure driver exists before updating
       const driverExists = await Driver.findById(driverId)
+        .select('queuedRideId')
+        .lean()
       if (!driverExists) {
         logger.warn(`completeRide: Driver ${driverId} not found, skipping isBusy reset`)
+      } else if (driverExists.queuedRideId) {
+        // ============================
+        // PROMOTE QUEUED RIDE
+        // ============================
+        // Driver finished an active ride and has a destination-reach queued
+        // ride waiting. Atomically promote it to the active slot and emit
+        // `rideAssigned` so the driver app navigates to the new ActiveRideScreen.
+        const queuedId = driverExists.queuedRideId
+        await Driver.findByIdAndUpdate(driverId, {
+          isBusy: true,
+          busyUntil: null,
+          currentRideType: 'normal',
+          currentRideId: queuedId,
+          queuedRideId: null
+        })
+        logger.info(
+          `✅ completeRide: Driver ${driverId} promoted queued ride ${queuedId} to active`
+        )
+
+        try {
+          const promoted = await Ride.findById(queuedId).populate(
+            'driver rider'
+          )
+          if (promoted) {
+            const { getSocketIO } = require('./socket.js')
+            const io = getSocketIO()
+            const promotedSocketId =
+              promoted.driverSocketId || ride.driver?.socketId
+            const payload = promoted.toObject
+              ? promoted.toObject()
+              : promoted
+            if (promotedSocketId) {
+              io.to(promotedSocketId).emit('rideAssigned', payload)
+              logger.info(
+                `📤 Emitted rideAssigned for promoted queued ride ${queuedId} to driver socket ${promotedSocketId}`
+              )
+            } else {
+              io.to(`driver_${driverId}`).emit('rideAssigned', payload)
+            }
+          }
+        } catch (promoteErr) {
+          logger.warn(
+            `⚠️ Failed to emit rideAssigned for promoted queued ride: ${promoteErr.message}`
+          )
+        }
       } else {
         // Reset isBusy for this completed ride
         await Driver.findByIdAndUpdate(driverId, {
@@ -2209,14 +2402,16 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
   const pickupCoords = originalRide?.pickupLocation?.coordinates
   const currentCoords = resolveRideCurrentCoordinates(originalRide)
 
-  let travelledDistanceKm = 0
+  const polylineKm = calculateRouteDistanceInKm(originalRide?.routePoints)
+
+  let straightKm = 0
   if (
     Array.isArray(pickupCoords) &&
     pickupCoords.length >= 2 &&
     Array.isArray(currentCoords) &&
     currentCoords.length >= 2
   ) {
-    travelledDistanceKm = calculateHaversineDistance(
+    straightKm = calculateHaversineDistance(
       pickupCoords[1],
       pickupCoords[0],
       currentCoords[1],
@@ -2224,12 +2419,25 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
     )
   }
 
+  const travelledDistanceKm = resolveTravelledDistanceKmBeforeStart({
+    polylineKm,
+    straightKm,
+    policy: BEFORE_START_DISTANCE_POLICY
+  })
+
   const travelledAmount = roundMoney(travelledDistanceKm * perKmRate)
   const fixedPenaltyAmount = roundMoney(BEFORE_START_FIXED_PENALTY_RUPEES)
   const totalCharge = roundMoney(travelledAmount + fixedPenaltyAmount)
 
+  logger.info(
+    `metric.ride.before_start_cancel_distance rideId=${originalRide._id} polylineKm=${polylineKm} straightKm=${straightKm} finalKm=${travelledDistanceKm} policy=${BEFORE_START_DISTANCE_POLICY}`
+  )
+
   return {
     travelledDistanceKm: roundMoney(travelledDistanceKm),
+    travelledDistancePolylineKm: roundMoney(polylineKm),
+    travelledDistanceStraightKm: roundMoney(straightKm),
+    distancePolicy: BEFORE_START_DISTANCE_POLICY,
     perKmRateUsed: perKmRate,
     travelledAmount,
     fixedPenaltyAmount,
@@ -2245,85 +2453,225 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
   }
 }
 
-async function applyWalletAndOutstandingForBeforeStartCancel (rideId, riderId, settlement) {
+async function getWalletRidePaymentSumForRide (rideId) {
+  const txs = await WalletTransaction.find({
+    relatedRide: rideId,
+    transactionType: 'RIDE_PAYMENT',
+    status: 'COMPLETED'
+  })
+    .select('amount')
+    .lean()
+  let sum = txs.reduce((s, t) => s + (Number(t.amount) || 0), 0)
+  sum = roundMoney(sum)
+  if (sum <= 0) {
+    const r = await Ride.findById(rideId).select('walletAmountUsed').lean()
+    sum = roundMoney(Number(r?.walletAmountUsed || 0))
+  }
+  return sum
+}
+
+async function executeRazorpayGatewayRefundBeforeStart (ride, refundRupees) {
+  const amt = roundMoney(Number(refundRupees) || 0)
+  if (amt <= 0 || !ride.razorpayPaymentId) return { applied: false }
+
+  const existing = await WalletTransaction.findOne({
+    relatedRide: ride._id,
+    status: 'COMPLETED',
+    'metadata.beforeStartOtpRiderCancelRazorpayGatewayRefund': true
+  }).lean()
+  if (existing) {
+    return { applied: true, skipped: true, refundAmount: existing.amount }
+  }
+
+  let razorpayRefundId = null
+  let razorpayRefundStatus = null
+  try {
+    const refund = await razorpayInstance.payments.refund(
+      ride.razorpayPaymentId,
+      {
+        amount: Math.round(amt * 100),
+        speed: 'normal',
+        notes: {
+          rideId: ride._id.toString(),
+          flow: 'before_start_rider_cancel'
+        }
+      }
+    )
+    razorpayRefundId = refund.id
+    razorpayRefundStatus = refund.status
+    logger.info(
+      `beforeStartCancel: Razorpay refund ok rideId=${ride._id} amount=${amt} refundId=${razorpayRefundId}`
+    )
+  } catch (err) {
+    logger.error(
+      `beforeStartCancel: Razorpay refund failed rideId=${ride._id} amount=${amt} ${err.message}`
+    )
+    throw err
+  }
+
+  const riderId = ride.rider?._id || ride.rider
+  const user = riderId ? await User.findById(riderId) : null
+  const balSnap = roundMoney(Number(user?.walletBalance || 0))
+
+  await WalletTransaction.create({
+    user: riderId,
+    transactionType: 'REFUND',
+    amount: amt,
+    balanceBefore: balSnap,
+    balanceAfter: balSnap,
+    relatedRide: ride._id,
+    paymentMethod: 'RAZORPAY',
+    status: 'COMPLETED',
+    description: `Gateway refund (before-start cancel) ₹${amt}`,
+    metadata: {
+      beforeStartOtpRiderCancelRazorpayGatewayRefund: true,
+      razorpayRefundId,
+      razorpayRefundStatus,
+      razorpayPaymentId: ride.razorpayPaymentId,
+      gatewayOnly: true
+    }
+  })
+
+  await Ride.findByIdAndUpdate(ride._id, {
+    razorpayRefundId: razorpayRefundId || ride.razorpayRefundId,
+    razorpayRefundStatus: razorpayRefundStatus || ride.razorpayRefundStatus,
+    refundAmount: amt
+  })
+
+  return { applied: true, refundAmount: amt, razorpayRefundId }
+}
+
+async function settleRiderWalletAndRazorpayForBeforeStartCancel (
+  rideId,
+  riderId,
+  settlement,
+  originalRide
+) {
   const due = Number(settlement?.totalCharge || 0)
   if (due <= 0) {
     return {
       walletDebited: 0,
       outstandingDue: 0,
-      riderPaymentStatus: 'none_due'
+      riderPaymentStatus: 'none_due',
+      razorpayRefundAmount: 0,
+      prepaidWallet: 0,
+      prepaidRazorpay: 0
     }
   }
+
+  const existingTxn = await WalletTransaction.findOne({
+    relatedRide: rideId,
+    transactionType: 'CANCELLATION_FEE',
+    status: 'COMPLETED',
+    'metadata.beforeStartOtpRiderCancel': true
+  }).lean()
+
+  if (existingTxn) {
+    const m = existingTxn.metadata || {}
+    const ob = roundMoney(Number(m.outstandingDue) || 0)
+    return {
+      walletDebited: roundMoney(Math.max(0, Number(m.walletDebitedRecorded) || 0)),
+      outstandingDue: ob,
+      riderPaymentStatus:
+        m.riderPaymentStatus ||
+        (ob > 0 ? 'pending' : 'none_due'),
+      razorpayRefundAmount: roundMoney(Number(m.razorpayRefundAmount) || 0),
+      prepaidWallet: roundMoney(Number(m.prepaidWallet) || 0),
+      prepaidRazorpay: roundMoney(Number(m.prepaidRazorpay) || 0)
+    }
+  }
+
+  const Pw = await getWalletRidePaymentSumForRide(rideId)
+  const Pr = roundMoney(Number(originalRide.razorpayAmountPaid || 0))
+  const split = splitBeforeStartCancelPrepaid({ Pw, Pr, O: due })
 
   const user = await User.findById(riderId)
   if (!user) {
     throw new Error('User not found')
   }
 
-  const balanceBefore = Number(user.walletBalance || 0)
-  const walletDebit = roundMoney(Math.min(balanceBefore, due))
-  const outstandingDue = roundMoney(Math.max(0, due - walletDebit))
+  const balanceBefore = roundMoney(Number(user.walletBalance || 0))
+  const W_new = walletBalanceAfterBeforeStartCancel(balanceBefore, Pw, {
+    use_w: split.use_w,
+    shortfall: split.shortfall
+  })
+  const walletDelta = roundMoney(W_new - balanceBefore)
+  const walletDebitedRecorded = roundMoney(Math.max(0, -walletDelta))
 
-  if (walletDebit > 0) {
-    const existingTxn = await WalletTransaction.findOne({
-      relatedRide: rideId,
-      transactionType: 'CANCELLATION_FEE',
-      status: 'COMPLETED',
-      'metadata.beforeStartOtpRiderCancel': true
-    })
-
-    if (!existingTxn) {
-      const balanceAfter = roundMoney(balanceBefore - walletDebit)
-      user.walletBalance = balanceAfter
-      await user.save()
-      await WalletTransaction.create({
-        user: riderId,
-        transactionType: 'CANCELLATION_FEE',
-        amount: walletDebit,
-        balanceBefore,
-        balanceAfter,
-        relatedRide: rideId,
-        paymentMethod: 'WALLET',
-        status: 'COMPLETED',
-        description: `Before-start cancellation charge ₹${walletDebit}`,
-        metadata: {
-          beforeStartOtpRiderCancel: true,
-          totalCharge: due
-        }
-      })
-    }
+  if (split.razorpayRefund > 0) {
+    await executeRazorpayGatewayRefundBeforeStart(originalRide, split.razorpayRefund)
   }
 
+  user.walletBalance = W_new
+  await user.save()
+
+  const outstandingDue = roundMoney(Math.max(0, -W_new))
+  const riderPaymentStatus = outstandingDue > 0 ? 'pending' : 'none_due'
+
+  await WalletTransaction.create({
+    user: riderId,
+    transactionType: 'CANCELLATION_FEE',
+    amount: roundMoney(Math.max(0, Math.abs(walletDelta))),
+    balanceBefore,
+    balanceAfter: W_new,
+    relatedRide: rideId,
+    paymentMethod: 'WALLET',
+    status: 'COMPLETED',
+    description: `Before-start cancellation settlement (total ₹${due})`,
+    metadata: {
+      beforeStartOtpRiderCancel: true,
+      totalCharge: due,
+      prepaidWallet: Pw,
+      prepaidRazorpay: Pr,
+      use_w: split.use_w,
+      use_r: split.use_r,
+      shortfall: split.shortfall,
+      razorpayRefundAmount: split.razorpayRefund,
+      walletDeltaApplied: walletDelta,
+      walletDebitedRecorded,
+      outstandingDue,
+      riderPaymentStatus,
+      travelledDistanceKm: settlement.travelledDistanceKm,
+      travelledAmount: settlement.travelledAmount,
+      fixedPenaltyAmount: settlement.fixedPenaltyAmount
+    }
+  })
+
   return {
-    walletDebited: walletDebit,
+    walletDebited: walletDebitedRecorded,
     outstandingDue,
-    riderPaymentStatus:
-      outstandingDue > 0
-        ? walletDebit > 0
-          ? 'partially_paid'
-          : 'pending'
-        : 'none_due'
+    riderPaymentStatus,
+    razorpayRefundAmount: split.razorpayRefund,
+    prepaidWallet: Pw,
+    prepaidRazorpay: Pr
   }
 }
 
 async function creditDriverForBeforeStartCancel (ride, settlement) {
-  const driverAmount = roundMoney(Number(settlement?.travelledAmount || 0))
-  if (driverAmount <= 0) return
+  const travelledGross = roundMoney(Number(settlement?.travelledAmount || 0))
+  if (travelledGross <= 0) return
 
   const driverId = ride.driver?._id || ride.driver
   const riderId = ride.rider?._id || ride.rider
   if (!driverId || !riderId) return
 
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  const { platformFee, driverEarning } = computePlatformSplitFromGrossFare(
+    travelledGross,
+    settings?.pricingConfigurations || {}
+  )
+
   const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
-  await AdminEarnings.findOneAndUpdate(
+  const earnings = await AdminEarnings.findOneAndUpdate(
     { rideId: ride._id },
     {
       rideId: ride._id,
       driverId,
       riderId,
-      grossFare: driverAmount,
-      platformFee: 0,
-      driverEarning: driverAmount,
+      grossFare: travelledGross,
+      platformFee,
+      driverEarning,
       rideDate: new Date(),
       vehicleSnapshot,
       paymentStatus: 'completed',
@@ -2333,6 +2681,24 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   )
+
+  try {
+    const { getSocketIO } = require('./socket.js')
+    const io = getSocketIO()
+    if (io) {
+      io.to(`driver_${driverId}`).emit('driverEarningAdded', {
+        driverId: String(driverId),
+        rideId: String(ride._id),
+        driverEarning: earnings.driverEarning,
+        grossFare: earnings.grossFare,
+        platformFee: earnings.platformFee
+      })
+    }
+  } catch (emitErr) {
+    logger.warn(
+      `creditDriverForBeforeStartCancel: driverEarningAdded emit failed ${emitErr.message}`
+    )
+  }
 }
 
 /**
@@ -2477,6 +2843,28 @@ function toRiderInProgressCancelBillingSummary (settlement) {
     riderPaymentStatus: settlement.riderPaymentStatus,
     billingNote: 'distance_based_partial',
     settlementVersion: settlement.settlementVersion
+  }
+}
+
+/**
+ * Rider-visible summary for cancel before start OTP (per-km + penalty).
+ */
+function toRiderBeforeStartCancelBillingSummary (settlement) {
+  if (!settlement || typeof settlement !== 'object') return null
+  const total = Number(settlement.totalCharge || 0)
+  if (!Number.isFinite(total) || total <= 0) return null
+  return {
+    travelledDistanceKm: settlement.travelledDistanceKm,
+    travelledAmount: settlement.travelledAmount,
+    fixedPenaltyAmount: settlement.fixedPenaltyAmount,
+    totalCharge: settlement.totalCharge,
+    perKmRateUsed: settlement.perKmRateUsed,
+    outstandingDue: settlement.outstandingDue,
+    riderPaymentStatus: settlement.riderPaymentStatus,
+    prepaidWallet: settlement.prepaidWallet,
+    prepaidRazorpay: settlement.prepaidRazorpay,
+    razorpayRefundAmount: settlement.razorpayRefundAmount,
+    billingNote: 'before_start_otp_cancel'
   }
 }
 
@@ -3096,10 +3484,11 @@ const cancelRide = async (
       beforeStartSettlementSnapshot =
         await buildBeforeStartOtpRiderCancelSettlement(originalRide)
       const riderId = originalRide.rider?._id || originalRide.rider
-      const walletResult = await applyWalletAndOutstandingForBeforeStartCancel(
+      const walletResult = await settleRiderWalletAndRazorpayForBeforeStartCancel(
         originalRide._id,
         riderId,
-        beforeStartSettlementSnapshot
+        beforeStartSettlementSnapshot,
+        originalRide
       )
       beforeStartSettlementSnapshot = {
         ...beforeStartSettlementSnapshot,
@@ -3143,7 +3532,13 @@ const cancelRide = async (
     }
     if (beforeStartSettlementSnapshot) {
       updateData.beforeStartCancelSettlement = beforeStartSettlementSnapshot
-      updateData.cancellationFee = beforeStartSettlementSnapshot.fixedPenaltyAmount
+      updateData.cancellationFee = beforeStartSettlementSnapshot.totalCharge
+      if (Number(beforeStartSettlementSnapshot.totalCharge || 0) > 0) {
+        updateData.paymentStatus =
+          beforeStartSettlementSnapshot.riderPaymentStatus === 'pending'
+            ? 'partial'
+            : 'completed'
+      }
     }
 
     const ride = await Ride.findByIdAndUpdate(rideId, updateData, {
@@ -3157,26 +3552,80 @@ const cancelRide = async (
           
           // Ensure driver exists before updating
           const driverExists = await Driver.findById(driverId)
+            .select('isBusy currentRideId queuedRideId')
+            .lean()
           if (!driverExists) {
             logger.warn(`cancelRide: Driver ${driverId} not found, skipping isBusy reset`)
           } else {
-            // Reset isBusy for this cancelled ride
-            await Driver.findByIdAndUpdate(driverId, {
-              isBusy: false,
-              busyUntil: null
-            })
-            
-            logger.info(
-              `✅ cancelRide: Driver ${driverId} isBusy reset to false after ride ${rideId} cancellation`
-            )
+            const cancelledRideIdStr = String(ride._id)
+            const isCancellingActive =
+              String(driverExists.currentRideId || '') === cancelledRideIdStr
+            const isCancellingQueued =
+              String(driverExists.queuedRideId || '') === cancelledRideIdStr
 
-            // Validate driver status to check for OTHER active rides
-            // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
-            const validationResult = await validateAndFixDriverStatus(driverId)
-            if (validationResult.corrected) {
+            if (isCancellingQueued) {
+              // The cancelled ride was the driver's queued (next) ride. Just
+              // clear queuedRideId; the active ride is unaffected.
+              await Driver.findByIdAndUpdate(driverId, { queuedRideId: null })
               logger.info(
-                `✅ cancelRide: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+                `✅ cancelRide: cleared queuedRideId for driver ${driverId} (queued ride ${rideId} cancelled)`
               )
+            } else if (isCancellingActive && driverExists.queuedRideId) {
+              // The active ride was cancelled while a queued ride exists.
+              // Promote the queued ride into the active slot so the driver
+              // continues with their next pickup.
+              const queuedId = driverExists.queuedRideId
+              await Driver.findByIdAndUpdate(driverId, {
+                isBusy: true,
+                busyUntil: null,
+                currentRideType: 'normal',
+                currentRideId: queuedId,
+                queuedRideId: null
+              })
+              logger.info(
+                `✅ cancelRide: Driver ${driverId} promoted queued ride ${queuedId} after active cancel`
+              )
+              try {
+                const promoted = await Ride.findById(queuedId).populate(
+                  'driver rider'
+                )
+                if (promoted) {
+                  const { getSocketIO } = require('./socket.js')
+                  const io = getSocketIO()
+                  const promotedSocketId = promoted.driverSocketId
+                  const payload = promoted.toObject
+                    ? promoted.toObject()
+                    : promoted
+                  if (promotedSocketId) {
+                    io.to(promotedSocketId).emit('rideAssigned', payload)
+                  } else {
+                    io.to(`driver_${driverId}`).emit('rideAssigned', payload)
+                  }
+                }
+              } catch (promoteErr) {
+                logger.warn(
+                  `⚠️ Failed to emit rideAssigned for promoted queued ride after active cancel: ${promoteErr.message}`
+                )
+              }
+            } else {
+              // Reset isBusy for this cancelled ride (standard path)
+              await Driver.findByIdAndUpdate(driverId, {
+                isBusy: false,
+                busyUntil: null
+              })
+              
+              logger.info(
+                `✅ cancelRide: Driver ${driverId} isBusy reset to false after ride ${rideId} cancellation`
+              )
+
+              // Validate driver status to check for OTHER active rides
+              // This ensures if driver has multiple rides, we only set isBusy=false if no other active rides exist
+              const validationResult = await validateAndFixDriverStatus(driverId)
+              if (validationResult.corrected) {
+                logger.info(
+                  `✅ cancelRide: Driver ${driverId} status validated and corrected: ${validationResult.reason}`
+                )
+              }
             }
           }
 
@@ -3773,10 +4222,19 @@ const validateAndFixDriverStatus = async driverId => {
     }
 
     // Query for active rides assigned to this driver
-    const activeRides = await Ride.find({
+    // EXCLUDE the destination-reach queued ride: it is 'accepted' but the
+    // driver is still busy on a different currentRideId, so it must not be
+    // treated as an additional active ride for isBusy purposes.
+    const activeRideQuery = {
       driver: driverId,
       status: { $in: ['requested', 'accepted', 'arrived', 'in_progress'] }
-    }).select('_id status bookingType').lean()
+    }
+    if (driver.queuedRideId) {
+      activeRideQuery._id = { $ne: driver.queuedRideId }
+    }
+    const activeRides = await Ride.find(activeRideQuery)
+      .select('_id status bookingType')
+      .lean()
 
     const hasActiveRides = activeRides.length > 0
     const currentIsBusy = driver.isBusy || false
@@ -4326,6 +4784,11 @@ const searchDriversWithProgressiveRadius = async (
         .select('socketId goTo location vehicleInfo assignedFleetVehicleId rideAccess') // Select ride-access and vehicle state for eligibility filtering
         .limit(50) // Pull a wider pool, then filter down by ride access
 
+      // Mark Pool A candidates as standard offers (non-stacked).
+      drivers.forEach(d => {
+        d._isDestinationReach = false
+      })
+
       const filterDescription = (() => {
         let desc = 'isActive: true, isOnline: true, socketId exists'
         if (bookingType === 'FULL_DAY' || bookingType === 'RENTAL') {
@@ -4356,6 +4819,120 @@ const searchDriversWithProgressiveRadius = async (
       logger.info(
         `   ✅ Found ${drivers.length} drivers after applying filters (${filterDescription})`
       )
+
+      // ============================
+      // POOL B — destination-reach stacked candidates (INSTANT only)
+      // ============================
+      // Drivers who are currently busy on a normal INSTANT ride, do not yet
+      // have a queued ride, and whose live location is within the admin
+      // configured radius of THEIR active drop-off. These are eligible to
+      // receive the new offer with offerContext='destination_reach' so it can
+      // be queued as their next trip.
+      if (bookingType === 'INSTANT') {
+        try {
+          const SettingsForStacked = require('../Models/Admin/settings.modal.js')
+          const stackedSettings = await SettingsForStacked.findOne().lean()
+          const stackedEnabled =
+            stackedSettings?.rideMatching?.stackedAccept?.enabled !== false
+          const destinationReachRadiusM = Number(
+            stackedSettings?.rideMatching?.destinationReachRadiusMeters
+          )
+
+          if (
+            stackedEnabled &&
+            Number.isFinite(destinationReachRadiusM) &&
+            destinationReachRadiusM > 0
+          ) {
+            const poolBQuery = {
+              ...driverQuery,
+              isBusy: true,
+              currentRideType: 'normal',
+              currentRideId: { $ne: null },
+              queuedRideId: null
+            }
+            // Reset the isBusy: false from the INSTANT branch above (and any
+            // FULL_DAY/RENTAL $or that overrides isBusy).
+            delete poolBQuery.$or
+
+            let busyCandidates = await Driver.find(poolBQuery)
+              .select(
+                'socketId goTo location vehicleInfo assignedFleetVehicleId rideAccess currentRideId'
+              )
+              .limit(50)
+
+            if (vehicleType && busyCandidates.length) {
+              const filteredByVehicle = []
+              for (const d of busyCandidates) {
+                if (await driverCanAcceptRideType(d, vehicleType)) {
+                  filteredByVehicle.push(d)
+                }
+              }
+              busyCandidates = filteredByVehicle
+            }
+
+            if (busyCandidates.length) {
+              const activeRideIds = busyCandidates
+                .map(d => d.currentRideId)
+                .filter(Boolean)
+              const activeRides = await Ride.find({
+                _id: { $in: activeRideIds }
+              })
+                .select('_id status dropoffLocation')
+                .lean()
+              const activeRideById = new Map(
+                activeRides.map(r => [String(r._id), r])
+              )
+
+              const poolBDrivers = []
+              const existingIds = new Set(drivers.map(d => String(d._id)))
+              for (const d of busyCandidates) {
+                if (existingIds.has(String(d._id))) continue
+                const activeRide = activeRideById.get(String(d.currentRideId))
+                if (!activeRide?.dropoffLocation?.coordinates) continue
+                if (
+                  !['accepted', 'arrived', 'in_progress'].includes(
+                    activeRide.status
+                  )
+                ) {
+                  continue
+                }
+                const driverCoords = d.location?.coordinates
+                if (!Array.isArray(driverCoords) || driverCoords.length !== 2) {
+                  continue
+                }
+                const [dLng, dLat] = driverCoords
+                const [adLng, adLat] = activeRide.dropoffLocation.coordinates
+                const distKm = calculateHaversineDistance(
+                  dLat,
+                  dLng,
+                  adLat,
+                  adLng
+                )
+                const distM = distKm * 1000
+                if (distM <= destinationReachRadiusM) {
+                  d._isDestinationReach = true
+                  poolBDrivers.push(d)
+                }
+              }
+
+              if (poolBDrivers.length) {
+                logger.info(
+                  `   🎯 Pool B: ${poolBDrivers.length} destination-reach stacked candidate(s) within ${destinationReachRadiusM}m of their active drop-off`
+                )
+                drivers = drivers.concat(poolBDrivers)
+              }
+            }
+          } else {
+            logger.info(
+              `   ℹ️ Stacked accept disabled (enabled=${stackedEnabled}, radius=${destinationReachRadiusM})`
+            )
+          }
+        } catch (e) {
+          logger.warn(
+            `   ⚠️ Pool B (destination-reach) search failed: ${e.message}`
+          )
+        }
+      }
 
       if (options?.dropoffLocation && drivers.length > 0) {
         const routeFilteredDrivers = []
@@ -4590,6 +5167,7 @@ module.exports = {
   calculateHaversineDistance,
   createRide,
   assignDriverToRide,
+  assignStackedDriverToRide,
   startRide,
   completeRide,
   cancelRide,
@@ -4633,6 +5211,7 @@ module.exports = {
   appendRideRoutePoint,
   evaluateRideCancellationPolicy,
   toRiderInProgressCancelBillingSummary,
+  toRiderBeforeStartCancelBillingSummary,
   impliedPerKmFromBooking,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,

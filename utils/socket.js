@@ -21,6 +21,7 @@ const {
   clearDriverSocket,
   clearUserSocket,
   assignDriverToRide,
+  assignStackedDriverToRide,
   cancelRide,
   startRide,
   completeRide,
@@ -52,6 +53,7 @@ const {
   clearRideRedisKeys,
   evaluateRideCancellationPolicy,
   toRiderInProgressCancelBillingSummary,
+  toRiderBeforeStartCancelBillingSummary,
   normalizeCancellationReasonCode,
   PICKUP_SHIFT_REASON_THRESHOLD_METERS,
   calculateHaversineDistance,
@@ -167,10 +169,14 @@ async function emitRideCancelledToClients (
   const riderBilling = toRiderInProgressCancelBillingSummary(
     raw.driverInProgressCancelSettlement
   )
+  const beforeStartBilling = toRiderBeforeStartCancelBillingSummary(
+    raw.beforeStartCancelSettlement
+  )
   const riderSafePayload = {
     ...raw,
     driverInProgressCancelSettlement: undefined,
     riderInProgressCancelBilling: riderBilling,
+    riderBeforeStartCancelBilling: beforeStartBilling,
     settlementHiddenForRider: true
   }
   ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', riderSafePayload)
@@ -1462,8 +1468,19 @@ function initializeSocket (server) {
 
         // ============================
         // PERSIST ROUTE POINT TO THE RIDE
+        // En-route to pickup (accepted/arrived) and during trip (in_progress) so
+        // before-start-OTP cancellation can bill polyline distance.
         // ============================
-        if (data.rideId && rideForPipe?.status === 'in_progress') {
+        const routeAppendStatuses = new Set([
+          'accepted',
+          'arrived',
+          'in_progress'
+        ])
+        if (
+          data.rideId &&
+          rideForPipe?.status &&
+          routeAppendStatuses.has(rideForPipe.status)
+        ) {
           try {
             await appendRideRoutePoint(data.rideId, data.location)
           } catch (routeError) {
@@ -2126,6 +2143,146 @@ function initializeSocket (server) {
             code: 'RIDE_ALREADY_ACCEPTED',
             rideId
           })
+          return
+        }
+
+        // ============================
+        // STACKED ACCEPT BRANCH
+        // ============================
+        // If the driver is already busy on a normal INSTANT trip and this ride
+        // was offered to them with offerContext='destination_reach', accept it
+        // as their queued next trip without flipping isBusy/currentRideId.
+        const stackedDriver = await Driver.findById(driverId)
+          .select('isBusy currentRideId currentRideType queuedRideId')
+          .lean()
+        const stackedRideDoc = await Ride.findById(rideId)
+          .select('destinationReachDrivers status driver bookingType')
+          .lean()
+        const isStackedAccept =
+          !!stackedDriver?.isBusy &&
+          !!stackedDriver?.currentRideId &&
+          stackedDriver.currentRideType === 'normal' &&
+          String(stackedDriver.currentRideId) !== String(rideId) &&
+          (stackedRideDoc?.destinationReachDrivers || [])
+            .map(id => String(id))
+            .includes(String(driverId))
+
+        if (isStackedAccept) {
+          logger.info(
+            `🎯 rideAccepted: stacked path - rideId: ${rideId}, driverId: ${driverId}, currentRideId: ${stackedDriver.currentRideId}`
+          )
+          let assignedStackedRide
+          try {
+            assignedStackedRide = await assignStackedDriverToRide(
+              rideId,
+              driverId,
+              socket.id
+            )
+          } catch (err) {
+            logger.warn(
+              `Stacked accept failed - rideId: ${rideId}, driverId: ${driverId}, err: ${err.message}`
+            )
+            try {
+              await redis.del(lockKey)
+            } catch (e) {}
+            const code =
+              err.code ||
+              (String(err.message || '').toLowerCase().includes('queued')
+                ? 'ALREADY_HAS_QUEUED_RIDE'
+                : 'NOT_ELIGIBLE_STACKED')
+            socket.emit('rideError', {
+              message:
+                code === 'ALREADY_HAS_QUEUED_RIDE'
+                  ? 'You already have one queued next ride. Complete or clear it before accepting another.'
+                  : 'This stacked ride is no longer eligible. Keep finishing your current trip and wait for the next offer.',
+              code,
+              rideId
+            })
+            return
+          }
+
+          const stackedPayload = sanitizeRideContactsForDriver(
+            assignedStackedRide.toObject
+              ? assignedStackedRide.toObject()
+              : assignedStackedRide
+          )
+
+          // Notify the accepting driver: their offer is now queued. The driver
+          // app stores this as `queuedRide` and shows a banner without
+          // navigating away from the active ride screen.
+          if (assignedStackedRide.driverSocketId) {
+            try {
+              io.to(assignedStackedRide.driverSocketId).emit(
+                'rideQueued',
+                stackedPayload
+              )
+            } catch (e) {
+              logger.warn('Emit rideQueued to driver failed', {
+                err: e.message
+              })
+            }
+          }
+
+          // Notify rider: their ride was accepted (same payload shape as
+          // standard accept; rider doesn't care that the driver is stacked).
+          const stackedRiderId =
+            assignedStackedRide.rider?._id || assignedStackedRide.rider
+          if (stackedRiderId) {
+            try {
+              io.to(`user_${stackedRiderId}`).emit(
+                'rideAccepted',
+                stackedPayload
+              )
+            } catch (e) {
+              logger.warn(
+                'Emit rideAccepted to rider (stacked) failed',
+                { err: e.message }
+              )
+            }
+          }
+
+          io.to('admin').emit('rideStatusUpdated', {
+            rideId,
+            status: 'accepted',
+            ride: stackedPayload
+          })
+
+          // Notify other drivers (rideNoLongerAvailable) — same as standard branch.
+          try {
+            const rideWithNotifiedDrivers = await Ride.findById(rideId)
+              .select('notifiedDrivers')
+              .lean()
+            if (rideWithNotifiedDrivers?.notifiedDrivers?.length) {
+              const otherDriverIds =
+                rideWithNotifiedDrivers.notifiedDrivers.filter(
+                  id => id.toString() !== driverId.toString()
+                )
+              if (otherDriverIds.length) {
+                const otherDrivers = await Driver.find({
+                  _id: { $in: otherDriverIds }
+                })
+                  .select('socketId')
+                  .lean()
+                for (const d of otherDrivers) {
+                  if (d.socketId) {
+                    io.to(d.socketId).emit('rideNoLongerAvailable', {
+                      rideId,
+                      message:
+                        'This ride has been accepted by another driver'
+                    })
+                  }
+                }
+              }
+            }
+          } catch (notifyError) {
+            logger.error(
+              `❌ Error notifying other drivers (stacked): ${notifyError.message}`
+            )
+          }
+
+          logger.info(
+            `✅ rideAccepted (stacked) completed - rideId: ${rideId} queued for driver ${driverId}`
+          )
           return
         }
 

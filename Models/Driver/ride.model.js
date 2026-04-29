@@ -363,6 +363,17 @@ const rideSchema = new mongoose.Schema(
       }
     ],
 
+    // Subset of notifiedDrivers who received this offer with offerContext
+    // 'destination_reach' (i.e. were near their own active-trip drop-off when
+    // the offer was dispatched). The accept handler validates against this
+    // list before allowing a stacked accept (driver.queuedRideId path).
+    destinationReachDrivers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Driver'
+      }
+    ],
+
     // Priority driver discovery phase: 'priority' | 'normal' | null
     discoveryPhase: {
       type: String,
@@ -446,12 +457,18 @@ const rideSchema = new mongoose.Schema(
     // Rider cancellation before start OTP while driver is en-route to pickup.
     beforeStartCancelSettlement: {
       travelledDistanceKm: { type: Number, default: null },
+      travelledDistancePolylineKm: { type: Number, default: null },
+      travelledDistanceStraightKm: { type: Number, default: null },
+      distancePolicy: { type: String, default: null },
       perKmRateUsed: { type: Number, default: null },
       travelledAmount: { type: Number, default: null },
       fixedPenaltyAmount: { type: Number, default: 20 },
       totalCharge: { type: Number, default: null },
       walletDebited: { type: Number, default: 0 },
       outstandingDue: { type: Number, default: 0 },
+      prepaidWallet: { type: Number, default: null },
+      prepaidRazorpay: { type: Number, default: null },
+      razorpayRefundAmount: { type: Number, default: null },
       driverCoordsAtCancel: {
         type: [Number],
         default: null

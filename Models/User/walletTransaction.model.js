@@ -42,13 +42,11 @@ const walletTransactionSchema = new Schema(
     balanceBefore: {
       type: Number,
       required: true,
-      min: 0,
     },
     
     balanceAfter: {
       type: Number,
       required: true,
-      min: 0,
     },
     
     // Related entities

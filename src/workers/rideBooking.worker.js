@@ -389,20 +389,23 @@ const rideBookingWorker = new Worker(
     // NOTIFY DRIVERS
     // ============================
     const notifiedDriverIds = []
+    const destinationReachDriverIds = []
 
     for (const driver of drivers) {
       notifiedDriverIds.push(driver._id)
+      const isDestinationReach = !!driver._isDestinationReach
+      if (isDestinationReach) {
+        destinationReachDriverIds.push(driver._id)
+      }
 
       // For scheduled rides, don't emit socket events - only use push notifications
       // Drivers will accept/reject via push notification interaction
       if (ride.scheduleType !== 'scheduled' && driver.socketId) {
         const ridePayload = {
           ...(ride.toObject ? ride.toObject() : ride),
-          // Backward-compatible: consumers that don't know this field still work.
-          offerContext:
-            String(ride?.discoveryPhase || '').toLowerCase() === 'destination_reach'
-              ? 'destination_reach'
-              : 'standard'
+          // Per-driver: stacked candidates (Pool B) get the compact destination-reach
+          // surface in the driver app and bypass the active-flow suppression there.
+          offerContext: isDestinationReach ? 'destination_reach' : 'standard'
         }
         io.to(driver.socketId).emit('newRideRequest', ridePayload)
       }
@@ -428,6 +431,14 @@ const rideBookingWorker = new Worker(
     const updatePayload = { $set: { notifiedDrivers: phase === 'normal' ? [...(ride.notifiedDrivers || []), ...notifiedDriverIds] : notifiedDriverIds } }
     if (discoveryPhase !== null) {
       updatePayload.$set.discoveryPhase = discoveryPhase
+    }
+    // Persist the authoritative list of drivers who received this ride with
+    // offerContext='destination_reach'. The accept handler validates against
+    // this when a busy driver tries to stack the offer as their next trip.
+    if (destinationReachDriverIds.length > 0) {
+      updatePayload.$addToSet = {
+        destinationReachDrivers: { $each: destinationReachDriverIds }
+      }
     }
 
     await Ride.findByIdAndUpdate(rideId, updatePayload)
