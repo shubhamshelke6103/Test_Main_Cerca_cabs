@@ -3,6 +3,7 @@ const Settings = require('../Models/Admin/settings.modal');
 const {
     VEHICLE_SERVICE_KEYS,
     remapVehicleServicesInput,
+    normalizeVehicleServiceDisplayNames,
     perMinuteDefaultForKey,
     priceDefaultForKey
 } = require('../utils/vehicleServicesKeys');
@@ -325,8 +326,16 @@ const getVehicleServices = async (req, res) => {
                 }
             });
         }
-        
-        res.status(200).json(settings.vehicleServices);
+
+        const plain =
+            settings.vehicleServices &&
+            typeof settings.vehicleServices.toObject === 'function'
+                ? settings.vehicleServices.toObject()
+                : { ...settings.vehicleServices }
+        const vehicleServicesOut = normalizeVehicleServiceDisplayNames(
+            remapVehicleServicesInput(plain)
+        )
+        res.status(200).json(vehicleServicesOut);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching vehicle services', error });
     }
@@ -453,6 +462,9 @@ const getPublicSettings = async (req, res) => {
             });
         }
 
+        const vehicleServicesForResponse =
+            normalizeVehicleServiceDisplayNames(vehicleServices)
+
         res.status(200).json({
             pricingConfigurations: settings.pricingConfigurations || {
                 baseFare: 0,
@@ -463,7 +475,7 @@ const getPublicSettings = async (req, res) => {
                 driverCommissions: 90,
                 estimatedAverageSpeedKmh: 35
             },
-            vehicleServices: vehicleServices
+            vehicleServices: vehicleServicesForResponse
         });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching public settings', error });

@@ -53,6 +53,57 @@ function normalizeVehicleServicesForResponse (vs) {
   return remapVehicleServicesInput({ ...vs })
 }
 
+const CANONICAL_TIER_DISPLAY_NAME = {
+  cercaZip: 'Cerca Zip',
+  cercaGlide: 'Cerca Glide',
+  cercaTitan: 'Cerca Titan'
+}
+
+function isLegacyZipDisplayName (n, compact) {
+  return (
+    n === 'small' ||
+    n === 'cerca small' ||
+    compact === 'cercasmall' ||
+    n === 'hatchback' ||
+    n === 'auto'
+  )
+}
+
+function isLegacyGlideDisplayName (n, compact) {
+  return n === 'medium' || n === 'cerca medium' || compact === 'cercamedium' || n === 'sedan'
+}
+
+function isLegacyTitanDisplayName (n, compact) {
+  return n === 'large' || n === 'cerca large' || compact === 'cercalarge' || n === 'suv'
+}
+
+/**
+ * Remap legacy Small/Medium/Large (and related) display names to Cerca Zip / Glide / Titan.
+ * @param {Record<string, any>|null|undefined} vs
+ * @returns {Record<string, any>}
+ */
+function normalizeVehicleServiceDisplayNames (vs) {
+  if (!vs || typeof vs !== 'object') return vs
+  const out = { ...vs }
+  for (const key of VEHICLE_SERVICE_KEYS) {
+    const svc = out[key]
+    if (!svc || typeof svc !== 'object') continue
+    const merged = { ...svc }
+    const raw = String(merged.name ?? '').trim()
+    const n = raw.toLowerCase().replace(/\s+/g, ' ')
+    const compact = n.replace(/\s/g, '')
+    if (key === 'cercaZip' && isLegacyZipDisplayName(n, compact)) {
+      merged.name = CANONICAL_TIER_DISPLAY_NAME.cercaZip
+    } else if (key === 'cercaGlide' && isLegacyGlideDisplayName(n, compact)) {
+      merged.name = CANONICAL_TIER_DISPLAY_NAME.cercaGlide
+    } else if (key === 'cercaTitan' && isLegacyTitanDisplayName(n, compact)) {
+      merged.name = CANONICAL_TIER_DISPLAY_NAME.cercaTitan
+    }
+    out[key] = merged
+  }
+  return out
+}
+
 /**
  * Resolve tier input to a canonical key, null if absent, or false if unrecognized.
  * @param {string|null|undefined} raw
@@ -92,6 +143,7 @@ module.exports = {
   LEGACY_VEHICLE_SERVICE_KEY_MAP,
   remapVehicleServicesInput,
   normalizeVehicleServicesForResponse,
+  normalizeVehicleServiceDisplayNames,
   perMinuteDefaultForKey,
   priceDefaultForKey,
   resolveCanonicalVehicleTier
