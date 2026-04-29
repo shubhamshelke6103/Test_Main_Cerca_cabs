@@ -2383,6 +2383,56 @@ const getSharedLiveLocation = async (req, res) => {
   }
 }
 
+/**
+ * GET /rides/:id/rider-in-progress-cancel-billing?userId=
+ * Rider-safe billing summary for driver-cancelled in-progress trips (socket may omit details).
+ */
+const getRiderInProgressCancelBilling = async (req, res) => {
+  try {
+    const rideId = req.params.id
+    const userId = req.query.userId
+    if (!mongoose.Types.ObjectId.isValid(rideId)) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const ride = await Ride.findById(rideId)
+      .select(
+        'rider status cancelledBy driverInProgressCancelSettlement cancellationReason'
+      )
+      .lean()
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (String(ride.rider) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' })
+    }
+    if (ride.status !== 'cancelled' || ride.cancelledBy !== 'driver') {
+      return res.status(200).json({
+        success: true,
+        data: {
+          summary: null,
+          cancellationReason: ride.cancellationReason || null
+        }
+      })
+    }
+    const summary = rideBookingFunctions.toRiderInProgressCancelBillingSummary(
+      ride.driverInProgressCancelSettlement
+    )
+    return res.status(200).json({
+      success: true,
+      data: {
+        summary,
+        cancellationReason: ride.cancellationReason || null
+      }
+    })
+  } catch (error) {
+    logger.error('getRiderInProgressCancelBilling:', error)
+    res.status(500).json({ success: false, message: error.message })
+  }
+}
+
 const {
   riderAcknowledgeDriverInProgressCancel,
   riderConfirmCashDriverInProgressCancel,
@@ -2494,6 +2544,7 @@ module.exports = {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
+  getRiderInProgressCancelBilling,
   updateRideDestination,
   getDestinationQuote,
   acknowledgeDriverCancelSettlement,

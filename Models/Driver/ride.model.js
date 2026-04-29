@@ -185,6 +185,12 @@ const rideSchema = new mongoose.Schema(
       default: null
     },
 
+    /** How the ride reached `completed` (e.g. driver cancel within 1 km of drop → full fare). */
+    completionSource: {
+      type: String,
+      default: null
+    },
+
     customSchedule: {
       startDate: Date,
       endDate: Date,
@@ -410,6 +416,7 @@ const rideSchema = new mongoose.Schema(
     driverInProgressCancelSettlement: {
       partialDistanceKm: { type: Number, default: null },
       perKmRateUsed: { type: Number, default: null },
+      perKmRateSource: { type: String, default: null },
       driverPartialAmount: { type: Number, default: null },
       riderPenaltyAmount: { type: Number, default: null },
       riderTotalCharge: { type: Number, default: null },

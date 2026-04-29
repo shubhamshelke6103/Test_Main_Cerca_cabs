@@ -560,7 +560,7 @@
         {
           "event": "rideCancelled",
           "emittedTo": "Rider",
-          "data": "Cancelled ride object"
+          "data": "Cancelled ride object; includes riderInProgressCancelBilling (distance-based partial settlement summary, no coords) when driver cancelled during in_progress with settlement. driverInProgressCancelSettlement omitted."
         },
         {
           "event": "rideCancelled",

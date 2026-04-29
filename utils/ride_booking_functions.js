@@ -30,6 +30,12 @@ const {
 
 const BEFORE_START_FIXED_PENALTY_RUPEES = 20
 const IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM = 1
+const IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS = Number(
+  process.env.IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS || 3 * 60 * 1000
+)
+const IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS = Number(
+  process.env.IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS || 10 * 60 * 1000
+)
 const ENABLE_BEFORE_START_PARTIAL_CHARGE =
   String(process.env.FEATURE_BEFORE_START_PARTIAL_CHARGE || 'true').toLowerCase() !==
   'false'
@@ -1640,6 +1646,9 @@ const completeRide = async (rideId, fare, options = {}) => {
       actualEndTime: endTime,
       actualDuration: actualDuration
     }
+    if (options?.completionSource) {
+      updateData.completionSource = options.completionSource
+    }
     
     if (fareBreakdown) {
       updateData.fareBreakdown = {
@@ -2451,8 +2460,40 @@ async function getDriverVehicleSnapshotForEarnings (driverId) {
 }
 
 /**
+ * Rider-visible billing breakdown (no driver coordinates or internal ledger fields).
+ */
+function toRiderInProgressCancelBillingSummary (settlement) {
+  if (!settlement || typeof settlement !== 'object') return null
+  return {
+    partialDistanceKm: settlement.partialDistanceKm,
+    perKmRateUsed: settlement.perKmRateUsed,
+    perKmRateSource: settlement.perKmRateSource || 'admin',
+    driverPartialAmount: settlement.driverPartialAmount,
+    riderPenaltyAmount: settlement.riderPenaltyAmount,
+    riderTotalCharge: settlement.riderTotalCharge,
+    prepaidTotal: settlement.prepaidTotal,
+    additionalDue: settlement.additionalDue,
+    refundDue: settlement.refundDue,
+    riderPaymentStatus: settlement.riderPaymentStatus,
+    billingNote: 'distance_based_partial',
+    settlementVersion: settlement.settlementVersion
+  }
+}
+
+/**
+ * Implied ₹/km from the booked trip when available; else null.
+ */
+function impliedPerKmFromBooking (ride) {
+  const fare = Number(ride.fareAtBooking ?? ride.fare)
+  const estKm = Number(ride.estimatedDistanceInKm)
+  if (!Number.isFinite(fare) || fare <= 0) return null
+  if (!Number.isFinite(estKm) || estKm <= 0) return null
+  return fare / estKm
+}
+
+/**
  * Build settlement object for driver cancelling while ride is in_progress.
- * Plan A: driver gets full perKmRate × km; penalty to platform or vendor.
+ * Partial leg: per-km uses booking-implied rate when valid, else admin perKmRate.
  */
 async function computeDriverInProgressCancelSettlement (originalRide) {
   const Settings = require('../Models/Admin/settings.modal.js')
@@ -2461,12 +2502,20 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
     throw new Error('Admin pricing settings not found')
   }
   const penalty = Number(settings.pricingConfigurations.cancellationFees)
-  const perKmRate = Number(settings.pricingConfigurations.perKmRate)
+  const adminPerKm = Number(settings.pricingConfigurations.perKmRate)
   if (!Number.isFinite(penalty) || penalty < 0) {
     throw new Error('Invalid cancellationFees in admin settings')
   }
-  if (!Number.isFinite(perKmRate) || perKmRate < 0) {
+  if (!Number.isFinite(adminPerKm) || adminPerKm < 0) {
     throw new Error('Invalid perKmRate in admin settings')
+  }
+
+  const implied = impliedPerKmFromBooking(originalRide)
+  let perKmRate = adminPerKm
+  let perKmRateSource = 'admin'
+  if (implied != null && Number.isFinite(implied) && implied > 0) {
+    perKmRate = implied
+    perKmRateSource = 'booking_implied'
   }
 
   const driverDoc =
@@ -2509,6 +2558,7 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
   return {
     partialDistanceKm: roundMoney(partialKm),
     perKmRateUsed: perKmRate,
+    perKmRateSource,
     driverPartialAmount,
     riderPenaltyAmount,
     riderTotalCharge,
@@ -2868,10 +2918,64 @@ async function riderVerifyRazorpayDriverInProgressCancel (rideId, userId, razorp
   return finalizeDriverInProgressCancelLedger(rideId)
 }
 
+/**
+ * Resolve driver position for in-progress cancel threshold (driver → dropoff distance).
+ * Prefers fresh driver GPS, then fresh route tail; falls back to stale driver/route with metrics.
+ */
+function resolveInProgressCancelPositionCoords (ride) {
+  const now = Date.now()
+  const driverUpdatedAt = ride.driver?.updatedAt
+    ? new Date(ride.driver.updatedAt).getTime()
+    : 0
+
+  if (
+    ride.driver?.location?.coordinates?.length >= 2 &&
+    driverUpdatedAt > 0 &&
+    now - driverUpdatedAt <= IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS
+  ) {
+    return {
+      coords: ride.driver.location.coordinates,
+      source: 'driver_gps_fresh'
+    }
+  }
+
+  const pts = Array.isArray(ride.routePoints) ? ride.routePoints : []
+  if (pts.length > 0) {
+    const last = pts[pts.length - 1]
+    const rec = last?.recordedAt ? new Date(last.recordedAt).getTime() : 0
+    if (
+      last?.coordinates?.length >= 2 &&
+      rec > 0 &&
+      now - rec <= IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS
+    ) {
+      return { coords: last.coordinates, source: 'route_tail_fresh' }
+    }
+  }
+
+  if (ride.driver?.location?.coordinates?.length >= 2) {
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${ride._id} positionSource=stale_driver_gps`
+    )
+    return { coords: ride.driver.location.coordinates, source: 'driver_gps_stale' }
+  }
+
+  if (pts.length > 0) {
+    const last = pts[pts.length - 1]
+    if (last?.coordinates?.length >= 2) {
+      logger.info(
+        `metric.in_progress_cancel_policy rideId=${ride._id} positionSource=stale_route_tail`
+      )
+      return { coords: last.coordinates, source: 'route_tail_stale' }
+    }
+  }
+
+  return null
+}
+
 const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
   const ride = await Ride.findById(rideId)
     .select('status dropoffLocation routePoints driver')
-    .populate('driver', 'location')
+    .populate('driver', 'location updatedAt')
     .lean()
   if (!ride) {
     return { allowed: false, code: 'RIDE_NOT_FOUND', message: 'Ride not found' }
@@ -2881,51 +2985,60 @@ const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
     return { allowed: true }
   }
 
-  const dropoffCoords = ride.dropoffLocation?.coordinates
-  if (!dropoffCoords || dropoffCoords.length < 2) return { allowed: true }
-
-  let currentCoords = null
-  if (ride.driver?.location?.coordinates?.length >= 2) {
-    currentCoords = ride.driver.location.coordinates
-  } else if (Array.isArray(ride.routePoints) && ride.routePoints.length > 0) {
-    const lastPoint = ride.routePoints[ride.routePoints.length - 1]
-    if (lastPoint?.coordinates?.length >= 2) currentCoords = lastPoint.coordinates
+  if (actor === 'rider') {
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=rider_blocked_in_progress`
+    )
+    return {
+      allowed: false,
+      code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS',
+      message:
+        'You cannot cancel after the trip has started. Contact support if you need help.'
+    }
   }
-  if (!currentCoords) return { allowed: true }
 
+  const dropoffCoords = ride.dropoffLocation?.coordinates
+  if (!dropoffCoords || dropoffCoords.length < 2) {
+    return { allowed: true }
+  }
+
+  const resolved = resolveInProgressCancelPositionCoords(ride)
+  if (!resolved?.coords) {
+    logger.warn(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=driver_blocked_no_position`
+    )
+    return {
+      allowed: false,
+      code: 'DRIVER_CANCEL_LOCATION_UNAVAILABLE',
+      message:
+        'Your location could not be verified. Enable GPS and try again, or move to get a signal.'
+    }
+  }
+
+  const currentCoords = resolved.coords
   const [curLng, curLat] = currentCoords
   const [dropLng, dropLat] = dropoffCoords
   const distanceKm = calculateHaversineDistance(curLat, curLng, dropLat, dropLng)
   const distanceMeters = Math.round(distanceKm * 1000)
 
   if (distanceKm > IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM) {
-    if (actor === 'driver') {
-      return {
-        allowed: true,
-        settlementMode: 'driver_cancel_in_progress_partial',
-        meta: { distanceToDropMeters: distanceMeters }
-      }
-    }
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=driver_far_from_drop distanceMeters=${distanceMeters} positionSource=${resolved.source}`
+    )
     return {
-      allowed: false,
-      code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS_GT_1KM',
-      message: 'Rider cannot cancel while trip is in progress and destination is more than 1 km away.',
-      meta: { distanceToDropMeters: distanceMeters }
+      allowed: true,
+      settlementMode: 'driver_cancel_in_progress_partial',
+      meta: { distanceToDropMeters: distanceMeters, positionSource: resolved.source }
     }
   }
 
-  if (actor === 'driver') {
-    return {
-      allowed: true,
-      settlementMode: 'driver_cancel_in_progress_full_fare',
-      meta: { distanceToDropMeters: distanceMeters }
-    }
-  }
+  logger.info(
+    `metric.in_progress_cancel_policy rideId=${rideId} event=driver_near_drop_full_fare distanceMeters=${distanceMeters} positionSource=${resolved.source}`
+  )
   return {
-    allowed: false,
-    code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS_LT_1KM',
-    message: 'Rider cannot cancel near destination while trip is in progress.',
-    meta: { distanceToDropMeters: distanceMeters }
+    allowed: true,
+    settlementMode: 'driver_cancel_in_progress_full_fare',
+    meta: { distanceToDropMeters: distanceMeters, positionSource: resolved.source }
   }
 }
 
@@ -4519,6 +4632,8 @@ module.exports = {
   clearWorkerLock,
   appendRideRoutePoint,
   evaluateRideCancellationPolicy,
+  toRiderInProgressCancelBillingSummary,
+  impliedPerKmFromBooking,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,
   riderAcknowledgeDriverInProgressCancel,

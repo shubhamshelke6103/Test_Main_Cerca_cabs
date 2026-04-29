@@ -4,6 +4,7 @@ const { redis } = require('../config/redis')
 const { Server } = require('socket.io')
 const jwt = require('jsonwebtoken')
 const logger = require('./logger')
+const { settleWalletRideCompletionFare } = require('./walletRideSettlement')
 const Driver = require('../Models/Driver/driver.model')
 const User = require('../Models/User/user.model')
 const Ride = require('../Models/Driver/ride.model')
@@ -50,6 +51,7 @@ const {
   checkAndCleanStaleRideLocks,
   clearRideRedisKeys,
   evaluateRideCancellationPolicy,
+  toRiderInProgressCancelBillingSummary,
   normalizeCancellationReasonCode,
   PICKUP_SHIFT_REASON_THRESHOLD_METERS,
   calculateHaversineDistance,
@@ -161,9 +163,14 @@ async function emitRideCancelledToClients (
   cancellationReason = ''
 ) {
   const rideId = cancelledRide._id.toString()
+  const raw = cancelledRide.toObject?.() || cancelledRide
+  const riderBilling = toRiderInProgressCancelBillingSummary(
+    raw.driverInProgressCancelSettlement
+  )
   const riderSafePayload = {
-    ...(cancelledRide.toObject?.() || cancelledRide),
+    ...raw,
     driverInProgressCancelSettlement: undefined,
+    riderInProgressCancelBilling: riderBilling,
     settlementHiddenForRider: true
   }
   ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', riderSafePayload)
@@ -1746,7 +1753,8 @@ function initializeSocket (server) {
           }, fare stored in ride: ₹${ride.fare}`
         )
 
-        // Process hybrid payment if applicable
+        // Process hybrid payment if applicable (post-ride fare delta vs wallet+gateway is phase 2;
+        // pure WALLET completion uses utils/walletRideSettlement.js)
         if (
           data.paymentMethod === 'RAZORPAY' &&
           data.walletAmountUsed &&
@@ -3247,11 +3255,7 @@ function initializeSocket (server) {
           }`
         )
 
-        // Handle payment adjustment if fare changed
-        // TODO: Implement handleFareDifference function for pre-paid payment refunds
-        // For post-ride payments (RAZORPAY with pending status), fare difference is handled
-        // by charging the final recalculated fare. For pre-paid payments (WALLET or pre-paid RAZORPAY),
-        // we should refund the difference if fare decreased or charge additional if fare increased.
+        // Handle payment adjustment if fare changed (pure WALLET settlement in wallet block below)
         if (
           Math.abs(fareDifference) > 0.01 &&
           completedRide.paymentMethod !== 'CASH'
@@ -3265,13 +3269,17 @@ function initializeSocket (server) {
             logger.info(
               `[Fare Difference] Post-ride payment - fare difference will be reflected in final payment amount`
             )
-          } else {
-            // For pre-paid payments, fare difference should be handled (refund or additional charge)
-            logger.warn(
-              `[Fare Difference] Pre-paid payment with fare difference - refund/adjustment needed but not implemented yet. Old fare: ₹${oldFare}, New fare: ₹${completedRide.fare}, Difference: ₹${fareDifference}`
+          } else if (
+            completedRide.paymentMethod === 'WALLET' &&
+            !(Number(completedRide.walletAmountUsed || 0) > 0.01)
+          ) {
+            logger.info(
+              `[Fare Difference] Pure WALLET ride ${rideId}: wallet settlement aligns held amount with final fare (₹${oldFare} → ₹${completedRide.fare}, Δ ₹${fareDifference})`
             )
-            // TODO: Implement refund logic for pre-paid payments when fare decreases
-            // TODO: Implement additional charge logic for pre-paid payments when fare increases
+          } else {
+            logger.warn(
+              `[Fare Difference] Pre-paid non-wallet path with fare difference — review payment adapter. Old fare: ₹${oldFare}, New fare: ₹${completedRide.fare}, Difference: ₹${fareDifference}, method: ${completedRide.paymentMethod}`
+            )
           }
         }
 
@@ -3428,6 +3436,19 @@ function initializeSocket (server) {
                   }
                 }
               }
+            }
+
+            // Pure WALLET: refund or charge delta vs final distance/time fare (after legacy deduct if any)
+            try {
+              const settlement = await settleWalletRideCompletionFare(completedRide)
+              logger.info(
+                `[Wallet Settlement] ride=${rideId} ${JSON.stringify(settlement)}`
+              )
+            } catch (settleErr) {
+              logger.error(
+                `[Wallet Settlement] ride=${rideId} error:`,
+                settleErr
+              )
             }
           } catch (walletError) {
             logger.error(
