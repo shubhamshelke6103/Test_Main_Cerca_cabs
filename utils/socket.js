@@ -4,6 +4,7 @@ const { redis } = require('../config/redis')
 const { Server } = require('socket.io')
 const jwt = require('jsonwebtoken')
 const logger = require('./logger')
+const { settleWalletRideCompletionFare } = require('./walletRideSettlement')
 const Driver = require('../Models/Driver/driver.model')
 const User = require('../Models/User/user.model')
 const Ride = require('../Models/Driver/ride.model')
@@ -48,7 +49,13 @@ const {
   normalizeRideAccessPreferences,
   validateAndFixDriverStatus,
   checkAndCleanStaleRideLocks,
-  clearRideRedisKeys
+  clearRideRedisKeys,
+  evaluateRideCancellationPolicy,
+  toRiderInProgressCancelBillingSummary,
+  normalizeCancellationReasonCode,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  calculateHaversineDistance,
+  IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM
 } = require('./ride_booking_functions')
 
 const Emergency = require('../Models/User/emergency.model')
@@ -69,6 +76,12 @@ const {
 
 let io
 const DISCONNECT_GRACE_MS = Number(process.env.SOCKET_DISCONNECT_GRACE_MS || 45000)
+const ENABLE_EARLY_END_CONFIRM =
+  String(process.env.FEATURE_EARLY_END_CONFIRM || 'true').toLowerCase() !==
+  'false'
+const ENABLE_SINGLE_PATH_CHAT_SEND =
+  String(process.env.FEATURE_SINGLE_PATH_CHAT_SEND || 'true').toLowerCase() !==
+  'false'
 const pendingUserDisconnects = new Map()
 const pendingDriverDisconnects = new Map()
 
@@ -150,17 +163,29 @@ async function emitRideCancelledToClients (
   cancellationReason = ''
 ) {
   const rideId = cancelledRide._id.toString()
-  ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', cancelledRide)
+  const raw = cancelledRide.toObject?.() || cancelledRide
+  const riderBilling = toRiderInProgressCancelBillingSummary(
+    raw.driverInProgressCancelSettlement
+  )
+  const riderSafePayload = {
+    ...raw,
+    driverInProgressCancelSettlement: undefined,
+    riderInProgressCancelBilling: riderBilling,
+    settlementHiddenForRider: true
+  }
+  ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', riderSafePayload)
   ioInstance.to('admin').emit('rideStatusUpdated', {
     rideId,
     status: 'cancelled',
     ride: cancelledRide
   })
   if (cancelledRide.userSocketId) {
-    ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', cancelledRide)
+    ioInstance.to(cancelledRide.userSocketId).emit('rideCancelled', riderSafePayload)
+    ioInstance.to(cancelledRide.userSocketId).emit('rideStatusUpdated', riderSafePayload)
   }
   if (cancelledRide.driverSocketId) {
     ioInstance.to(cancelledRide.driverSocketId).emit('rideCancelled', cancelledRide)
+    ioInstance.to(cancelledRide.driverSocketId).emit('rideStatusUpdated', cancelledRide)
   }
   if (cancelledRide.rider) {
     const reasonStr = String(cancellationReason || '')
@@ -1728,7 +1753,8 @@ function initializeSocket (server) {
           }, fare stored in ride: ₹${ride.fare}`
         )
 
-        // Process hybrid payment if applicable
+        // Process hybrid payment if applicable (post-ride fare delta vs wallet+gateway is phase 2;
+        // pure WALLET completion uses utils/walletRideSettlement.js)
         if (
           data.paymentMethod === 'RAZORPAY' &&
           data.walletAmountUsed &&
@@ -2319,9 +2345,16 @@ function initializeSocket (server) {
       } catch (err) {
         logger.error('rideAccepted error:', err)
 
+        const mappedCode =
+          err?.code ||
+          (String(err?.message || '').includes('queued ride')
+            ? 'ALREADY_HAS_QUEUED_RIDE'
+            : String(err?.message || '').includes('not eligible')
+              ? 'NOT_ELIGIBLE_STACKED'
+              : 'RIDE_ACCEPTANCE_FAILED')
         socket.emit('rideError', {
           message: err.message || 'Failed to accept ride',
-          code: 'RIDE_ACCEPTANCE_FAILED',
+          code: mappedCode,
           rideId
         })
       }
@@ -3094,7 +3127,9 @@ function initializeSocket (server) {
         logger.info(
           `rideCompleted event - rideId: ${data?.rideId}, fare: ${data?.fare}`
         )
-        const { rideId, fare, otp } = data || {}
+        const { rideId, fare, otp, confirmEarlyEnd, idempotencyToken } = data || {}
+        const isInProgressStatus = status =>
+          status === 'in_progress' || status === 'ongoing'
         if (!rideId) {
           logger.warn('rideCompleted: rideId is missing')
           return
@@ -3131,11 +3166,50 @@ function initializeSocket (server) {
           return
         }
 
+        if (ENABLE_EARLY_END_CONFIRM && isInProgressStatus(currentRide.status)) {
+          const rideForDistance = await Ride.findById(rideId)
+            .select('dropoffLocation routePoints driver')
+            .populate('driver', 'location')
+            .lean()
+          const drop = rideForDistance?.dropoffLocation?.coordinates
+          let cur = rideForDistance?.driver?.location?.coordinates
+          if ((!cur || cur.length < 2) && Array.isArray(rideForDistance?.routePoints)) {
+            const last = rideForDistance.routePoints[rideForDistance.routePoints.length - 1]
+            cur = last?.coordinates
+          }
+          if (drop?.length >= 2 && cur?.length >= 2) {
+            const remainingKm = calculateHaversineDistance(
+              cur[1],
+              cur[0],
+              drop[1],
+              drop[0]
+            )
+            if (remainingKm > 0.1 && !confirmEarlyEnd) {
+              logger.info(
+                `metric.ride.early_completion_confirmation_required rideId=${rideId}`
+              )
+              socket.emit('rideCompletionConfirmationRequired', {
+                code: 'EARLY_END_CONFIRM_REQUIRED',
+                message:
+                  'You have not yet reached the destination; do you still wish to end the ride?',
+                rideId: String(rideId),
+                remainingDistanceKm: Number(remainingKm.toFixed(3))
+              })
+              return
+            }
+            if (remainingKm > 0.1 && confirmEarlyEnd) {
+              logger.info(
+                `rideCompleted: early end confirmed for ride ${rideId} token=${idempotencyToken || 'none'}`
+              )
+            }
+          }
+        }
+
         // Verify OTP if provided (only if ride is still in progress)
         if (otp) {
           // Double-check ride status is still in_progress before verifying OTP
           const statusCheck = await Ride.findById(rideId).select('status')
-          if (statusCheck.status !== 'in_progress') {
+          if (!isInProgressStatus(statusCheck.status)) {
             logger.warn(`Ride ${rideId} status changed to ${statusCheck.status} before OTP verification`)
             socket.emit('rideError', { 
               message: `Ride is not in progress (status: ${statusCheck.status})` 
@@ -3160,7 +3234,11 @@ function initializeSocket (server) {
         )
 
         // completeRide internally calls updateRideEndTime and recalculates fare
-        const completedRide = await completeRide(rideId, fare)
+        const completionOptions = {}
+        if (ENABLE_EARLY_END_CONFIRM && isInProgressStatus(currentRide.status) && confirmEarlyEnd) {
+          completionOptions.earlyEndConfirmed = true
+        }
+        const completedRide = await completeRide(rideId, fare, completionOptions)
 
         logger.info(
           `Ride completed successfully - rideId: ${rideId}, finalFare stored in ride: ₹${completedRide.fare}`
@@ -3177,11 +3255,7 @@ function initializeSocket (server) {
           }`
         )
 
-        // Handle payment adjustment if fare changed
-        // TODO: Implement handleFareDifference function for pre-paid payment refunds
-        // For post-ride payments (RAZORPAY with pending status), fare difference is handled
-        // by charging the final recalculated fare. For pre-paid payments (WALLET or pre-paid RAZORPAY),
-        // we should refund the difference if fare decreased or charge additional if fare increased.
+        // Handle payment adjustment if fare changed (pure WALLET settlement in wallet block below)
         if (
           Math.abs(fareDifference) > 0.01 &&
           completedRide.paymentMethod !== 'CASH'
@@ -3195,13 +3269,17 @@ function initializeSocket (server) {
             logger.info(
               `[Fare Difference] Post-ride payment - fare difference will be reflected in final payment amount`
             )
-          } else {
-            // For pre-paid payments, fare difference should be handled (refund or additional charge)
-            logger.warn(
-              `[Fare Difference] Pre-paid payment with fare difference - refund/adjustment needed but not implemented yet. Old fare: ₹${oldFare}, New fare: ₹${completedRide.fare}, Difference: ₹${fareDifference}`
+          } else if (
+            completedRide.paymentMethod === 'WALLET' &&
+            !(Number(completedRide.walletAmountUsed || 0) > 0.01)
+          ) {
+            logger.info(
+              `[Fare Difference] Pure WALLET ride ${rideId}: wallet settlement aligns held amount with final fare (₹${oldFare} → ₹${completedRide.fare}, Δ ₹${fareDifference})`
             )
-            // TODO: Implement refund logic for pre-paid payments when fare decreases
-            // TODO: Implement additional charge logic for pre-paid payments when fare increases
+          } else {
+            logger.warn(
+              `[Fare Difference] Pre-paid non-wallet path with fare difference — review payment adapter. Old fare: ₹${oldFare}, New fare: ₹${completedRide.fare}, Difference: ₹${fareDifference}, method: ${completedRide.paymentMethod}`
+            )
           }
         }
 
@@ -3359,6 +3437,19 @@ function initializeSocket (server) {
                 }
               }
             }
+
+            // Pure WALLET: refund or charge delta vs final distance/time fare (after legacy deduct if any)
+            try {
+              const settlement = await settleWalletRideCompletionFare(completedRide)
+              logger.info(
+                `[Wallet Settlement] ride=${rideId} ${JSON.stringify(settlement)}`
+              )
+            } catch (settleErr) {
+              logger.error(
+                `[Wallet Settlement] ride=${rideId} error:`,
+                settleErr
+              )
+            }
           } catch (walletError) {
             logger.error(
               `[Wallet Payment] Error processing wallet payment for ride ${rideId}:`,
@@ -3464,6 +3555,17 @@ function initializeSocket (server) {
 
         // Redundant emit to ride room (same as Strategy 1) for compatibility
         io.to(rideRoom).emit('rideCompleted', completedRide)
+        if (ENABLE_EARLY_END_CONFIRM && confirmEarlyEnd && completedRide?.rider?._id) {
+          logger.info(`metric.ride.early_completion_confirmed rideId=${rideId}`)
+          await createNotification({
+            recipientId: completedRide.rider._id,
+            recipientModel: 'User',
+            title: 'Ride Ended Early',
+            message: 'Driver ended the ride before destination. Please complete payment.',
+            type: 'ride_completed',
+            relatedRide: rideId
+          })
+        }
       } catch (err) {
         logger.error('rideCompleted error:', err)
         socket.emit('rideError', { message: 'Failed to complete ride' })
@@ -3478,7 +3580,13 @@ function initializeSocket (server) {
         logger.info(
           `rideCancelled event - rideId: ${data?.rideId}, cancelledBy: ${data?.cancelledBy}`
         )
-        const { rideId, reason } = data || {}
+        const {
+          rideId,
+          reason,
+          reasonCode: rawReasonCode,
+          requestedPickupShiftMeters,
+          note
+        } = data || {}
         if (!rideId) {
           logger.warn('rideCancelled: rideId is missing')
           socket.emit('rideError', { message: 'Ride ID is required to cancel' })
@@ -3575,6 +3683,46 @@ function initializeSocket (server) {
           return
         }
 
+        const policy = await evaluateRideCancellationPolicy({
+          rideId,
+          actor: serverCancelledBy
+        })
+        if (!policy.allowed) {
+          socket.emit('rideError', {
+            code: policy.code,
+            message: policy.message,
+            ...(policy.meta || {})
+          })
+          return
+        }
+
+        if (
+          serverCancelledBy === 'driver' &&
+          rideForAuth.status === 'in_progress' &&
+          policy.meta?.distanceToDropMeters != null &&
+          Number(policy.meta.distanceToDropMeters) <=
+            IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM * 1000
+        ) {
+          const completedRide = await completeRide(rideId, undefined, {
+            forceFareMode: 'full_fare_to_destination',
+            completionSource: 'driver_cancel_near_destination'
+          })
+          const rideRoom = `ride_${completedRide._id}`
+          io.to(rideRoom).emit('rideCompleted', completedRide)
+          if (completedRide.userSocketId) {
+            io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+          }
+          if (completedRide.driverSocketId) {
+            io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+          }
+          socket.emit('rideError', {
+            code: 'CANCEL_CONVERTED_TO_COMPLETION',
+            message:
+              'Destination is within 1 km. Cancellation converted to ride completion with full fare.'
+          })
+          return
+        }
+
         // Validate and set cancellation reason (backward compatible)
         let cancellationReason = reason
         if (!cancellationReason || cancellationReason.trim() === '') {
@@ -3584,12 +3732,34 @@ function initializeSocket (server) {
           )
         }
 
+        const reasonCode = normalizeCancellationReasonCode(rawReasonCode)
+        const parsedShiftMeters = Number(requestedPickupShiftMeters)
+        if (
+          reasonCode === 'RIDER_PICKUP_SHIFT_TOO_FAR' &&
+          (!Number.isFinite(parsedShiftMeters) ||
+            parsedShiftMeters < PICKUP_SHIFT_REASON_THRESHOLD_METERS)
+        ) {
+          socket.emit('rideError', {
+            code: 'INVALID_PICKUP_SHIFT_DISTANCE',
+            message: `Pickup displacement reason requires at least ${PICKUP_SHIFT_REASON_THRESHOLD_METERS}m`,
+            minimumMeters: PICKUP_SHIFT_REASON_THRESHOLD_METERS
+          })
+          return
+        }
+
         // Cancel ride with reason (use server-derived cancelledBy for refund/fee logic)
         // cancelRide also calls clearRideRedisKeys automatically
         const cancelledRide = await cancelRide(
           rideId,
           serverCancelledBy,
-          cancellationReason
+          cancellationReason,
+          {
+            reasonCode,
+            requestedPickupShiftMeters: Number.isFinite(parsedShiftMeters)
+              ? parsedShiftMeters
+              : null,
+            note
+          }
         )
         logger.info(
           `Ride cancelled successfully - rideId: ${rideId}, cancelledBy: ${serverCancelledBy}, reason: ${cancellationReason}`
@@ -4068,21 +4238,14 @@ function initializeSocket (server) {
         io.to(roomName).emit('receiveMessage', populatedMessage)
         logger.info(`✅ [Socket] Message delivered to room: ${roomName}`)
 
-        // Fallback: Also try direct socket emission if room fails (for backward compatibility)
-        const receiverSocketId =
-          data.receiverModel === 'Driver'
-            ? (await Driver.findById(data.receiverId))?.socketId
-            : (await User.findById(data.receiverId))?.socketId
-
-        if (receiverSocketId) {
-          logger.info(
-            `🔌 [Socket] Fallback: Also emitting to receiver socket: ${receiverSocketId}`
-          )
-          io.to(receiverSocketId).emit('receiveMessage', populatedMessage)
-        } else {
-          logger.info(
-            `ℹ️ [Socket] Receiver socket not found (may be offline or not connected)`
-          )
+        if (!ENABLE_SINGLE_PATH_CHAT_SEND) {
+          const receiverSocketId =
+            data.receiverModel === 'Driver'
+              ? (await Driver.findById(data.receiverId))?.socketId
+              : (await User.findById(data.receiverId))?.socketId
+          if (receiverSocketId) {
+            io.to(receiverSocketId).emit('receiveMessage', populatedMessage)
+          }
         }
 
         logger.info('🔔 [Socket] Emitting unread count update...')

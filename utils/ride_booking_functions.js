@@ -21,6 +21,27 @@ const razorpay = require('razorpay')
 const {
   resolveCanonicalVehicleTier
 } = require('./vehicleServicesKeys')
+const {
+  CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  normalizeCancellationReasonCode,
+  shouldBlockCancelWithinDropRadius
+} = require('./cancellationPolicy')
+
+const BEFORE_START_FIXED_PENALTY_RUPEES = 20
+const IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM = 1
+const IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS = Number(
+  process.env.IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS || 3 * 60 * 1000
+)
+const IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS = Number(
+  process.env.IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS || 10 * 60 * 1000
+)
+const ENABLE_BEFORE_START_PARTIAL_CHARGE =
+  String(process.env.FEATURE_BEFORE_START_PARTIAL_CHARGE || 'true').toLowerCase() !==
+  'false'
+const ENABLE_IN_PROGRESS_THRESHOLD_CANCEL =
+  String(process.env.FEATURE_IN_PROGRESS_THRESHOLD_CANCEL || 'true').toLowerCase() !==
+  'false'
 
 // Initialize Razorpay instance
 // Live keys (default fallback)
@@ -538,6 +559,53 @@ const calculateFareWithTime = (basePrice, distance, duration, perKmRate, perMinu
   }
 }
 
+const DEFAULT_SUBSTANTIVE_MIN_DURATION_MIN = 2
+const DEFAULT_SUBSTANTIVE_MIN_DISTANCE_KM = 0.3
+const DEFAULT_SUBSTANTIVE_ESTIMATE_DISTANCE_FRACTION = 0.05
+
+/**
+ * Resolved substantive-trip thresholds from admin pricing (with safe defaults).
+ * @param {object} [pricingConfigurations]
+ */
+const getPricingSubstantiveThresholds = (pricingConfigurations = {}) => {
+  const pc = pricingConfigurations || {}
+  const minDuration = Number.isFinite(Number(pc.substantiveTripMinDurationMinutes))
+    ? Math.max(0, Number(pc.substantiveTripMinDurationMinutes))
+    : DEFAULT_SUBSTANTIVE_MIN_DURATION_MIN
+  const minKm = Number.isFinite(Number(pc.substantiveTripMinDistanceKm))
+    ? Math.max(0, Number(pc.substantiveTripMinDistanceKm))
+    : DEFAULT_SUBSTANTIVE_MIN_DISTANCE_KM
+  const estFrac = Number.isFinite(Number(pc.substantiveTripEstimateDistanceFraction))
+    ? Math.max(0, Number(pc.substantiveTripEstimateDistanceFraction))
+    : DEFAULT_SUBSTANTIVE_ESTIMATE_DISTANCE_FRACTION
+  return { minDuration, minKm, estFrac }
+}
+
+/**
+ * Whether an INSTANT ride consumed enough actual time and distance to apply fareAtBooking as a floor.
+ * No actual start (0 duration) or tiny distance → false (bill on actuals + minimumFare).
+ */
+const evaluateSubstantiveInstantTrip = ({
+  thresholds,
+  actualDurationMinutes,
+  actualDistanceKm,
+  estimatedDistanceKm
+}) => {
+  const { minDuration, minKm, estFrac } = thresholds
+  const estimated = Math.max(0, Number(estimatedDistanceKm) || 0)
+  const minDistanceKmRequired = Math.max(minKm, estimated * estFrac)
+  const dur = Number(actualDurationMinutes) || 0
+  const dist = Number(actualDistanceKm) || 0
+  const durationOk = dur >= minDuration
+  const distanceOk = dist >= minDistanceKmRequired
+  return {
+    substantiveTrip: durationOk && distanceOk,
+    minDistanceKmRequired,
+    durationOk,
+    distanceOk
+  }
+}
+
 const createRide = async rideData => {
   const riderId = rideData.riderId || rideData.rider
   if (!riderId) throw new Error('riderId (or rider) is required')
@@ -671,6 +739,8 @@ const createRide = async rideData => {
       throw new Error('Admin settings not found. Please configure pricing.')
     }
 
+    // INSTANT fare kernel: perKmRate + minimumFare from pricingConfigurations;
+    // tier base + perMinuteRate from settings.vehicleServices[vehicleServiceKey].
     const { perKmRate, minimumFare } = settings.pricingConfigurations
 
     // Validate service and map to vehicleService
@@ -698,7 +768,7 @@ const createRide = async rideData => {
     }
 
     // Check if vehicle service is enabled
-    if (vehicleService.enabled === true) {
+    if (vehicleService.enabled === false) {
       throw new Error(
         `Vehicle service "${vehicleServiceKey}" is currently disabled. Please select another vehicle type.`
       )
@@ -883,6 +953,7 @@ const createRide = async rideData => {
       pickupLocation: { type: 'Point', coordinates: pickupLngLat },
       dropoffLocation: { type: 'Point', coordinates: dropoffLngLat },
       fare: finalFare,
+      fareAtBooking: finalFare,
       distanceInKm: Math.round(distance * 100) / 100, // Round to 2 decimal places
       estimatedDuration: estimatedDuration || null, // Store estimated duration
       rideType: rideData.rideType || 'normal',
@@ -1429,7 +1500,7 @@ const startRide = async rideId => {
   }
 }
 
-const completeRide = async (rideId, fare) => {
+const completeRide = async (rideId, fare, options = {}) => {
   try {
     // Log fare information
     logger.info(
@@ -1463,19 +1534,40 @@ const completeRide = async (rideId, fare) => {
     )
 
     // Recalculate fare with actual duration and actual route distance
-    let recalculatedFare = fare
+    let recalculatedFare =
+      fare != null && Number.isFinite(Number(fare)) ? Number(fare) : Number(currentRide?.fare) || 0
     let fareBreakdown = null
     let oldFare = currentRide?.fare || fare || 0
+    const agreedAtBookingForComplete =
+      currentRide?.fareAtBooking != null && currentRide.fareAtBooking > 0
+        ? Number(currentRide.fareAtBooking)
+        : Number(currentRide?.fare || oldFare || 0)
 
     const actualDistanceFromRoute = calculateRouteDistanceInKm(
       currentRide?.routePoints || []
     )
-    const measuredDistanceInKm =
+    let measuredDistanceInKm =
       currentRide?.actualDistanceInKm > 0
         ? currentRide.actualDistanceInKm
         : actualDistanceFromRoute > 0
         ? actualDistanceFromRoute
         : currentRide.distanceInKm || 0
+
+    if (!measuredDistanceInKm || measuredDistanceInKm <= 0) {
+      const p = currentRide?.pickupLocation?.coordinates
+      const d = currentRide?.dropoffLocation?.coordinates
+      if (Array.isArray(p) && p.length >= 2 && Array.isArray(d) && d.length >= 2) {
+        measuredDistanceInKm = calculateHaversineDistance(
+          p[1],
+          p[0],
+          d[1],
+          d[0]
+        )
+        logger.info(
+          `[Fare Tracking] measuredDistance was 0; using haversine pickup→drop ${measuredDistanceInKm}km for rideId ${rideId}`
+        )
+      }
+    }
 
     await Ride.findByIdAndUpdate(rideId, {
       actualDistanceInKm: measuredDistanceInKm,
@@ -1484,18 +1576,67 @@ const completeRide = async (rideId, fare) => {
         currentRide.estimatedDistanceInKm || currentRide.distanceInKm || measuredDistanceInKm
     })
 
-    try {
-      const recalculated = await recalculateRideFare(rideId)
-      recalculatedFare = recalculated.finalFare
-      fareBreakdown = recalculated
+    if (options?.forceFareMode === 'full_fare_to_destination') {
       logger.info(
-        `[Fare Recalculation] Fare recalculated - rideId: ${rideId}, oldFare: ₹${oldFare}, newFare: ₹${recalculatedFare}`
+        `[Fare Recalculation] forceFareMode=full_fare_to_destination for rideId ${rideId}; skipping recalculation`
       )
-    } catch (recalcError) {
-      logger.warn(
-        `[Fare Recalculation] Failed to recalculate fare for rideId ${rideId}, using provided fare: ${recalcError.message}`
-      )
-      // Use provided fare if recalculation fails
+    } else {
+      try {
+        const recalculated = await recalculateRideFare(rideId)
+        recalculatedFare = recalculated.finalFare
+        fareBreakdown = recalculated
+        logger.info(
+          `[Fare Recalculation] Fare recalculated - rideId: ${rideId}, oldFare: ₹${oldFare}, newFare: ₹${recalculatedFare}`
+        )
+      } catch (recalcError) {
+        logger.warn(
+          `[Fare Recalculation] Failed to recalculate fare for rideId ${rideId}, using provided fare: ${recalcError.message}`
+        )
+        // Use provided fare if recalculation fails
+      }
+    }
+
+    if (
+      !fareBreakdown &&
+      agreedAtBookingForComplete > 0 &&
+      recalculatedFare < agreedAtBookingForComplete
+    ) {
+      try {
+        const Settings = require('../Models/Admin/settings.modal.js')
+        const settings = await Settings.findOne()
+        const thresholds = getPricingSubstantiveThresholds(settings?.pricingConfigurations)
+        const estimatedKmForSubstantive =
+          currentRide.estimatedDistanceInKm != null &&
+          Number(currentRide.estimatedDistanceInKm) > 0
+            ? Number(currentRide.estimatedDistanceInKm)
+            : Number(currentRide.distanceInKm) || measuredDistanceInKm || 0
+        const substantiveEval = evaluateSubstantiveInstantTrip({
+          thresholds,
+          actualDurationMinutes: actualDuration,
+          actualDistanceKm: measuredDistanceInKm,
+          estimatedDistanceKm: estimatedKmForSubstantive
+        })
+        const instantBooking =
+          currentRide.bookingType === 'INSTANT' || !currentRide.bookingType
+        if (instantBooking && substantiveEval.substantiveTrip) {
+          logger.info('fare.lineage', {
+            rideId: String(rideId),
+            phase: 'completeRide_floor_recalc_failed',
+            substantiveTrip: true,
+            quoteFloorApplied: true,
+            recalculatedFare,
+            agreedAtBooking: agreedAtBookingForComplete,
+            actualDistanceKm: measuredDistanceInKm,
+            estimatedDistanceInKm: estimatedKmForSubstantive,
+            actualDurationMinutes: actualDuration
+          })
+          recalculatedFare = agreedAtBookingForComplete
+        }
+      } catch (floorErr) {
+        logger.warn(
+          `[Fare Recalculation] completeRide quote floor skipped (settings): ${floorErr.message}`
+        )
+      }
     }
 
     // Update ride with recalculated fare, fare breakdown, end time, duration, and status
@@ -1504,6 +1645,9 @@ const completeRide = async (rideId, fare) => {
       fare: recalculatedFare,
       actualEndTime: endTime,
       actualDuration: actualDuration
+    }
+    if (options?.completionSource) {
+      updateData.completionSource = options.completionSource
     }
     
     if (fareBreakdown) {
@@ -1515,7 +1659,7 @@ const completeRide = async (rideId, fare) => {
         fareAfterMinimum: fareBreakdown.fareAfterMinimum,
         discount: fareBreakdown.discount,
         pickupWaitCharge: fareBreakdown.pickupWaitCharge || 0,
-        finalFare: fareBreakdown.finalFare
+        finalFare: recalculatedFare
       }
       // Update discount if promo code was re-applied
       if (fareBreakdown.discount > 0) {
@@ -1583,6 +1727,8 @@ const completeRide = async (rideId, fare) => {
       finalFare: recalculatedFare,
       minimumFareApplied: recalculatedFare > (fareBreakdown?.subtotal || 0),
       oldFare,
+      fareAtBooking: currentRide?.fareAtBooking,
+      agreedAtBooking: agreedAtBookingForComplete,
       fareDifference: recalculatedFare - oldFare,
       timestamp: new Date().toISOString()
     })
@@ -1679,18 +1825,24 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
     let cancellationFee = 0
     const shouldApplyCancellationFee = 
       // Fee applies only if:
-      // - Ride has not started yet (startOtpVerifiedAt is null)
+      // - Original ride status is 'accepted' or 'arrived' (driver was assigned)
       // - AND cancelled by rider (not system or driver)
       // - AND not a system cancellation reason
-      !ride.startOtpVerifiedAt &&
+      (originalStatus === 'accepted' || originalStatus === 'arrived') &&
       cancelledBy === 'rider' &&
       cancellationReason !== 'NO_DRIVER_FOUND' &&
       cancellationReason !== 'NO_DRIVER_ACCEPTED_TIMEOUT' &&
       cancellationReason !== 'ALL_DRIVERS_REJECTED'
 
     if (shouldApplyCancellationFee) {
-      cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
-      logger.info(`processWalletRefund: Cancellation fee applies - ₹${cancellationFee} (ride not started, cancelled by: ${cancelledBy})`)
+      const rawFee = Number(settings?.pricingConfigurations?.cancellationFees)
+      cancellationFee = Number.isFinite(rawFee) && rawFee >= 0 ? rawFee : 0
+      if (!Number.isFinite(rawFee) || rawFee < 0) {
+        logger.warn(
+          'processWalletRefund: cancellationFees missing or invalid in settings; using 0'
+        )
+      }
+      logger.info(`processWalletRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
     } else {
       logger.info(`processWalletRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
     }
@@ -1854,7 +2006,13 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
       cancellationReason !== 'ALL_DRIVERS_REJECTED'
 
     if (shouldApplyCancellationFee) {
-      cancellationFee = settings?.pricingConfigurations?.cancellationFees || 50 // Default ₹50 if not configured
+      const rawFeeRz = Number(settings?.pricingConfigurations?.cancellationFees)
+      cancellationFee = Number.isFinite(rawFeeRz) && rawFeeRz >= 0 ? rawFeeRz : 0
+      if (!Number.isFinite(rawFeeRz) || rawFeeRz < 0) {
+        logger.warn(
+          'processRazorpayRefund: cancellationFees missing or invalid in settings; using 0'
+        )
+      }
       logger.info(`processRazorpayRefund: Cancellation fee applies - ₹${cancellationFee} (original ride status: ${originalStatus}, cancelled by: ${cancelledBy})`)
     } else {
       logger.info(`processRazorpayRefund: No cancellation fee - original ride status: ${originalStatus}, cancelled by: ${cancelledBy}, reason: ${cancellationReason || 'none'}`)
@@ -2023,6 +2181,159 @@ const processRazorpayRefund = async (ride, originalStatus, cancelledBy, cancella
 }
 
 // --- Driver in-progress cancellation settlement ---------------------------------
+function resolveRideCurrentCoordinates (ride) {
+  if (ride?.driver?.location?.coordinates?.length >= 2) {
+    return ride.driver.location.coordinates
+  }
+  if (Array.isArray(ride?.routePoints) && ride.routePoints.length > 0) {
+    const last = ride.routePoints[ride.routePoints.length - 1]
+    if (last?.coordinates?.length >= 2) {
+      return last.coordinates
+    }
+  }
+  return null
+}
+
+async function getPerKmRateFromSettings () {
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  const perKmRate = Number(settings?.pricingConfigurations?.perKmRate)
+  if (!Number.isFinite(perKmRate) || perKmRate < 0) {
+    throw new Error('Invalid perKmRate in admin settings')
+  }
+  return perKmRate
+}
+
+async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
+  const perKmRate = await getPerKmRateFromSettings()
+  const pickupCoords = originalRide?.pickupLocation?.coordinates
+  const currentCoords = resolveRideCurrentCoordinates(originalRide)
+
+  let travelledDistanceKm = 0
+  if (
+    Array.isArray(pickupCoords) &&
+    pickupCoords.length >= 2 &&
+    Array.isArray(currentCoords) &&
+    currentCoords.length >= 2
+  ) {
+    travelledDistanceKm = calculateHaversineDistance(
+      pickupCoords[1],
+      pickupCoords[0],
+      currentCoords[1],
+      currentCoords[0]
+    )
+  }
+
+  const travelledAmount = roundMoney(travelledDistanceKm * perKmRate)
+  const fixedPenaltyAmount = roundMoney(BEFORE_START_FIXED_PENALTY_RUPEES)
+  const totalCharge = roundMoney(travelledAmount + fixedPenaltyAmount)
+
+  return {
+    travelledDistanceKm: roundMoney(travelledDistanceKm),
+    perKmRateUsed: perKmRate,
+    travelledAmount,
+    fixedPenaltyAmount,
+    totalCharge,
+    walletDebited: 0,
+    outstandingDue: totalCharge,
+    driverCoordsAtCancel: currentCoords,
+    riderPaymentStatus: totalCharge > 0 ? 'pending' : 'none_due',
+    settlementVersion: 1,
+    computedAt: new Date(),
+    computedByFlow: 'rider_cancel_before_start_otp',
+    idempotencyToken: `before-start-${originalRide._id}`
+  }
+}
+
+async function applyWalletAndOutstandingForBeforeStartCancel (rideId, riderId, settlement) {
+  const due = Number(settlement?.totalCharge || 0)
+  if (due <= 0) {
+    return {
+      walletDebited: 0,
+      outstandingDue: 0,
+      riderPaymentStatus: 'none_due'
+    }
+  }
+
+  const user = await User.findById(riderId)
+  if (!user) {
+    throw new Error('User not found')
+  }
+
+  const balanceBefore = Number(user.walletBalance || 0)
+  const walletDebit = roundMoney(Math.min(balanceBefore, due))
+  const outstandingDue = roundMoney(Math.max(0, due - walletDebit))
+
+  if (walletDebit > 0) {
+    const existingTxn = await WalletTransaction.findOne({
+      relatedRide: rideId,
+      transactionType: 'CANCELLATION_FEE',
+      status: 'COMPLETED',
+      'metadata.beforeStartOtpRiderCancel': true
+    })
+
+    if (!existingTxn) {
+      const balanceAfter = roundMoney(balanceBefore - walletDebit)
+      user.walletBalance = balanceAfter
+      await user.save()
+      await WalletTransaction.create({
+        user: riderId,
+        transactionType: 'CANCELLATION_FEE',
+        amount: walletDebit,
+        balanceBefore,
+        balanceAfter,
+        relatedRide: rideId,
+        paymentMethod: 'WALLET',
+        status: 'COMPLETED',
+        description: `Before-start cancellation charge ₹${walletDebit}`,
+        metadata: {
+          beforeStartOtpRiderCancel: true,
+          totalCharge: due
+        }
+      })
+    }
+  }
+
+  return {
+    walletDebited: walletDebit,
+    outstandingDue,
+    riderPaymentStatus:
+      outstandingDue > 0
+        ? walletDebit > 0
+          ? 'partially_paid'
+          : 'pending'
+        : 'none_due'
+  }
+}
+
+async function creditDriverForBeforeStartCancel (ride, settlement) {
+  const driverAmount = roundMoney(Number(settlement?.travelledAmount || 0))
+  if (driverAmount <= 0) return
+
+  const driverId = ride.driver?._id || ride.driver
+  const riderId = ride.rider?._id || ride.rider
+  if (!driverId || !riderId) return
+
+  const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
+  await AdminEarnings.findOneAndUpdate(
+    { rideId: ride._id },
+    {
+      rideId: ride._id,
+      driverId,
+      riderId,
+      grossFare: driverAmount,
+      platformFee: 0,
+      driverEarning: driverAmount,
+      rideDate: new Date(),
+      vehicleSnapshot,
+      paymentStatus: 'completed',
+      settlementType: 'rider_cancel_before_start_otp',
+      vendorFineCredit: 0,
+      riderPenaltyAmount: roundMoney(Number(settlement?.fixedPenaltyAmount || 0))
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  )
+}
 
 /**
  * Rides where driver cancelled in_progress and rider still owes additionalDue (ledger not finalized).
@@ -2149,14 +2460,63 @@ async function getDriverVehicleSnapshotForEarnings (driverId) {
 }
 
 /**
+ * Rider-visible billing breakdown (no driver coordinates or internal ledger fields).
+ */
+function toRiderInProgressCancelBillingSummary (settlement) {
+  if (!settlement || typeof settlement !== 'object') return null
+  return {
+    partialDistanceKm: settlement.partialDistanceKm,
+    perKmRateUsed: settlement.perKmRateUsed,
+    perKmRateSource: settlement.perKmRateSource || 'admin',
+    driverPartialAmount: settlement.driverPartialAmount,
+    riderPenaltyAmount: settlement.riderPenaltyAmount,
+    riderTotalCharge: settlement.riderTotalCharge,
+    prepaidTotal: settlement.prepaidTotal,
+    additionalDue: settlement.additionalDue,
+    refundDue: settlement.refundDue,
+    riderPaymentStatus: settlement.riderPaymentStatus,
+    billingNote: 'distance_based_partial',
+    settlementVersion: settlement.settlementVersion
+  }
+}
+
+/**
+ * Implied ₹/km from the booked trip when available; else null.
+ */
+function impliedPerKmFromBooking (ride) {
+  const fare = Number(ride.fareAtBooking ?? ride.fare)
+  const estKm = Number(ride.estimatedDistanceInKm)
+  if (!Number.isFinite(fare) || fare <= 0) return null
+  if (!Number.isFinite(estKm) || estKm <= 0) return null
+  return fare / estKm
+}
+
+/**
  * Build settlement object for driver cancelling while ride is in_progress.
- * Plan A: driver gets full perKmRate × km; penalty to platform or vendor.
+ * Partial leg: per-km uses booking-implied rate when valid, else admin perKmRate.
  */
 async function computeDriverInProgressCancelSettlement (originalRide) {
   const Settings = require('../Models/Admin/settings.modal.js')
   const settings = await Settings.findOne()
-  const penalty = settings?.pricingConfigurations?.cancellationFees ?? 50
-  const perKmRate = settings?.pricingConfigurations?.perKmRate ?? 12
+  if (!settings?.pricingConfigurations) {
+    throw new Error('Admin pricing settings not found')
+  }
+  const penalty = Number(settings.pricingConfigurations.cancellationFees)
+  const adminPerKm = Number(settings.pricingConfigurations.perKmRate)
+  if (!Number.isFinite(penalty) || penalty < 0) {
+    throw new Error('Invalid cancellationFees in admin settings')
+  }
+  if (!Number.isFinite(adminPerKm) || adminPerKm < 0) {
+    throw new Error('Invalid perKmRate in admin settings')
+  }
+
+  const implied = impliedPerKmFromBooking(originalRide)
+  let perKmRate = adminPerKm
+  let perKmRateSource = 'admin'
+  if (implied != null && Number.isFinite(implied) && implied > 0) {
+    perKmRate = implied
+    perKmRateSource = 'booking_implied'
+  }
 
   const driverDoc =
     originalRide.driver && originalRide.driver._id
@@ -2198,6 +2558,7 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
   return {
     partialDistanceKm: roundMoney(partialKm),
     perKmRateUsed: perKmRate,
+    perKmRateSource,
     driverPartialAmount,
     riderPenaltyAmount,
     riderTotalCharge,
@@ -2557,7 +2918,136 @@ async function riderVerifyRazorpayDriverInProgressCancel (rideId, userId, razorp
   return finalizeDriverInProgressCancelLedger(rideId)
 }
 
-const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
+/**
+ * Resolve driver position for in-progress cancel threshold (driver → dropoff distance).
+ * Prefers fresh driver GPS, then fresh route tail; falls back to stale driver/route with metrics.
+ */
+function resolveInProgressCancelPositionCoords (ride) {
+  const now = Date.now()
+  const driverUpdatedAt = ride.driver?.updatedAt
+    ? new Date(ride.driver.updatedAt).getTime()
+    : 0
+
+  if (
+    ride.driver?.location?.coordinates?.length >= 2 &&
+    driverUpdatedAt > 0 &&
+    now - driverUpdatedAt <= IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS
+  ) {
+    return {
+      coords: ride.driver.location.coordinates,
+      source: 'driver_gps_fresh'
+    }
+  }
+
+  const pts = Array.isArray(ride.routePoints) ? ride.routePoints : []
+  if (pts.length > 0) {
+    const last = pts[pts.length - 1]
+    const rec = last?.recordedAt ? new Date(last.recordedAt).getTime() : 0
+    if (
+      last?.coordinates?.length >= 2 &&
+      rec > 0 &&
+      now - rec <= IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS
+    ) {
+      return { coords: last.coordinates, source: 'route_tail_fresh' }
+    }
+  }
+
+  if (ride.driver?.location?.coordinates?.length >= 2) {
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${ride._id} positionSource=stale_driver_gps`
+    )
+    return { coords: ride.driver.location.coordinates, source: 'driver_gps_stale' }
+  }
+
+  if (pts.length > 0) {
+    const last = pts[pts.length - 1]
+    if (last?.coordinates?.length >= 2) {
+      logger.info(
+        `metric.in_progress_cancel_policy rideId=${ride._id} positionSource=stale_route_tail`
+      )
+      return { coords: last.coordinates, source: 'route_tail_stale' }
+    }
+  }
+
+  return null
+}
+
+const evaluateRideCancellationPolicy = async ({ rideId, actor }) => {
+  const ride = await Ride.findById(rideId)
+    .select('status dropoffLocation routePoints driver')
+    .populate('driver', 'location updatedAt')
+    .lean()
+  if (!ride) {
+    return { allowed: false, code: 'RIDE_NOT_FOUND', message: 'Ride not found' }
+  }
+  if (ride.status !== 'in_progress') return { allowed: true }
+  if (!ENABLE_IN_PROGRESS_THRESHOLD_CANCEL) {
+    return { allowed: true }
+  }
+
+  if (actor === 'rider') {
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=rider_blocked_in_progress`
+    )
+    return {
+      allowed: false,
+      code: 'RIDER_CANCEL_BLOCKED_IN_PROGRESS',
+      message:
+        'You cannot cancel after the trip has started. Contact support if you need help.'
+    }
+  }
+
+  const dropoffCoords = ride.dropoffLocation?.coordinates
+  if (!dropoffCoords || dropoffCoords.length < 2) {
+    return { allowed: true }
+  }
+
+  const resolved = resolveInProgressCancelPositionCoords(ride)
+  if (!resolved?.coords) {
+    logger.warn(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=driver_blocked_no_position`
+    )
+    return {
+      allowed: false,
+      code: 'DRIVER_CANCEL_LOCATION_UNAVAILABLE',
+      message:
+        'Your location could not be verified. Enable GPS and try again, or move to get a signal.'
+    }
+  }
+
+  const currentCoords = resolved.coords
+  const [curLng, curLat] = currentCoords
+  const [dropLng, dropLat] = dropoffCoords
+  const distanceKm = calculateHaversineDistance(curLat, curLng, dropLat, dropLng)
+  const distanceMeters = Math.round(distanceKm * 1000)
+
+  if (distanceKm > IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM) {
+    logger.info(
+      `metric.in_progress_cancel_policy rideId=${rideId} event=driver_far_from_drop distanceMeters=${distanceMeters} positionSource=${resolved.source}`
+    )
+    return {
+      allowed: true,
+      settlementMode: 'driver_cancel_in_progress_partial',
+      meta: { distanceToDropMeters: distanceMeters, positionSource: resolved.source }
+    }
+  }
+
+  logger.info(
+    `metric.in_progress_cancel_policy rideId=${rideId} event=driver_near_drop_full_fare distanceMeters=${distanceMeters} positionSource=${resolved.source}`
+  )
+  return {
+    allowed: true,
+    settlementMode: 'driver_cancel_in_progress_full_fare',
+    meta: { distanceToDropMeters: distanceMeters, positionSource: resolved.source }
+  }
+}
+
+const cancelRide = async (
+  rideId,
+  cancelledBy,
+  cancellationReason = null,
+  cancellationMeta = {}
+) => {
   try {
     // Fetch ride BEFORE updating to get original status for refund calculation
     const originalRide = await Ride.findById(rideId).populate('driver rider')
@@ -2580,6 +3070,7 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
 
     let skipStandardRefunds = false
     let driverInProgressSettlementSnapshot = null
+    let beforeStartSettlementSnapshot = null
 
     if (normalizedCancelledBy === 'driver' && originalStatus === 'in_progress') {
       if (
@@ -2594,19 +3085,65 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
       skipStandardRefunds = true
     }
 
+    const isBeforeStartOtpWindow = ['accepted', 'arrived', 'upcoming'].includes(
+      originalStatus
+    )
+    if (
+      ENABLE_BEFORE_START_PARTIAL_CHARGE &&
+      normalizedCancelledBy === 'rider' &&
+      isBeforeStartOtpWindow
+    ) {
+      beforeStartSettlementSnapshot =
+        await buildBeforeStartOtpRiderCancelSettlement(originalRide)
+      const riderId = originalRide.rider?._id || originalRide.rider
+      const walletResult = await applyWalletAndOutstandingForBeforeStartCancel(
+        originalRide._id,
+        riderId,
+        beforeStartSettlementSnapshot
+      )
+      beforeStartSettlementSnapshot = {
+        ...beforeStartSettlementSnapshot,
+        ...walletResult
+      }
+      logger.info(
+        `metric.ride.before_start_cancel_settlement rideId=${rideId} total=${beforeStartSettlementSnapshot.totalCharge} walletDebited=${beforeStartSettlementSnapshot.walletDebited} outstanding=${beforeStartSettlementSnapshot.outstandingDue}`
+      )
+      skipStandardRefunds = true
+    }
+
     const updateData = {
       status: 'cancelled',
       cancelledBy: normalizedCancelledBy
     }
+    updateData.cancellationReasonCode = normalizeCancellationReasonCode(
+      cancellationMeta?.reasonCode
+    )
 
     // Add cancellation reason if provided
     if (cancellationReason) {
       updateData.cancellationReason = cancellationReason
     }
+    if (cancellationMeta?.requestedPickupShiftMeters || cancellationMeta?.note) {
+      const shiftMeters = Number(cancellationMeta?.requestedPickupShiftMeters)
+      updateData.cancellationContext = {
+        requestedPickupShiftMeters: Number.isFinite(shiftMeters)
+          ? shiftMeters
+          : null,
+        note:
+          typeof cancellationMeta?.note === 'string' &&
+          cancellationMeta.note.trim()
+            ? cancellationMeta.note.trim().slice(0, 500)
+            : null
+      }
+    }
 
     if (driverInProgressSettlementSnapshot) {
       updateData.driverInProgressCancelSettlement = driverInProgressSettlementSnapshot
       updateData.cancellationFee = driverInProgressSettlementSnapshot.riderPenaltyAmount
+    }
+    if (beforeStartSettlementSnapshot) {
+      updateData.beforeStartCancelSettlement = beforeStartSettlementSnapshot
+      updateData.cancellationFee = beforeStartSettlementSnapshot.fixedPenaltyAmount
     }
 
     const ride = await Ride.findByIdAndUpdate(rideId, updateData, {
@@ -2702,6 +3239,8 @@ const cancelRide = async (rideId, cancelledBy, cancellationReason = null) => {
           if (driverInProgressSettlementSnapshot.additionalDue <= 0) {
             await finalizeDriverInProgressCancelLedger(rideId)
           }
+        } else if (skipStandardRefunds && beforeStartSettlementSnapshot) {
+          await creditDriverForBeforeStartCancel(ride, beforeStartSettlementSnapshot)
         } else if (!skipStandardRefunds) {
 
         // Check for Razorpay payment (either pure RAZORPAY or hybrid with Razorpay portion)
@@ -2815,10 +3354,10 @@ const verifyStartOtp = async (rideId, providedOtp) => {
     const ride = await Ride.findById(rideId)
     if (!ride) throw new Error('Ride not found')
 
-    // Allow OTP verification when ride is in 'accepted' or 'arrived' status
+    // Allow OTP verification when ride is in accepted lifecycle states before trip start.
     // Driver can verify OTP after marking as arrived
-    if (ride.status !== 'accepted' && ride.status !== 'arrived') {
-      throw new Error('Ride is not in accepted or arrived state')
+    if (ride.status !== 'accepted' && ride.status !== 'arrived' && ride.status !== 'upcoming') {
+      throw new Error('Ride is not in accepted, arrived, or upcoming state')
     }
 
     if (ride.startOtp !== providedOtp) {
@@ -3116,8 +3655,51 @@ const recalculateRideFare = async (rideId) => {
       }
     }
 
-    const tripFinalAfterCap = Math.round(finalFare * 100) / 100
+    let tripFinalAfterCap = Math.round(finalFare * 100) / 100
     const pickupWaitCharge = roundMoney(ride.pickupWait?.totalPickupWaitCharge || 0)
+
+    const agreedTripFare =
+      ride.fareAtBooking != null && ride.fareAtBooking > 0
+        ? Number(ride.fareAtBooking)
+        : Number(ride.fare || 0)
+
+    const thresholds = getPricingSubstantiveThresholds(settings.pricingConfigurations)
+    const estimatedKmForSubstantive =
+      ride.estimatedDistanceInKm != null && Number(ride.estimatedDistanceInKm) > 0
+        ? Number(ride.estimatedDistanceInKm)
+        : 0
+    const substantiveEval = evaluateSubstantiveInstantTrip({
+      thresholds,
+      actualDurationMinutes: actualDuration,
+      actualDistanceKm: distance,
+      estimatedDistanceKm: estimatedKmForSubstantive
+    })
+    const instantBooking = ride.bookingType === 'INSTANT' || !ride.bookingType
+    const quoteFloorEligible =
+      instantBooking && agreedTripFare > 0 && tripFinalAfterCap < agreedTripFare
+    const quoteFloorApplied = quoteFloorEligible && substantiveEval.substantiveTrip
+    const tripFareBeforeQuoteFloor = tripFinalAfterCap
+    if (quoteFloorApplied) {
+      tripFinalAfterCap = agreedTripFare
+    }
+    logger.info('fare.lineage', {
+      rideId: String(rideId),
+      phase: 'recalculateRideFare_instant_quote_floor',
+      substantiveTrip: substantiveEval.substantiveTrip,
+      quoteFloorEligible,
+      quoteFloorApplied,
+      actualDistanceKm: distance,
+      estimatedDistanceInKm: estimatedKmForSubstantive,
+      actualDurationMinutes: actualDuration,
+      estimatedDurationMinutes: originalEstimatedDuration,
+      agreedTripFare,
+      tripFareBeforeQuoteFloor,
+      tripFareAfterQuoteFloor: tripFinalAfterCap,
+      minDistanceKmRequired: substantiveEval.minDistanceKmRequired,
+      durationOk: substantiveEval.durationOk,
+      distanceOk: substantiveEval.distanceOk
+    })
+
     const finalFareWithWait = roundMoney(tripFinalAfterCap + pickupWaitCharge)
 
     return {
@@ -4003,6 +4585,8 @@ module.exports = {
   getDriverRideAccessProfile,
   driverCanAcceptRideType,
   calculateFareWithTime,
+  getPricingSubstantiveThresholds,
+  evaluateSubstantiveInstantTrip,
   calculateHaversineDistance,
   createRide,
   assignDriverToRide,
@@ -4047,11 +4631,20 @@ module.exports = {
   clearRideLock,
   clearWorkerLock,
   appendRideRoutePoint,
+  evaluateRideCancellationPolicy,
+  toRiderInProgressCancelBillingSummary,
+  impliedPerKmFromBooking,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,
   riderAcknowledgeDriverInProgressCancel,
   riderConfirmCashDriverInProgressCancel,
   riderPayWalletDriverInProgressCancel,
   riderVerifyRazorpayDriverInProgressCancel,
-  getPendingDriverInProgressCancelSettlements
+  getPendingDriverInProgressCancelSettlements,
+  normalizeCancellationReasonCode,
+  shouldBlockCancelWithinDropRadius,
+  CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
+  PICKUP_SHIFT_REASON_THRESHOLD_METERS,
+  BEFORE_START_FIXED_PENALTY_RUPEES,
+  IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM
 }

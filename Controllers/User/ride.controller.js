@@ -1438,20 +1438,22 @@ const calculateFare = async (req, res) => {
       dropoffLng
     )
 
-    // Estimate duration if not provided (using average speed of 35 km/h for city driving)
-    let duration = estimatedDuration
-    if (!duration || duration <= 0) {
-      const averageSpeedKmh = 35.0
-      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
-    }
-
-    // Fetch admin settings
     const settings = await Settings.findOne()
     if (!settings) {
       return res.status(500).json({
         success: false,
         message: 'Admin settings not found'
       })
+    }
+
+    let duration = estimatedDuration
+    if (!duration || duration <= 0) {
+      const pc = settings.pricingConfigurations || {}
+      const averageSpeedKmh =
+        Number(pc.estimatedAverageSpeedKmh) > 0
+          ? Number(pc.estimatedAverageSpeedKmh)
+          : 35
+      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
     }
 
     const rideType = String(req.body.rideType || 'normal').toLowerCase()
@@ -1718,20 +1720,22 @@ const calculateAllFares = async (req, res) => {
       dropoffLng
     )
 
-    // Estimate duration if not provided (using average speed of 35 km/h for city driving)
-    let duration = estimatedDuration
-    if (!duration || duration <= 0) {
-      const averageSpeedKmh = 35.0
-      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
-    }
-
-    // Fetch admin settings
     const settings = await Settings.findOne()
     if (!settings) {
       return res.status(500).json({
         success: false,
         message: 'Admin settings not found'
       })
+    }
+
+    let duration = estimatedDuration
+    if (!duration || duration <= 0) {
+      const pc = settings.pricingConfigurations || {}
+      const averageSpeedKmh =
+        Number(pc.estimatedAverageSpeedKmh) > 0
+          ? Number(pc.estimatedAverageSpeedKmh)
+          : 35
+      duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
     }
 
     const { perKmRate, minimumFare, platformFees, driverCommissions } =
@@ -2379,6 +2383,56 @@ const getSharedLiveLocation = async (req, res) => {
   }
 }
 
+/**
+ * GET /rides/:id/rider-in-progress-cancel-billing?userId=
+ * Rider-safe billing summary for driver-cancelled in-progress trips (socket may omit details).
+ */
+const getRiderInProgressCancelBilling = async (req, res) => {
+  try {
+    const rideId = req.params.id
+    const userId = req.query.userId
+    if (!mongoose.Types.ObjectId.isValid(rideId)) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const ride = await Ride.findById(rideId)
+      .select(
+        'rider status cancelledBy driverInProgressCancelSettlement cancellationReason'
+      )
+      .lean()
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (String(ride.rider) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' })
+    }
+    if (ride.status !== 'cancelled' || ride.cancelledBy !== 'driver') {
+      return res.status(200).json({
+        success: true,
+        data: {
+          summary: null,
+          cancellationReason: ride.cancellationReason || null
+        }
+      })
+    }
+    const summary = rideBookingFunctions.toRiderInProgressCancelBillingSummary(
+      ride.driverInProgressCancelSettlement
+    )
+    return res.status(200).json({
+      success: true,
+      data: {
+        summary,
+        cancellationReason: ride.cancellationReason || null
+      }
+    })
+  } catch (error) {
+    logger.error('getRiderInProgressCancelBilling:', error)
+    res.status(500).json({ success: false, message: error.message })
+  }
+}
+
 const {
   riderAcknowledgeDriverInProgressCancel,
   riderConfirmCashDriverInProgressCancel,
@@ -2490,6 +2544,7 @@ module.exports = {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
+  getRiderInProgressCancelBilling,
   updateRideDestination,
   getDestinationQuote,
   acknowledgeDriverCancelSettlement,

@@ -404,6 +404,22 @@ requested → accepted → arrived → in_progress → completed
 
 **Cancellation Fee:** ₹0 (system cancellation)
 
+### In-progress cancellation (driver, 1 km rule)
+
+**Feature flag:** `FEATURE_IN_PROGRESS_THRESHOLD_CANCEL` (default: on; set to `false` to disable distance gate).
+
+**Distance for policy:** Haversine straight-line distance from the driver’s resolved position to the ride **drop-off** (not route length). Position resolution prefers a fresh driver GPS fix (`driver.updatedAt` within `IN_PROGRESS_DRIVER_LOC_MAX_AGE_MS`, default 3 minutes), else the latest **route** point with `recordedAt` within `IN_PROGRESS_ROUTE_POINT_MAX_AGE_MS` (default 10 minutes), else stale driver GPS or stale route tail (logged as `metric.in_progress_cancel_policy`).
+
+**Rider:** Cannot cancel while `status === 'in_progress'` when the feature is enabled (`rideError` code `RIDER_CANCEL_BLOCKED_IN_PROGRESS`).
+
+**Driver farther than 1 km from drop-off:** `rideCancelled` is processed; `cancelRide` stores `driverInProgressCancelSettlement`. Partial charge uses pickup→driver distance × per-km rate (**booking-implied** ₹/km from `fareAtBooking`/`estimatedDistanceInKm` when valid, else admin `perKmRate`) plus admin cancellation penalty. The rider socket payload includes **`riderInProgressCancelBilling`** (safe summary, no coordinates). Full internal settlement remains on the driver payload only.
+
+**Driver within 1 km of drop-off:** The socket handler converts the request to **`completeRide`** with `forceFareMode: 'full_fare_to_destination'` and `completionSource: 'driver_cancel_near_destination'`. Clients receive **`rideCompleted`** (full trip fare). The initiating driver socket may also receive `rideError` with code **`CANCEL_CONVERTED_TO_COMPLETION`** (informational).
+
+**REST (rider):** `GET /api/rides/:id/rider-in-progress-cancel-billing?userId=` returns the same billing summary after a driver-cancelled ride (for app resume / pull if the socket payload was missed).
+
+**Manual QA matrix:** `in_progress` × (driver cancel far / driver cancel near) × (rider cancel attempt → blocked) × (prepaid under/over partial charge) × (wallet / Razorpay / hybrid).
+
 ### Scenario 4: All Drivers Reject
 
 **Trigger:** All notified drivers reject the ride

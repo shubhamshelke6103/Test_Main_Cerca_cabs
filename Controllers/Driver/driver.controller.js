@@ -1978,7 +1978,8 @@ const rejectAcceptedRide = async (req, res) => {
         const cancelledRide = await cancelRideFromBooking(
             rideId,
             'driver',
-            cancellationReason
+            cancellationReason,
+            { reasonCode: 'DRIVER_WITHDREW_BEFORE_ARRIVAL' }
         );
 
         try {

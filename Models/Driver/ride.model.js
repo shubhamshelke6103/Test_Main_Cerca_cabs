@@ -100,6 +100,8 @@ const rideSchema = new mongoose.Schema(
     userSocketId: String,
 
     fare: Number,
+    /** Agreed trip fare at booking (INSTANT); completion recalc must not collect below this + additive wait. */
+    fareAtBooking: { type: Number, default: null },
     estimatedDistanceInKm: Number,
     actualDistanceInKm: Number,
     distanceInKm: Number,
@@ -180,6 +182,12 @@ const rideSchema = new mongoose.Schema(
     cancelledBy: {
       type: String,
       enum: ['rider', 'driver', 'system'],
+      default: null
+    },
+
+    /** How the ride reached `completed` (e.g. driver cancel within 1 km of drop → full fare). */
+    completionSource: {
+      type: String,
       default: null
     },
 
@@ -292,6 +300,21 @@ const rideSchema = new mongoose.Schema(
       type: String,
       maxlength: 500
     },
+    cancellationReasonCode: {
+      type: String,
+      enum: [
+        'GENERAL',
+        'DRIVER_WITHDREW_BEFORE_ARRIVAL',
+        'DRIVER_ENDED_AT_PICKUP',
+        'DRIVER_ENDED_DURING_TRIP',
+        'RIDER_PICKUP_SHIFT_TOO_FAR'
+      ],
+      default: 'GENERAL'
+    },
+    cancellationContext: {
+      requestedPickupShiftMeters: { type: Number, default: null },
+      note: { type: String, default: null, maxlength: 500 }
+    },
 
     cancellationFee: {
       type: Number,
@@ -393,6 +416,7 @@ const rideSchema = new mongoose.Schema(
     driverInProgressCancelSettlement: {
       partialDistanceKm: { type: Number, default: null },
       perKmRateUsed: { type: Number, default: null },
+      perKmRateSource: { type: String, default: null },
       driverPartialAmount: { type: Number, default: null },
       riderPenaltyAmount: { type: Number, default: null },
       riderTotalCharge: { type: Number, default: null },
@@ -418,6 +442,29 @@ const rideSchema = new mongoose.Schema(
       ledgerFinalizedAt: { type: Date, default: null },
       settlementVersion: { type: Number, default: 1 },
       razorpaySettlementPaymentId: { type: String, default: null }
+    },
+    // Rider cancellation before start OTP while driver is en-route to pickup.
+    beforeStartCancelSettlement: {
+      travelledDistanceKm: { type: Number, default: null },
+      perKmRateUsed: { type: Number, default: null },
+      travelledAmount: { type: Number, default: null },
+      fixedPenaltyAmount: { type: Number, default: 20 },
+      totalCharge: { type: Number, default: null },
+      walletDebited: { type: Number, default: 0 },
+      outstandingDue: { type: Number, default: 0 },
+      driverCoordsAtCancel: {
+        type: [Number],
+        default: null
+      },
+      riderPaymentStatus: {
+        type: String,
+        enum: ['pending', 'partially_paid', 'none_due'],
+        default: null
+      },
+      settlementVersion: { type: Number, default: 1 },
+      computedAt: { type: Date, default: null },
+      computedByFlow: { type: String, default: null },
+      idempotencyToken: { type: String, default: null }
     }
   },
   {
