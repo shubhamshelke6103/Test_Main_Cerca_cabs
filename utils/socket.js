@@ -53,6 +53,7 @@ const {
   clearRideRedisKeys,
   evaluateRideCancellationPolicy,
   toRiderInProgressCancelBillingSummary,
+  toRiderBeforeStartCancelBillingSummary,
   normalizeCancellationReasonCode,
   PICKUP_SHIFT_REASON_THRESHOLD_METERS,
   calculateHaversineDistance,
@@ -168,10 +169,14 @@ async function emitRideCancelledToClients (
   const riderBilling = toRiderInProgressCancelBillingSummary(
     raw.driverInProgressCancelSettlement
   )
+  const beforeStartBilling = toRiderBeforeStartCancelBillingSummary(
+    raw.beforeStartCancelSettlement
+  )
   const riderSafePayload = {
     ...raw,
     driverInProgressCancelSettlement: undefined,
     riderInProgressCancelBilling: riderBilling,
+    riderBeforeStartCancelBilling: beforeStartBilling,
     settlementHiddenForRider: true
   }
   ioInstance.to(`ride_${cancelledRide._id}`).emit('rideCancelled', riderSafePayload)
@@ -1463,8 +1468,19 @@ function initializeSocket (server) {
 
         // ============================
         // PERSIST ROUTE POINT TO THE RIDE
+        // En-route to pickup (accepted/arrived) and during trip (in_progress) so
+        // before-start-OTP cancellation can bill polyline distance.
         // ============================
-        if (data.rideId && rideForPipe?.status === 'in_progress') {
+        const routeAppendStatuses = new Set([
+          'accepted',
+          'arrived',
+          'in_progress'
+        ])
+        if (
+          data.rideId &&
+          rideForPipe?.status &&
+          routeAppendStatuses.has(rideForPipe.status)
+        ) {
           try {
             await appendRideRoutePoint(data.rideId, data.location)
           } catch (routeError) {

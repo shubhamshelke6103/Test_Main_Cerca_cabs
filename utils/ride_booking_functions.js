@@ -27,6 +27,21 @@ const {
   normalizeCancellationReasonCode,
   shouldBlockCancelWithinDropRadius
 } = require('./cancellationPolicy')
+const {
+  resolveTravelledDistanceKmBeforeStart,
+  splitBeforeStartCancelPrepaid,
+  walletBalanceAfterBeforeStartCancel,
+  computePlatformSplitFromGrossFare
+} = require('./beforeStartCancelSettlement')
+
+const BEFORE_START_ROUTE_POINTS_MAX = Number(
+  process.env.BEFORE_START_ROUTE_POINTS_MAX || 4000
+)
+const BEFORE_START_DISTANCE_POLICY =
+  String(process.env.BEFORE_START_DISTANCE_POLICY || 'max').toLowerCase() ===
+  'polyline_first'
+    ? 'polyline_first'
+    : 'max'
 
 const BEFORE_START_FIXED_PENALTY_RUPEES = 20
 const IN_PROGRESS_CANCEL_DISTANCE_THRESHOLD_KM = 1
@@ -1334,9 +1349,14 @@ const appendRideRoutePoint = async (rideId, location) => {
       {
         $push: {
           routePoints: {
-            type: 'Point',
-            coordinates: [lng, lat],
-            recordedAt: new Date()
+            $each: [
+              {
+                type: 'Point',
+                coordinates: [lng, lat],
+                recordedAt: new Date()
+              }
+            ],
+            $slice: -BEFORE_START_ROUTE_POINTS_MAX
           }
         }
       },
@@ -2382,14 +2402,16 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
   const pickupCoords = originalRide?.pickupLocation?.coordinates
   const currentCoords = resolveRideCurrentCoordinates(originalRide)
 
-  let travelledDistanceKm = 0
+  const polylineKm = calculateRouteDistanceInKm(originalRide?.routePoints)
+
+  let straightKm = 0
   if (
     Array.isArray(pickupCoords) &&
     pickupCoords.length >= 2 &&
     Array.isArray(currentCoords) &&
     currentCoords.length >= 2
   ) {
-    travelledDistanceKm = calculateHaversineDistance(
+    straightKm = calculateHaversineDistance(
       pickupCoords[1],
       pickupCoords[0],
       currentCoords[1],
@@ -2397,12 +2419,25 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
     )
   }
 
+  const travelledDistanceKm = resolveTravelledDistanceKmBeforeStart({
+    polylineKm,
+    straightKm,
+    policy: BEFORE_START_DISTANCE_POLICY
+  })
+
   const travelledAmount = roundMoney(travelledDistanceKm * perKmRate)
   const fixedPenaltyAmount = roundMoney(BEFORE_START_FIXED_PENALTY_RUPEES)
   const totalCharge = roundMoney(travelledAmount + fixedPenaltyAmount)
 
+  logger.info(
+    `metric.ride.before_start_cancel_distance rideId=${originalRide._id} polylineKm=${polylineKm} straightKm=${straightKm} finalKm=${travelledDistanceKm} policy=${BEFORE_START_DISTANCE_POLICY}`
+  )
+
   return {
     travelledDistanceKm: roundMoney(travelledDistanceKm),
+    travelledDistancePolylineKm: roundMoney(polylineKm),
+    travelledDistanceStraightKm: roundMoney(straightKm),
+    distancePolicy: BEFORE_START_DISTANCE_POLICY,
     perKmRateUsed: perKmRate,
     travelledAmount,
     fixedPenaltyAmount,
@@ -2418,85 +2453,225 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
   }
 }
 
-async function applyWalletAndOutstandingForBeforeStartCancel (rideId, riderId, settlement) {
+async function getWalletRidePaymentSumForRide (rideId) {
+  const txs = await WalletTransaction.find({
+    relatedRide: rideId,
+    transactionType: 'RIDE_PAYMENT',
+    status: 'COMPLETED'
+  })
+    .select('amount')
+    .lean()
+  let sum = txs.reduce((s, t) => s + (Number(t.amount) || 0), 0)
+  sum = roundMoney(sum)
+  if (sum <= 0) {
+    const r = await Ride.findById(rideId).select('walletAmountUsed').lean()
+    sum = roundMoney(Number(r?.walletAmountUsed || 0))
+  }
+  return sum
+}
+
+async function executeRazorpayGatewayRefundBeforeStart (ride, refundRupees) {
+  const amt = roundMoney(Number(refundRupees) || 0)
+  if (amt <= 0 || !ride.razorpayPaymentId) return { applied: false }
+
+  const existing = await WalletTransaction.findOne({
+    relatedRide: ride._id,
+    status: 'COMPLETED',
+    'metadata.beforeStartOtpRiderCancelRazorpayGatewayRefund': true
+  }).lean()
+  if (existing) {
+    return { applied: true, skipped: true, refundAmount: existing.amount }
+  }
+
+  let razorpayRefundId = null
+  let razorpayRefundStatus = null
+  try {
+    const refund = await razorpayInstance.payments.refund(
+      ride.razorpayPaymentId,
+      {
+        amount: Math.round(amt * 100),
+        speed: 'normal',
+        notes: {
+          rideId: ride._id.toString(),
+          flow: 'before_start_rider_cancel'
+        }
+      }
+    )
+    razorpayRefundId = refund.id
+    razorpayRefundStatus = refund.status
+    logger.info(
+      `beforeStartCancel: Razorpay refund ok rideId=${ride._id} amount=${amt} refundId=${razorpayRefundId}`
+    )
+  } catch (err) {
+    logger.error(
+      `beforeStartCancel: Razorpay refund failed rideId=${ride._id} amount=${amt} ${err.message}`
+    )
+    throw err
+  }
+
+  const riderId = ride.rider?._id || ride.rider
+  const user = riderId ? await User.findById(riderId) : null
+  const balSnap = roundMoney(Number(user?.walletBalance || 0))
+
+  await WalletTransaction.create({
+    user: riderId,
+    transactionType: 'REFUND',
+    amount: amt,
+    balanceBefore: balSnap,
+    balanceAfter: balSnap,
+    relatedRide: ride._id,
+    paymentMethod: 'RAZORPAY',
+    status: 'COMPLETED',
+    description: `Gateway refund (before-start cancel) ₹${amt}`,
+    metadata: {
+      beforeStartOtpRiderCancelRazorpayGatewayRefund: true,
+      razorpayRefundId,
+      razorpayRefundStatus,
+      razorpayPaymentId: ride.razorpayPaymentId,
+      gatewayOnly: true
+    }
+  })
+
+  await Ride.findByIdAndUpdate(ride._id, {
+    razorpayRefundId: razorpayRefundId || ride.razorpayRefundId,
+    razorpayRefundStatus: razorpayRefundStatus || ride.razorpayRefundStatus,
+    refundAmount: amt
+  })
+
+  return { applied: true, refundAmount: amt, razorpayRefundId }
+}
+
+async function settleRiderWalletAndRazorpayForBeforeStartCancel (
+  rideId,
+  riderId,
+  settlement,
+  originalRide
+) {
   const due = Number(settlement?.totalCharge || 0)
   if (due <= 0) {
     return {
       walletDebited: 0,
       outstandingDue: 0,
-      riderPaymentStatus: 'none_due'
+      riderPaymentStatus: 'none_due',
+      razorpayRefundAmount: 0,
+      prepaidWallet: 0,
+      prepaidRazorpay: 0
     }
   }
+
+  const existingTxn = await WalletTransaction.findOne({
+    relatedRide: rideId,
+    transactionType: 'CANCELLATION_FEE',
+    status: 'COMPLETED',
+    'metadata.beforeStartOtpRiderCancel': true
+  }).lean()
+
+  if (existingTxn) {
+    const m = existingTxn.metadata || {}
+    const ob = roundMoney(Number(m.outstandingDue) || 0)
+    return {
+      walletDebited: roundMoney(Math.max(0, Number(m.walletDebitedRecorded) || 0)),
+      outstandingDue: ob,
+      riderPaymentStatus:
+        m.riderPaymentStatus ||
+        (ob > 0 ? 'pending' : 'none_due'),
+      razorpayRefundAmount: roundMoney(Number(m.razorpayRefundAmount) || 0),
+      prepaidWallet: roundMoney(Number(m.prepaidWallet) || 0),
+      prepaidRazorpay: roundMoney(Number(m.prepaidRazorpay) || 0)
+    }
+  }
+
+  const Pw = await getWalletRidePaymentSumForRide(rideId)
+  const Pr = roundMoney(Number(originalRide.razorpayAmountPaid || 0))
+  const split = splitBeforeStartCancelPrepaid({ Pw, Pr, O: due })
 
   const user = await User.findById(riderId)
   if (!user) {
     throw new Error('User not found')
   }
 
-  const balanceBefore = Number(user.walletBalance || 0)
-  const walletDebit = roundMoney(Math.min(balanceBefore, due))
-  const outstandingDue = roundMoney(Math.max(0, due - walletDebit))
+  const balanceBefore = roundMoney(Number(user.walletBalance || 0))
+  const W_new = walletBalanceAfterBeforeStartCancel(balanceBefore, Pw, {
+    use_w: split.use_w,
+    shortfall: split.shortfall
+  })
+  const walletDelta = roundMoney(W_new - balanceBefore)
+  const walletDebitedRecorded = roundMoney(Math.max(0, -walletDelta))
 
-  if (walletDebit > 0) {
-    const existingTxn = await WalletTransaction.findOne({
-      relatedRide: rideId,
-      transactionType: 'CANCELLATION_FEE',
-      status: 'COMPLETED',
-      'metadata.beforeStartOtpRiderCancel': true
-    })
-
-    if (!existingTxn) {
-      const balanceAfter = roundMoney(balanceBefore - walletDebit)
-      user.walletBalance = balanceAfter
-      await user.save()
-      await WalletTransaction.create({
-        user: riderId,
-        transactionType: 'CANCELLATION_FEE',
-        amount: walletDebit,
-        balanceBefore,
-        balanceAfter,
-        relatedRide: rideId,
-        paymentMethod: 'WALLET',
-        status: 'COMPLETED',
-        description: `Before-start cancellation charge ₹${walletDebit}`,
-        metadata: {
-          beforeStartOtpRiderCancel: true,
-          totalCharge: due
-        }
-      })
-    }
+  if (split.razorpayRefund > 0) {
+    await executeRazorpayGatewayRefundBeforeStart(originalRide, split.razorpayRefund)
   }
 
+  user.walletBalance = W_new
+  await user.save()
+
+  const outstandingDue = roundMoney(Math.max(0, -W_new))
+  const riderPaymentStatus = outstandingDue > 0 ? 'pending' : 'none_due'
+
+  await WalletTransaction.create({
+    user: riderId,
+    transactionType: 'CANCELLATION_FEE',
+    amount: roundMoney(Math.max(0, Math.abs(walletDelta))),
+    balanceBefore,
+    balanceAfter: W_new,
+    relatedRide: rideId,
+    paymentMethod: 'WALLET',
+    status: 'COMPLETED',
+    description: `Before-start cancellation settlement (total ₹${due})`,
+    metadata: {
+      beforeStartOtpRiderCancel: true,
+      totalCharge: due,
+      prepaidWallet: Pw,
+      prepaidRazorpay: Pr,
+      use_w: split.use_w,
+      use_r: split.use_r,
+      shortfall: split.shortfall,
+      razorpayRefundAmount: split.razorpayRefund,
+      walletDeltaApplied: walletDelta,
+      walletDebitedRecorded,
+      outstandingDue,
+      riderPaymentStatus,
+      travelledDistanceKm: settlement.travelledDistanceKm,
+      travelledAmount: settlement.travelledAmount,
+      fixedPenaltyAmount: settlement.fixedPenaltyAmount
+    }
+  })
+
   return {
-    walletDebited: walletDebit,
+    walletDebited: walletDebitedRecorded,
     outstandingDue,
-    riderPaymentStatus:
-      outstandingDue > 0
-        ? walletDebit > 0
-          ? 'partially_paid'
-          : 'pending'
-        : 'none_due'
+    riderPaymentStatus,
+    razorpayRefundAmount: split.razorpayRefund,
+    prepaidWallet: Pw,
+    prepaidRazorpay: Pr
   }
 }
 
 async function creditDriverForBeforeStartCancel (ride, settlement) {
-  const driverAmount = roundMoney(Number(settlement?.travelledAmount || 0))
-  if (driverAmount <= 0) return
+  const travelledGross = roundMoney(Number(settlement?.travelledAmount || 0))
+  if (travelledGross <= 0) return
 
   const driverId = ride.driver?._id || ride.driver
   const riderId = ride.rider?._id || ride.rider
   if (!driverId || !riderId) return
 
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  const { platformFee, driverEarning } = computePlatformSplitFromGrossFare(
+    travelledGross,
+    settings?.pricingConfigurations || {}
+  )
+
   const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
-  await AdminEarnings.findOneAndUpdate(
+  const earnings = await AdminEarnings.findOneAndUpdate(
     { rideId: ride._id },
     {
       rideId: ride._id,
       driverId,
       riderId,
-      grossFare: driverAmount,
-      platformFee: 0,
-      driverEarning: driverAmount,
+      grossFare: travelledGross,
+      platformFee,
+      driverEarning,
       rideDate: new Date(),
       vehicleSnapshot,
       paymentStatus: 'completed',
@@ -2506,6 +2681,24 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   )
+
+  try {
+    const { getSocketIO } = require('./socket.js')
+    const io = getSocketIO()
+    if (io) {
+      io.to(`driver_${driverId}`).emit('driverEarningAdded', {
+        driverId: String(driverId),
+        rideId: String(ride._id),
+        driverEarning: earnings.driverEarning,
+        grossFare: earnings.grossFare,
+        platformFee: earnings.platformFee
+      })
+    }
+  } catch (emitErr) {
+    logger.warn(
+      `creditDriverForBeforeStartCancel: driverEarningAdded emit failed ${emitErr.message}`
+    )
+  }
 }
 
 /**
@@ -2650,6 +2843,28 @@ function toRiderInProgressCancelBillingSummary (settlement) {
     riderPaymentStatus: settlement.riderPaymentStatus,
     billingNote: 'distance_based_partial',
     settlementVersion: settlement.settlementVersion
+  }
+}
+
+/**
+ * Rider-visible summary for cancel before start OTP (per-km + penalty).
+ */
+function toRiderBeforeStartCancelBillingSummary (settlement) {
+  if (!settlement || typeof settlement !== 'object') return null
+  const total = Number(settlement.totalCharge || 0)
+  if (!Number.isFinite(total) || total <= 0) return null
+  return {
+    travelledDistanceKm: settlement.travelledDistanceKm,
+    travelledAmount: settlement.travelledAmount,
+    fixedPenaltyAmount: settlement.fixedPenaltyAmount,
+    totalCharge: settlement.totalCharge,
+    perKmRateUsed: settlement.perKmRateUsed,
+    outstandingDue: settlement.outstandingDue,
+    riderPaymentStatus: settlement.riderPaymentStatus,
+    prepaidWallet: settlement.prepaidWallet,
+    prepaidRazorpay: settlement.prepaidRazorpay,
+    razorpayRefundAmount: settlement.razorpayRefundAmount,
+    billingNote: 'before_start_otp_cancel'
   }
 }
 
@@ -3269,10 +3484,11 @@ const cancelRide = async (
       beforeStartSettlementSnapshot =
         await buildBeforeStartOtpRiderCancelSettlement(originalRide)
       const riderId = originalRide.rider?._id || originalRide.rider
-      const walletResult = await applyWalletAndOutstandingForBeforeStartCancel(
+      const walletResult = await settleRiderWalletAndRazorpayForBeforeStartCancel(
         originalRide._id,
         riderId,
-        beforeStartSettlementSnapshot
+        beforeStartSettlementSnapshot,
+        originalRide
       )
       beforeStartSettlementSnapshot = {
         ...beforeStartSettlementSnapshot,
@@ -3316,7 +3532,13 @@ const cancelRide = async (
     }
     if (beforeStartSettlementSnapshot) {
       updateData.beforeStartCancelSettlement = beforeStartSettlementSnapshot
-      updateData.cancellationFee = beforeStartSettlementSnapshot.fixedPenaltyAmount
+      updateData.cancellationFee = beforeStartSettlementSnapshot.totalCharge
+      if (Number(beforeStartSettlementSnapshot.totalCharge || 0) > 0) {
+        updateData.paymentStatus =
+          beforeStartSettlementSnapshot.riderPaymentStatus === 'pending'
+            ? 'partial'
+            : 'completed'
+      }
     }
 
     const ride = await Ride.findByIdAndUpdate(rideId, updateData, {
@@ -4989,6 +5211,7 @@ module.exports = {
   appendRideRoutePoint,
   evaluateRideCancellationPolicy,
   toRiderInProgressCancelBillingSummary,
+  toRiderBeforeStartCancelBillingSummary,
   impliedPerKmFromBooking,
   computeDriverInProgressCancelSettlement,
   finalizeDriverInProgressCancelLedger,

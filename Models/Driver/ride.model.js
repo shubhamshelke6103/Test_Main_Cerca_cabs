@@ -457,12 +457,18 @@ const rideSchema = new mongoose.Schema(
     // Rider cancellation before start OTP while driver is en-route to pickup.
     beforeStartCancelSettlement: {
       travelledDistanceKm: { type: Number, default: null },
+      travelledDistancePolylineKm: { type: Number, default: null },
+      travelledDistanceStraightKm: { type: Number, default: null },
+      distancePolicy: { type: String, default: null },
       perKmRateUsed: { type: Number, default: null },
       travelledAmount: { type: Number, default: null },
       fixedPenaltyAmount: { type: Number, default: 20 },
       totalCharge: { type: Number, default: null },
       walletDebited: { type: Number, default: 0 },
       outstandingDue: { type: Number, default: 0 },
+      prepaidWallet: { type: Number, default: null },
+      prepaidRazorpay: { type: Number, default: null },
+      razorpayRefundAmount: { type: Number, default: null },
       driverCoordsAtCancel: {
         type: [Number],
         default: null
