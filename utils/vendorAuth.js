@@ -39,4 +39,5 @@ const authenticateVendor = (req, res, next) => {
   }
 };
 
+
 module.exports = { authenticateVendor };
