@@ -5,6 +5,9 @@ const { Server } = require('socket.io')
 const jwt = require('jsonwebtoken')
 const logger = require('./logger')
 const { settleWalletRideCompletionFare } = require('./walletRideSettlement')
+const {
+  deriveAdminEarningsSettlementFields
+} = require('./adminEarningsSettlement')
 const Driver = require('../Models/Driver/driver.model')
 const User = require('../Models/User/user.model')
 const Ride = require('../Models/Driver/ride.model')
@@ -1712,6 +1715,10 @@ function initializeSocket (server) {
           }
         }
 
+        const paymentFeatureSettings = await Settings.findOne()
+          .select('paymentFeatures')
+          .lean()
+
         // Check for existing active ride to prevent duplicates
         const riderId = data.rider || data.riderId
         if (riderId) {
@@ -1756,6 +1763,19 @@ function initializeSocket (server) {
             data.service || 'not provided'
           }`
         )
+
+        if (
+          data.paymentMethod === 'RAZORPAY' &&
+          paymentFeatureSettings?.paymentFeatures?.prepaidRazorpayEnabled &&
+          !data.razorpayPaymentId
+        ) {
+          socket.emit('rideError', {
+            message:
+              'Online payment is required before requesting this ride. Complete payment and try again.',
+            code: 'PREPAID_RAZORPAY_REQUIRED'
+          })
+          return
+        }
 
         const ride = await createRide(data)
         logger.info(
@@ -1895,8 +1915,14 @@ function initializeSocket (server) {
         }
 
         // Process pure WALLET payment deduction upfront (at ride creation)
-        // This ensures cancellation refunds work correctly
-        if (data.paymentMethod === 'WALLET' && !data.walletAmountUsed) {
+        // This ensures cancellation refunds work correctly (disable via Settings.paymentFeatures.prepaidWalletEnabled)
+        const prepaidWalletEnabled =
+          paymentFeatureSettings?.paymentFeatures?.prepaidWalletEnabled !== false
+        if (
+          prepaidWalletEnabled &&
+          data.paymentMethod === 'WALLET' &&
+          !data.walletAmountUsed
+        ) {
           // Only process pure WALLET (not hybrid which is handled above)
           try {
             const User = require('../Models/User/user.model')
@@ -2031,7 +2057,7 @@ function initializeSocket (server) {
               : populatedRide.rider?.fullName,
           // Add share link for OTHER rides
           shareLink: populatedRide.rideFor === 'OTHER' && populatedRide.shareToken
-            ? `https://api.myserverdevops.com/api/rides/shared/${populatedRide.shareToken}`
+            ? `https://api.cercacars.online/api/rides/shared/${populatedRide.shareToken}`
             : null
         }
 
@@ -3453,15 +3479,6 @@ function initializeSocket (server) {
           }, fare: ${completedRide.fare}`
         )
 
-        // Earnings are calculated from final fare (after recalculation)
-        storeRideEarnings(completedRide).catch(err => {
-          logger.error(
-            `Error storing ride earnings for rideId: ${rideId}:`,
-            err
-          )
-          // Don't fail ride completion if earnings storage fails
-        })
-
         // Assign gifts based on ride completion (first ride, loyalty, etc.)
         if (completedRide.rider) {
           const riderId = completedRide.rider._id || completedRide.rider
@@ -3623,6 +3640,21 @@ function initializeSocket (server) {
               )
             }
           }
+        }
+
+        // Persist earnings after wallet settlement so AdminEarnings.paymentStatus / payout flags match ride state
+        try {
+          const freshRideForEarnings = await Ride.findById(rideId)
+            .populate('rider', '_id')
+            .populate('driver', '_id')
+          if (freshRideForEarnings && freshRideForEarnings.status === 'completed') {
+            await storeRideEarnings(freshRideForEarnings)
+          }
+        } catch (earnErr) {
+          logger.error(
+            `Error storing ride earnings after payment settlement rideId: ${rideId}:`,
+            earnErr
+          )
         }
 
         // Process referral reward if this is user's first completed ride (non-blocking)
@@ -5100,6 +5132,11 @@ async function storeRideEarnings (ride, retryCount = 0) {
       }
     }
 
+    const RideModel = require('../Models/Driver/ride.model')
+    const ridePaymentLean = await RideModel.findById(rideId)
+      .select('fare paymentMethod paymentStatus')
+      .lean()
+
     // Check if earnings already stored (prevent duplicates)
     const existing = await AdminEarnings.findOne({ rideId: rideId })
     if (existing) {
@@ -5126,7 +5163,7 @@ async function storeRideEarnings (ride, retryCount = 0) {
     }
 
     const { platformFees, driverCommissions } = settings.pricingConfigurations
-    const grossFare = ride.fare || 0
+    const grossFare = ridePaymentLean?.fare ?? ride.fare ?? 0
 
     logger.info(
       `[Fare Tracking] storeRideEarnings - rideId: ${rideId}, grossFare: ₹${grossFare}, platformFees: ${platformFees}%, driverCommissions: ${driverCommissions}%`
@@ -5162,21 +5199,6 @@ async function storeRideEarnings (ride, retryCount = 0) {
         `storeRideEarnings: Invalid driverCommissions percentage (${driverCommissions}%) for rideId: ${rideId}`
       )
       return
-    }
-
-    // Verify fare matches ride.fare exactly (use final recalculated fare)
-    const Ride = require('../Models/Driver/ride.model')
-    const currentRide = await Ride.findById(rideId).select('fare').lean()
-    if (currentRide && Math.abs(currentRide.fare - grossFare) > 0.01) {
-      logger.warn(
-        `storeRideEarnings: Fare mismatch - stored: ₹${grossFare}, ride.fare: ₹${currentRide.fare}, rideId: ${rideId}`
-      )
-      // Use ride.fare from database as source of truth
-      const correctedFare = currentRide.fare || grossFare
-      logger.info(
-        `storeRideEarnings: Using corrected fare from database: ₹${correctedFare}`
-      )
-      // Continue with corrected fare
     }
 
     // ============================
@@ -5230,19 +5252,30 @@ async function storeRideEarnings (ride, retryCount = 0) {
     // Use findOneAndUpdate with upsert to prevent duplicates in multi-instance environment
     const vehicleSnapshot = await getVehicleSnapshotForEarnings(driverId)
 
+    const settlement = deriveAdminEarningsSettlementFields(
+      ridePaymentLean || ride,
+      roundedPlatformFee
+    )
+    const earningPayload = {
+      rideId: rideId,
+      driverId: driverId,
+      riderId: riderId,
+      grossFare: grossFare,
+      platformFee: roundedPlatformFee,
+      driverEarning: roundedDriverEarning,
+      rideDate: ride.actualEndTime || ride.updatedAt || new Date(),
+      vehicleSnapshot,
+      paymentStatus: settlement.paymentStatus,
+      riderFundsStatus: settlement.riderFundsStatus,
+      driverPayoutEligible: settlement.driverPayoutEligible
+    }
+    if (settlement.cashPlatformReceivable) {
+      earningPayload.cashPlatformReceivable = settlement.cashPlatformReceivable
+    }
+
     const earnings = await AdminEarnings.findOneAndUpdate(
       { rideId: rideId }, // Query condition
-      {
-        rideId: rideId,
-        driverId: driverId,
-        riderId: riderId,
-        grossFare: grossFare,
-        platformFee: roundedPlatformFee,
-        driverEarning: roundedDriverEarning,
-        rideDate: ride.actualEndTime || ride.updatedAt || new Date(),
-        vehicleSnapshot,
-        paymentStatus: 'pending' // Always pending by default - admin controls completion
-      },
+      earningPayload,
       {
         upsert: true, // Create if doesn't exist
         new: true, // Return updated document

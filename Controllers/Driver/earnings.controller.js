@@ -111,7 +111,7 @@ const getDriverEarnings = async (req, res) => {
     
     // Get earnings from AdminEarnings
     const earnings = await AdminEarnings.find(dateFilter)
-      .populate('rideId', 'fare tips discount distanceInKm pickupAddress dropoffAddress')
+      .populate('rideId', 'fare tips discount distanceInKm pickupAddress dropoffAddress paymentMethod paymentStatus')
       .populate('riderId', 'fullName')
       .sort(sortObj);
     
@@ -132,6 +132,23 @@ const getDriverEarnings = async (req, res) => {
     const totalCompletedEarnings = completedEarnings.reduce((sum, e) => sum + (e.driverEarning || 0), 0);
     const pendingEarningsCount = pendingEarnings.length;
     const completedEarningsCount = completedEarnings.length;
+
+    const cashOwedToPlatformTotal = earnings
+      .filter((e) => e.cashPlatformReceivable?.status === 'outstanding')
+      .reduce(
+        (sum, e) =>
+          sum + (e.cashPlatformReceivable?.amount ?? e.platformFee ?? 0),
+        0
+      );
+
+    const payoutEligibleDriverTotal = earnings
+      .filter(
+        (e) =>
+          e.paymentStatus === 'completed' &&
+          e.driverPayoutEligible !== false &&
+          e.cashPlatformReceivable?.status !== 'outstanding'
+      )
+      .reduce((sum, e) => sum + (e.driverEarning || 0), 0);
     
     logger.info(`getDriverEarnings: Payment status breakdown - pending: ${pendingEarningsCount} (₹${totalPendingEarnings}), completed: ${completedEarningsCount} (₹${totalCompletedEarnings})`);
     
@@ -441,6 +458,11 @@ const getDriverEarnings = async (req, res) => {
         platformFee: earning.platformFee,
         tips: ride?.tips || 0,
         paymentStatus: earning.paymentStatus || 'pending',
+        paymentMethod: earning.rideId?.paymentMethod || null,
+        settlementType: earning.settlementType || 'completed',
+        driverPayoutEligible: earning.driverPayoutEligible !== false,
+        cashPlatformReceivable: earning.cashPlatformReceivable || null,
+        cancellationFeeSplit: earning.cancellationFeeSplit || null,
         rider: earning.riderId ? {
           name: earning.riderId.fullName,
         } : null,
@@ -472,6 +494,10 @@ const getDriverEarnings = async (req, res) => {
           totalCompletedEarnings: Math.round(totalCompletedEarnings * 100) / 100,
           pendingEarningsCount,
           completedEarningsCount,
+          cashOwedToPlatformTotal:
+            Math.round(cashOwedToPlatformTotal * 100) / 100,
+          payoutEligibleDriverTotal:
+            Math.round(payoutEligibleDriverTotal * 100) / 100,
         },
         commission: {
           platformFeePercentage: platformFees || 0,
@@ -536,7 +562,7 @@ const getPaymentHistory = async (req, res) => {
     
     // Get earnings (payment history) with filter
     const earnings = await AdminEarnings.find(filter)
-      .populate('rideId', 'fare tips pickupAddress dropoffAddress')
+      .populate('rideId', 'fare tips pickupAddress dropoffAddress paymentMethod paymentStatus')
       .populate('riderId', 'fullName')
       .sort(sortObj)
       .skip(skip)
@@ -560,6 +586,11 @@ const getPaymentHistory = async (req, res) => {
       pickupAddress: earning.rideId?.pickupAddress,
       dropoffAddress: earning.rideId?.dropoffAddress,
       paymentStatus: earning.paymentStatus,
+      paymentMethod: earning.rideId?.paymentMethod || null,
+      settlementType: earning.settlementType,
+      cashPlatformReceivable: earning.cashPlatformReceivable,
+      cancellationFeeSplit: earning.cancellationFeeSplit,
+      driverPayoutEligible: earning.driverPayoutEligible !== false,
     }));
     
     res.status(200).json({
@@ -584,8 +615,64 @@ const getPaymentHistory = async (req, res) => {
   }
 };
 
+/**
+ * @route GET /api/drivers/:driverId/earnings/cash-owed-summary
+ */
+const getCashOwedSummary = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+
+    const driver = await Driver.findById(driverId);
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found',
+      });
+    }
+
+    const rows = await AdminEarnings.find({
+      driverId,
+      'cashPlatformReceivable.status': 'outstanding',
+    })
+      .populate('rideId', 'pickupAddress dropoffAddress fare paymentMethod')
+      .sort({ rideDate: -1 });
+
+    const totalOutstanding = rows.reduce(
+      (sum, e) => sum + (e.cashPlatformReceivable?.amount || 0),
+      0
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalOutstanding: Math.round(totalOutstanding * 100) / 100,
+        count: rows.length,
+        items: rows.map((e) => ({
+          earningId: e._id,
+          rideId: e.rideId?._id || e.rideId,
+          amountDue: e.cashPlatformReceivable?.amount || 0,
+          rideDate: e.rideDate,
+          pickupAddress: e.rideId?.pickupAddress,
+          platformFeePercentApplied:
+            e.grossFare > 0
+              ? Math.round(((e.platformFee || 0) / e.grossFare) * 10000) / 100
+              : null,
+        })),
+      },
+    });
+  } catch (error) {
+    logger.error('getCashOwedSummary error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching cash owed summary',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getDriverEarnings,
   getPaymentHistory,
+  getCashOwedSummary,
 };
 

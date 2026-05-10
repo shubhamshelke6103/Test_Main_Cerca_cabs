@@ -2873,11 +2873,20 @@ const markCashCollected = async (req, res) => {
         ride.paymentStatus = 'completed';
         await ride.save();
         
-        // Update AdminEarnings payment status
+        // Update AdminEarnings: rider cash settled; platform fee owed by driver until collected
         const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
         const earning = await AdminEarnings.findOne({ rideId: rideId });
         if (earning) {
             earning.paymentStatus = 'completed';
+            earning.riderFundsStatus = 'captured';
+            earning.cashPlatformReceivable = {
+                amount: Math.round((earning.platformFee || 0) * 100) / 100,
+                status: 'outstanding',
+                collectedAt: null,
+                collectedBy: null,
+                notes: null,
+            };
+            earning.driverPayoutEligible = false;
             await earning.save();
         }
         

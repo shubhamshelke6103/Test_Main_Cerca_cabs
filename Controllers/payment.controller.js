@@ -1,6 +1,7 @@
 const razorpay = require("razorpay");
 const crypto = require("crypto");
 const logger = require('../utils/logger');
+const { syncAdminEarningsAfterRidePaid } = require('../utils/adminEarningsSettlement');
 
 // Live keys (default fallback)
 const key = process.env.RAZORPAY_ID || "rzp_live_S6q5OGF0WYChTn";
@@ -150,6 +151,10 @@ const handleRazorpayWebhook = async (req, res) => {
           ride.razorpayPaymentId = paymentId;
           ride.transactionId = paymentId;
           await ride.save();
+
+          await syncAdminEarningsAfterRidePaid(rideId).catch((err) =>
+            logger.warn(`syncAdminEarningsAfterRidePaid webhook ${rideId}: ${err.message}`)
+          );
 
           logger.info(`Ride payment confirmed - Ride: ${rideId}, Payment ID: ${paymentId}`);
         }
@@ -374,6 +379,10 @@ const verifyRidePayment = async (req, res) => {
     ride.razorpayPaymentId = razorpay_payment_id;
     ride.transactionId = razorpay_payment_id;
     await ride.save();
+
+    await syncAdminEarningsAfterRidePaid(rideId).catch((err) =>
+      logger.warn(`syncAdminEarningsAfterRidePaid verify ${rideId}: ${err.message}`)
+    );
 
     logger.info(`Ride payment verified - Ride: ${rideId}, Payment ID: ${razorpay_payment_id}`);
 

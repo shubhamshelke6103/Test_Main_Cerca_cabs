@@ -81,6 +81,17 @@ const SettingsSchema = new mongoose.Schema({
         },
         processingDays: { type: Number, default: 3 }, // Business days
     },
+    /** Rider app + socket behaviour for prepaid flows */
+    paymentFeatures: {
+        prepaidWalletEnabled: { type: Boolean, default: true },
+        /** When true, pure RAZORPAY bookings must include razorpayPaymentId at ride creation */
+        prepaidRazorpayEnabled: { type: Boolean, default: false },
+    },
+    /** Split of cancellation fee retained from rider (percentages sum to 100) */
+    cancellationSettlement: {
+        cancellationFeeSplitPlatformPercent: { type: Number, default: 50 },
+        cancellationFeeSplitDriverPercent: { type: Number, default: 50 },
+    },
     /**
      * Ride matching configuration. Currently controls the destination-reach
      * stacked-offer feature: while a driver is on an active INSTANT trip, they

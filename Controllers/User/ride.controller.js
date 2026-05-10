@@ -1962,12 +1962,12 @@ const generateShareLink = async (req, res) => {
     let baseUrl = process.env.SHARE_BASE_URL || process.env.FRONTEND_URL
 
     // If no env var set, try to derive from API domain
-    // If API is api.myserverdevops.com, frontend is likely myserverdevops.com
+    // If API is api.cercacars.online, frontend is likely cercacars.online
     if (!baseUrl) {
-      const apiUrl = process.env.API_URL || 'https://api.myserverdevops.com'
+      const apiUrl = process.env.API_URL || 'https://api.cercacars.online'
       try {
         const apiUrlObj = new URL(apiUrl)
-        // Convert api.myserverdevops.com -> myserverdevops.com
+        // Convert api.cercacars.online -> cercacars.online
         // Or api.cerca.app -> cerca.app
         const hostname = apiUrlObj.hostname
         if (hostname.startsWith('api.')) {
@@ -1989,10 +1989,10 @@ const generateShareLink = async (req, res) => {
     const apiUrl =
       process.env.API_URL ||
       req.protocol + '://' + req.get('host') ||
-      'https://api.myserverdevops.com'
+      'https://api.cercacars.online'
 
     // Generate share URL pointing to Express HTML page
-    // Format: https://api.myserverdevops.com/shared-ride/{token}
+    // Format: https://api.cercacars.online/shared-ride/{token}
     const shareUrl = `${apiUrl}/shared-ride/${shareToken}`
 
     logger.info(`Share URL generated: ${shareUrl} (API URL: ${apiUrl})`)

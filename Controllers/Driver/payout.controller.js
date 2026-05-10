@@ -24,10 +24,14 @@ const getAvailableBalance = async (req, res) => {
     const settings = await Settings.findOne();
     const minPayoutThreshold = settings?.payoutConfigurations?.minPayoutThreshold || 500;
     
-    const allEarnings = await AdminEarnings.find({
+    const payoutPoolFilter = {
       driverId,
-      paymentStatus: 'pending'
-    });
+      paymentStatus: 'completed',
+      driverPayoutEligible: { $ne: false },
+      $nor: [{ 'cashPlatformReceivable.status': 'outstanding' }],
+    };
+
+    const allEarnings = await AdminEarnings.find(payoutPoolFilter);
     const allPayouts = await Payout.find({ 
       driver: driverId, 
       status: { $in: ['COMPLETED', 'PROCESSING'] } 
@@ -122,10 +126,14 @@ const requestPayout = async (req, res) => {
     const minPayoutThreshold = settings?.payoutConfigurations?.minPayoutThreshold || 500;
     
     // Check available balance
-    const allEarnings = await AdminEarnings.find({
+    const payoutPoolFilter = {
       driverId,
-      paymentStatus: 'pending'
-    });
+      paymentStatus: 'completed',
+      driverPayoutEligible: { $ne: false },
+      $nor: [{ 'cashPlatformReceivable.status': 'outstanding' }],
+    };
+
+    const allEarnings = await AdminEarnings.find(payoutPoolFilter);
     const allPayouts = await Payout.find({ 
       driver: driverId, 
       status: { $in: ['COMPLETED', 'PROCESSING', 'PENDING'] } 

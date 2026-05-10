@@ -26,6 +26,8 @@ const {
     bulkUpdateEarningStatus,
     getEarningsStats,
     getEarningsAnalytics,
+    listCashReceivables,
+    collectCashPlatformReceivable,
 } = require('../Controllers/Admin/driverEarnings.controller.js');
 const {
     verifyRideEarnings,
@@ -82,7 +84,9 @@ router.get('/vehicles', listVehicleInventory);
 router.get('/drivers/earnings', listDriverEarnings);
 router.get('/drivers/earnings/stats', getEarningsStats);
 router.get('/drivers/earnings/analytics', getEarningsAnalytics);
+router.get('/drivers/cash-receivables', listCashReceivables);
 router.get('/drivers/:driverId/earnings', getDriverEarningsById);
+router.patch('/drivers/earnings/:earningId/cash-platform-collect', collectCashPlatformReceivable);
 router.patch('/drivers/earnings/:earningId/status', updateEarningStatus);
 router.patch('/drivers/earnings/bulk-status', bulkUpdateEarningStatus);
 

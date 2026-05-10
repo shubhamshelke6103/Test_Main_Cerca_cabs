@@ -1044,7 +1044,7 @@ const createRide = async rideData => {
 
     // Log share link for OTHER rides
     if (ride.rideFor === 'OTHER' && ride.shareToken) {
-      const shareLink = `https://api.myserverdevops.com/api/rides/shared/${ride.shareToken}`
+      const shareLink = `https://api.cercacars.online/api/rides/shared/${ride.shareToken}`
       logger.info(
         `📤 Share link generated for ride ${ride._id} - ${shareLink} | Passenger: ${ride.passenger.name} | Phone: ${ride.passenger.phone}`
       )
@@ -1949,6 +1949,78 @@ const completeRide = async (rideId, fare, options = {}) => {
 }
 
 /**
+ * Rider cancellation: retained wallet fee split between platform and driver (AdminEarnings upsert).
+ */
+async function recordCancellationFeeAdminEarnings (ride, cancellationFee, settings) {
+  try {
+    if (!cancellationFee || cancellationFee <= 0) return
+    const driverId = ride.driver?._id || ride.driver
+    const riderId = ride.rider?._id || ride.rider
+    if (!driverId || !riderId) return
+
+    const pPct = Number(settings?.cancellationSettlement?.cancellationFeeSplitPlatformPercent)
+    const dPct = Number(settings?.cancellationSettlement?.cancellationFeeSplitDriverPercent)
+    const platformPct = Number.isFinite(pPct) ? pPct : 50
+    const driverPct = Number.isFinite(dPct) ? dPct : 50
+    const platformShare =
+      Math.round(((cancellationFee * platformPct) / 100) * 100) / 100
+    const driverShare =
+      Math.round((cancellationFee - platformShare) * 100) / 100
+
+    const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
+
+    await AdminEarnings.findOneAndUpdate(
+      { rideId: ride._id },
+      {
+        rideId: ride._id,
+        driverId,
+        riderId,
+        grossFare: cancellationFee,
+        platformFee: platformShare,
+        driverEarning: driverShare,
+        rideDate: new Date(),
+        vehicleSnapshot,
+        paymentStatus: 'completed',
+        riderFundsStatus: 'captured',
+        driverPayoutEligible: true,
+        settlementType: 'rider_cancel_fee_retained',
+        cancellationFeeSplit: {
+          totalFee: cancellationFee,
+          platformShare,
+          driverShare,
+          platformPercent: platformPct,
+          driverPercent: driverPct
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+
+    try {
+      const { getSocketIO } = require('./socket.js')
+      const io = getSocketIO()
+      if (io) {
+        io.to(`driver_${driverId}`).emit('driverEarningAdded', {
+          driverId: String(driverId),
+          rideId: String(ride._id),
+          driverEarning: driverShare,
+          grossFare: cancellationFee,
+          platformFee: platformShare,
+          settlementType: 'rider_cancel_fee_retained',
+          cancellationFeeSplit: {
+            platformPercent: platformPct,
+            driverPercent: driverPct
+          }
+        })
+      }
+    } catch (e) {
+      logger.warn(`recordCancellationFeeAdminEarnings socket ${e.message}`)
+    }
+  } catch (err) {
+    logger.error(`recordCancellationFeeAdminEarnings ${err.message}`)
+  }
+}
+
+/**
  * Process wallet refund for a cancelled ride
  * @param {Object} ride - The ride document (must be populated with rider)
  * @param {String} originalStatus - The original ride status before cancellation
@@ -2053,6 +2125,10 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
         paymentStatus: 'refunded'
       })
 
+      if (cancellationFee > 0) {
+        await recordCancellationFeeAdminEarnings(ride, cancellationFee, settings)
+      }
+
       return {
         refunded: true,
         refundAmount: 0,
@@ -2105,6 +2181,10 @@ const processWalletRefund = async (ride, originalStatus, cancelledBy, cancellati
       cancellationFee,
       paymentStatus: 'refunded'
     })
+
+    if (cancellationFee > 0) {
+      await recordCancellationFeeAdminEarnings(ride, cancellationFee, settings)
+    }
 
     // 13. Log refund details
     logger.info(`💰 Wallet refund processed successfully:`)
@@ -2675,6 +2755,8 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
       rideDate: new Date(),
       vehicleSnapshot,
       paymentStatus: 'completed',
+      riderFundsStatus: 'captured',
+      driverPayoutEligible: true,
       settlementType: 'rider_cancel_before_start_otp',
       vendorFineCredit: 0,
       riderPenaltyAmount: roundMoney(Number(settlement?.fixedPenaltyAmount || 0))
@@ -3100,6 +3182,8 @@ async function finalizeDriverInProgressCancelLedger (rideId) {
       rideDate: new Date(),
       vehicleSnapshot,
       paymentStatus: 'completed',
+      riderFundsStatus: 'captured',
+      driverPayoutEligible: true,
       settlementType: 'driver_cancel_in_progress',
       vendorFineCredit: roundMoney(vendorFine),
       riderPenaltyAmount: roundMoney(penalty)

@@ -76,8 +76,35 @@ const adminEarningsSchema = new mongoose.Schema({
     },
     settlementType: {
         type: String,
-        enum: ['completed', 'driver_cancel_in_progress', 'rider_cancel_before_start_otp'],
+        enum: ['completed', 'driver_cancel_in_progress', 'rider_cancel_before_start_otp', 'rider_cancel_fee_retained'],
         default: 'completed',
+    },
+    riderFundsStatus: {
+        type: String,
+        enum: ['none', 'authorized', 'captured', 'refunded', 'partially_refunded'],
+        default: 'none',
+    },
+    driverPayoutEligible: {
+        type: Boolean,
+        default: false,
+    },
+    cashPlatformReceivable: {
+        amount: { type: Number, default: 0, min: 0 },
+        status: {
+            type: String,
+            enum: ['outstanding', 'settled', 'waived', 'netted_in_payout'],
+            default: 'outstanding',
+        },
+        collectedAt: { type: Date, default: null },
+        collectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
+        notes: { type: String, default: null },
+    },
+    cancellationFeeSplit: {
+        totalFee: { type: Number, default: 0 },
+        platformShare: { type: Number, default: 0 },
+        driverShare: { type: Number, default: 0 },
+        platformPercent: { type: Number, default: 0 },
+        driverPercent: { type: Number, default: 0 },
     },
     vendorFineCredit: {
         type: Number,

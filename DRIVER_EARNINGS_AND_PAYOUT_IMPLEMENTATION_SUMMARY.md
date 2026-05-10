@@ -1,5 +1,7 @@
 # Driver Earnings & Payout System Implementation Summary
 
+> **Source of truth for cross-role money flow:** [EARNINGS_SYSTEM.md](./EARNINGS_SYSTEM.md) (rider payment timing, `AdminEarnings` fields, vendor vs payout semantics, cash remittance). This file focuses on the driver payout feature set and API summary.
+
 ## Overview
 
 A comprehensive Driver Earnings Dashboard and Payout Management system has been implemented for the Cerca Taxi Booking Platform, providing detailed earnings analytics and payout functionality.

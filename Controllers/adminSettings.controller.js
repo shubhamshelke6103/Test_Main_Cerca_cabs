@@ -376,11 +376,15 @@ const getSystemSettings = async (req, res) => {
  */
 const getPublicSettings = async (req, res) => {
     try {
-        const settings = await Settings.findOne().select('pricingConfigurations vehicleServices');
+        const settings = await Settings.findOne().select('pricingConfigurations vehicleServices paymentFeatures');
         
         if (!settings) {
             // Return default values if settings don't exist
             return res.status(200).json({
+                paymentFeatures: {
+                    prepaidWalletEnabled: true,
+                    prepaidRazorpayEnabled: false,
+                },
                 pricingConfigurations: {
                     baseFare: 0,
                     perKmRate: 12,
@@ -466,6 +470,10 @@ const getPublicSettings = async (req, res) => {
             normalizeVehicleServiceDisplayNames(vehicleServices)
 
         res.status(200).json({
+            paymentFeatures: settings.paymentFeatures || {
+                prepaidWalletEnabled: true,
+                prepaidRazorpayEnabled: false,
+            },
             pricingConfigurations: settings.pricingConfigurations || {
                 baseFare: 0,
                 perKmRate: 12,

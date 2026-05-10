@@ -38,7 +38,7 @@ const listDriverEarnings = async (req, res) => {
       AdminEarnings.find(filter)
         .populate('driverId', 'name phone email')
         .populate('riderId', 'fullName phoneNumber')
-        .populate('rideId', 'fare tips pickupAddress dropoffAddress')
+        .populate('rideId', 'fare tips pickupAddress dropoffAddress paymentMethod paymentStatus')
         .sort({ rideDate: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
@@ -64,6 +64,11 @@ const listDriverEarnings = async (req, res) => {
       platformFee: earning.platformFee,
       driverEarning: earning.driverEarning,
       paymentStatus: earning.paymentStatus,
+      riderFundsStatus: earning.riderFundsStatus,
+      driverPayoutEligible: earning.driverPayoutEligible,
+      settlementType: earning.settlementType,
+      cashPlatformReceivable: earning.cashPlatformReceivable,
+      cancellationFeeSplit: earning.cancellationFeeSplit,
       rideDate: earning.rideDate,
       createdAt: earning.createdAt,
       updatedAt: earning.updatedAt,
@@ -72,6 +77,7 @@ const listDriverEarnings = async (req, res) => {
         tips: earning.rideId.tips || 0,
         pickupAddress: earning.rideId.pickupAddress,
         dropoffAddress: earning.rideId.dropoffAddress,
+        paymentMethod: earning.rideId.paymentMethod,
       } : null,
     }));
 
@@ -138,7 +144,7 @@ const getDriverEarningsById = async (req, res) => {
     const [earnings, total] = await Promise.all([
       AdminEarnings.find(filter)
         .populate('riderId', 'fullName phoneNumber')
-        .populate('rideId', 'fare tips pickupAddress dropoffAddress')
+        .populate('rideId', 'fare tips pickupAddress dropoffAddress paymentMethod paymentStatus')
         .sort({ rideDate: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
@@ -167,6 +173,11 @@ const getDriverEarningsById = async (req, res) => {
       platformFee: earning.platformFee,
       driverEarning: earning.driverEarning,
       paymentStatus: earning.paymentStatus,
+      riderFundsStatus: earning.riderFundsStatus,
+      driverPayoutEligible: earning.driverPayoutEligible,
+      settlementType: earning.settlementType,
+      cashPlatformReceivable: earning.cashPlatformReceivable,
+      cancellationFeeSplit: earning.cancellationFeeSplit,
       rideDate: earning.rideDate,
       createdAt: earning.createdAt,
       updatedAt: earning.updatedAt,
@@ -175,6 +186,7 @@ const getDriverEarningsById = async (req, res) => {
         tips: earning.rideId.tips || 0,
         pickupAddress: earning.rideId.pickupAddress,
         dropoffAddress: earning.rideId.dropoffAddress,
+        paymentMethod: earning.rideId.paymentMethod,
       } : null,
     }));
 
@@ -549,6 +561,107 @@ const getEarningsAnalytics = async (req, res) => {
   }
 };
 
+/**
+ * @route GET /api/admin/drivers/cash-receivables
+ */
+const listCashReceivables = async (req, res) => {
+  try {
+    const { driverId, page = 1, limit = 50 } = req.query;
+    const filter = { 'cashPlatformReceivable.status': 'outstanding' };
+    if (driverId) filter.driverId = driverId;
+
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const lim = parseInt(limit, 10);
+
+    const [rows, total] = await Promise.all([
+      AdminEarnings.find(filter)
+        .populate('driverId', 'name phone email')
+        .populate('rideId', 'fare paymentMethod pickupAddress dropoffAddress')
+        .sort({ rideDate: -1 })
+        .skip(skip)
+        .limit(lim),
+      AdminEarnings.countDocuments(filter),
+    ]);
+
+    const items = rows.map((e) => ({
+      earningId: e._id,
+      driverId: e.driverId?._id || e.driverId,
+      driverName: e.driverId?.name,
+      rideId: e.rideId?._id || e.rideId,
+      platformFee: e.platformFee,
+      amountDue: e.cashPlatformReceivable?.amount ?? e.platformFee,
+      rideDate: e.rideDate,
+      grossFare: e.grossFare,
+      driverEarning: e.driverEarning,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        items,
+        pagination: {
+          total,
+          currentPage: parseInt(page, 10),
+          totalPages: Math.ceil(total / lim),
+          limit: lim,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Error listing cash receivables:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listing cash receivables',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route PATCH /api/admin/drivers/earnings/:earningId/cash-platform-collect
+ */
+const collectCashPlatformReceivable = async (req, res) => {
+  try {
+    const { earningId } = req.params;
+    const { notes } = req.body || {};
+
+    const earning = await AdminEarnings.findById(earningId);
+    if (!earning) {
+      return res.status(404).json({
+        success: false,
+        message: 'Earning record not found',
+      });
+    }
+
+    if (earning.cashPlatformReceivable?.status !== 'outstanding') {
+      return res.status(400).json({
+        success: false,
+        message: 'No outstanding cash platform receivable for this earning',
+      });
+    }
+
+    earning.cashPlatformReceivable.status = 'settled';
+    earning.cashPlatformReceivable.collectedAt = new Date();
+    earning.cashPlatformReceivable.collectedBy = req.adminId || null;
+    if (notes) earning.cashPlatformReceivable.notes = notes;
+    earning.driverPayoutEligible = true;
+    await earning.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Cash platform fee marked as collected',
+      data: { earning },
+    });
+  } catch (error) {
+    logger.error('Error collecting cash platform receivable:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error recording collection',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   listDriverEarnings,
   getDriverEarningsById,
@@ -556,5 +669,7 @@ module.exports = {
   bulkUpdateEarningStatus,
   getEarningsStats,
   getEarningsAnalytics,
+  listCashReceivables,
+  collectCashPlatformReceivable,
 };
 

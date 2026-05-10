@@ -140,17 +140,18 @@ const processPayout = async (req, res) => {
     }
 
     if (status === 'COMPLETED' && payout.relatedEarnings?.length) {
-      const alreadyPaid = await AdminEarnings.find({
-        _id: { $in: payout.relatedEarnings },
-        paymentStatus: 'completed'
-      }).select('_id');
+      const duplicate = await Payout.find({
+        status: 'COMPLETED',
+        _id: { $ne: payout._id },
+        relatedEarnings: { $in: payout.relatedEarnings },
+      })
+        .select('_id')
+        .lean();
 
-      if (alreadyPaid.length > 0) {
+      if (duplicate.length > 0) {
         return res.status(400).json({
-          message: 'Some earnings are already marked as completed for this payout',
-          data: {
-            earningIds: alreadyPaid.map((earning) => earning._id)
-          }
+          message: 'Some earnings are already included in another completed payout',
+          data: { payoutIds: duplicate.map((p) => p._id) },
         });
       }
     }
@@ -164,13 +165,6 @@ const processPayout = async (req, res) => {
     if (notes) payout.notes = notes;
 
     await payout.save();
-
-    if (status === 'COMPLETED' && payout.relatedEarnings?.length) {
-      await AdminEarnings.updateMany(
-        { _id: { $in: payout.relatedEarnings } },
-        { $set: { paymentStatus: 'completed' } }
-      );
-    }
 
     res.status(200).json({ message: 'Payout updated', payout });
   } catch (error) {
