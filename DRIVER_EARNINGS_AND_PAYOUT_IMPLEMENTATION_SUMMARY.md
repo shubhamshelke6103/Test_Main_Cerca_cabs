@@ -150,21 +150,30 @@ Driver Earnings = Gross Earnings × (driverCommissionPercentage / 100)
 Net Earnings = Driver Earnings + Tips + Bonuses
 ```
 
-**Available Balance:**
+**Payout balance (net settlement ledger):**
+
+See `utils/driverNetSettlementBalance.js`. Per completed earning not yet on a payout (PENDING / PROCESSING / COMPLETED):
+
+- **Non-cash:** add `driverEarning` + ride tips toward what the company owes the driver.
+- **Cash:** subtract outstanding `cashPlatformReceivable` (platform commission); do **not** add `driverEarning` to bank payout (driver already kept cash).
+
 ```
-Available Balance = Unpaid Driver Earnings + Unpaid Tips
+netSettlementBalance = (sum of non-cash credits) − (sum of outstanding cash platform fees)
+payoutableAmount = max(0, netSettlementBalance)
 ```
+
+The earnings dashboard summary also includes **`netSettlementBalance`**, **`payoutableAmount`**, **`cashOwedToPlatformAllTime`**, and **`tipsIncludedInNetAllTime`** (all-time, aligned with the payout API).
 
 ## Payout Process Flow
 
 1. **Driver checks available balance**
-   - System calculates unpaid earnings
+   - System calculates net settlement and payoutable amount
    - Checks minimum threshold
-   - Returns available amount
+   - Returns amounts (signed net and non-negative payoutable cap)
 
 2. **Driver requests payout**
    - Validates amount >= minimum threshold
-   - Validates amount <= available balance
+   - Validates amount <= payoutable amount
    - Checks for pending payouts
    - Creates payout request (PENDING)
    - Saves/updates bank account

@@ -38,6 +38,11 @@ const adminEarningsSchema = new mongoose.Schema({
         required: true,
         index: true,
     },
+    /** Snapshot at settlement time; used for bank payout ledger (cash vs online). */
+    paymentMethodSnapshot: {
+        type: String,
+        default: null,
+    },
     vehicleSnapshot: {
         licensePlate: {
             type: String,

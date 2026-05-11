@@ -3,6 +3,7 @@ const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const Ride = require('../../Models/Driver/ride.model');
 const Settings = require('../../Models/Admin/settings.modal');
 const logger = require('../../utils/logger');
+const { fetchDriverNetSettlement } = require('../../utils/driverNetSettlementBalance');
 
 /**
  * @desc    Get driver earnings dashboard
@@ -423,7 +424,9 @@ const getDriverEarnings = async (req, res) => {
     });
     
     monthlyBreakdown.sort((a, b) => a.month.localeCompare(b.month));
-    
+
+    const ledgerAllTime = await fetchDriverNetSettlement(driverId);
+
     // Recent rides (last 10)
     const recentRides = earnings.slice(0, 10).map(earning => {
       const rideIdString = getRideIdString(earning);
@@ -498,6 +501,12 @@ const getDriverEarnings = async (req, res) => {
             Math.round(cashOwedToPlatformTotal * 100) / 100,
           payoutEligibleDriverTotal:
             Math.round(payoutEligibleDriverTotal * 100) / 100,
+          /** All-time signed ledger (cash commission owed vs online credit), same as payout API. */
+          netSettlementBalance: ledgerAllTime.netSettlementBalance,
+          payoutableAmount: ledgerAllTime.payoutableAmount,
+          cashOwedToPlatformAllTime:
+            ledgerAllTime.cashOwedToPlatformTotal,
+          tipsIncludedInNetAllTime: ledgerAllTime.tipsIncludedInNet,
         },
         commission: {
           platformFeePercentage: platformFees || 0,

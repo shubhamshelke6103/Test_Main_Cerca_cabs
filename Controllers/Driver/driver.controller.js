@@ -2879,6 +2879,7 @@ const markCashCollected = async (req, res) => {
         if (earning) {
             earning.paymentStatus = 'completed';
             earning.riderFundsStatus = 'captured';
+            earning.paymentMethodSnapshot = 'CASH';
             earning.cashPlatformReceivable = {
                 amount: Math.round((earning.platformFee || 0) * 100) / 100,
                 status: 'outstanding',

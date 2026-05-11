@@ -35,7 +35,7 @@ Each ride that produces a settlement row should have **at most one** document in
 | `vendorFineCredit` | Optional adjustment surfaced in vendor reporting |
 | `riderPenaltyAmount` | Optional penalty metadata |
 | `riderFundsStatus` | `none` \| `authorized` \| `captured` \| `refunded` \| `partially_refunded` — rider money lifecycle |
-| `driverPayoutEligible` | If **true**, this row’s `driverEarning` (+ tips) may count toward **bank payout** pool |
+| `driverPayoutEligible` | Legacy / reporting flag; **bank payout** uses [utils/driverNetSettlementBalance.js](./utils/driverNetSettlementBalance.js) (non-cash credits minus outstanding cash receivables), not this flag alone |
 | `cashPlatformReceivable` | Subdocument: platform fee owed by driver on **cash** rides until collected |
 | `cancellationFeeSplit` | Optional retained cancellation fee split (platform vs driver %) for transparency |
 
@@ -208,7 +208,7 @@ flowchart LR
 | Cancellations / refunds | [utils/ride_booking_functions.js](./utils/ride_booking_functions.js) |
 | Vendor commission & reports | [Controllers/Vendor/vendor.controller.js](./Controllers/Vendor/vendor.controller.js) |
 | Driver earnings API | [Controllers/Driver/earnings.controller.js](./Controllers/Driver/earnings.controller.js) |
-| Driver payout pool | [Controllers/Driver/payout.controller.js](./Controllers/Driver/payout.controller.js) |
+| Driver payout / net ledger | [Controllers/Driver/payout.controller.js](./Controllers/Driver/payout.controller.js), [utils/driverNetSettlementBalance.js](./utils/driverNetSettlementBalance.js) |
 | Admin dashboard revenue | [Controllers/Admin/dashboard.controller.js](./Controllers/Admin/dashboard.controller.js) |
 | Admin payouts | [Controllers/Admin/payments.controller.js](./Controllers/Admin/payments.controller.js) |
 | Driver cash collection | [Controllers/Driver/driver.controller.js](./Controllers/Driver/driver.controller.js) |
@@ -216,22 +216,25 @@ flowchart LR
 
 ---
 
-## 14. Historical issue: `paymentStatus` overload (resolved direction)
+## 14. Driver bank payout balance (net settlement ledger)
 
-Previously, **`paymentStatus`** was also tied to **bank payout** completion (`processPayout` set earnings to `completed`), while **cash collection** set the same field when the rider paid the driver — causing contradictory behaviour with **`getAvailableBalance`** (which queried `pending` only).
+**`paymentStatus`** = rider/vendor settlement only. Payout completion does **not** mutate **`paymentStatus`**; settled rides are excluded from the net by **`Payout.relatedEarnings`** (PENDING, PROCESSING, COMPLETED).
 
-**Resolution:**
+**Net settlement balance** (see [utils/driverNetSettlementBalance.js](./utils/driverNetSettlementBalance.js)):
 
-- **`paymentStatus`** = rider/vendor settlement only.
-- **`driverPayoutEligible`** = inclusion in **bank payout** balance; for **cash**, requires **`cashPlatformReceivable.status === 'settled'`** (or `waived` / `netted_in_payout`) after rider cash is collected.
-- Payout completion does **not** mutate **`paymentStatus`** on earnings; eligibility is excluded via **`Payout.relatedEarnings`** on completed payouts.
+- **Non-cash rides** (WALLET, RAZORPAY, hybrid, etc.): for each completed earning not yet on a payout, add **`driverEarning` + ride `tips`** (company owes the driver this bank credit).
+- **Cash rides**: the driver keeps fare offline; **never** add **`driverEarning`** toward bank payout. If **`cashPlatformReceivable.status === 'outstanding'`**, subtract **`cashPlatformReceivable.amount`** (driver owes the platform that commission). When admin marks fee collected (`settled`), that subtraction goes away; there is still **no** bank credit for the cash ride’s driver share.
+
+**`driverPayoutEligible`** remains on documents for legacy/reporting but **bank payout math** uses payment method (prefer **`paymentMethodSnapshot`** on `AdminEarnings`, else ride) and the rules above—not “flip eligible after cash fee collected.”
+
+**`paymentMethodSnapshot`** is set when earnings are stored or synced from the ride so payout logic does not depend on extra queries.
 
 ---
 
 ## 15. Implementing UIs (checklist)
 
-1. **Driver:** Show payout-eligible vs blocked (cash owed to platform); show cancellation fee split when present.
-2. **Admin:** Receivables list + collect action; payout screen uses eligible earnings only.
+1. **Driver:** Show **net settlement** (signed), **payoutable** cap, and cash owed to platform; show cancellation fee split when present.
+2. **Admin:** Receivables list + collect action; driver payouts attach **non-cash** `relatedEarnings` only.
 3. **Vendor:** Continue using **`paymentStatus: 'completed'`** for commission.
 4. **Audit:** Verification routes under `/admin/earnings/*`.
 

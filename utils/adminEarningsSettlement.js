@@ -67,12 +67,17 @@ async function syncAdminEarningsAfterRidePaid (rideId) {
   const isCash = String(ride.paymentMethod || '').toUpperCase() === 'CASH'
 
   if (isCash) {
+    const methodUpper = String(ride.paymentMethod || '').toUpperCase()
     const update = {
       paymentStatus: fields.paymentStatus,
       riderFundsStatus: fields.riderFundsStatus
     }
+    if (methodUpper) {
+      update.paymentMethodSnapshot = methodUpper
+    }
+    // Cash ride driver share stays with driver offline; never bank-payout-eligible.
     if (earning.cashPlatformReceivable?.status === 'settled') {
-      update.driverPayoutEligible = true
+      update.driverPayoutEligible = false
     } else if (fields.cashPlatformReceivable) {
       update.cashPlatformReceivable = fields.cashPlatformReceivable
       update.driverPayoutEligible = false
@@ -81,14 +86,19 @@ async function syncAdminEarningsAfterRidePaid (rideId) {
     }
     await AdminEarnings.updateOne({ _id: earning._id }, { $set: update })
   } else {
+    const methodUpper = String(ride.paymentMethod || '').toUpperCase()
+    const setNonCash = {
+      paymentStatus: fields.paymentStatus,
+      riderFundsStatus: fields.riderFundsStatus,
+      driverPayoutEligible: fields.driverPayoutEligible
+    }
+    if (methodUpper) {
+      setNonCash.paymentMethodSnapshot = methodUpper
+    }
     await AdminEarnings.updateOne(
       { _id: earning._id },
       {
-        $set: {
-          paymentStatus: fields.paymentStatus,
-          riderFundsStatus: fields.riderFundsStatus,
-          driverPayoutEligible: fields.driverPayoutEligible
-        },
+        $set: setNonCash,
         $unset: { cashPlatformReceivable: '' }
       }
     )

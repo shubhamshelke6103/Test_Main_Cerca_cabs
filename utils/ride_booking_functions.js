@@ -1969,6 +1969,7 @@ async function recordCancellationFeeAdminEarnings (ride, cancellationFee, settin
 
     const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
 
+    const pmSnap = String(ride.paymentMethod || '').toUpperCase()
     await AdminEarnings.findOneAndUpdate(
       { rideId: ride._id },
       {
@@ -1983,6 +1984,7 @@ async function recordCancellationFeeAdminEarnings (ride, cancellationFee, settin
         paymentStatus: 'completed',
         riderFundsStatus: 'captured',
         driverPayoutEligible: true,
+        ...(pmSnap ? { paymentMethodSnapshot: pmSnap } : {}),
         settlementType: 'rider_cancel_fee_retained',
         cancellationFeeSplit: {
           totalFee: cancellationFee,
@@ -2743,6 +2745,7 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
   )
 
   const vehicleSnapshot = await getDriverVehicleSnapshotForEarnings(driverId)
+  const pmSnap = String(ride.paymentMethod || '').toUpperCase()
   const earnings = await AdminEarnings.findOneAndUpdate(
     { rideId: ride._id },
     {
@@ -2757,6 +2760,7 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
       paymentStatus: 'completed',
       riderFundsStatus: 'captured',
       driverPayoutEligible: true,
+      ...(pmSnap ? { paymentMethodSnapshot: pmSnap } : {}),
       settlementType: 'rider_cancel_before_start_otp',
       vendorFineCredit: 0,
       riderPenaltyAmount: roundMoney(Number(settlement?.fixedPenaltyAmount || 0))
@@ -3170,6 +3174,7 @@ async function finalizeDriverInProgressCancelLedger (rideId) {
   const rideDocForRefund = await Ride.findById(rideId).populate('rider')
   await applyRefundForDriverInProgressCancel(rideDocForRefund, st)
 
+  const pmSnap = String(ride.paymentMethod || '').toUpperCase()
   await AdminEarnings.findOneAndUpdate(
     { rideId: ride._id },
     {
@@ -3184,6 +3189,7 @@ async function finalizeDriverInProgressCancelLedger (rideId) {
       paymentStatus: 'completed',
       riderFundsStatus: 'captured',
       driverPayoutEligible: true,
+      ...(pmSnap ? { paymentMethodSnapshot: pmSnap } : {}),
       settlementType: 'driver_cancel_in_progress',
       vendorFineCredit: roundMoney(vendorFine),
       riderPenaltyAmount: roundMoney(penalty)

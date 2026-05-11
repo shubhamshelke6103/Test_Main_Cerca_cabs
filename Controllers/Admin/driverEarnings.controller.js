@@ -644,7 +644,8 @@ const collectCashPlatformReceivable = async (req, res) => {
     earning.cashPlatformReceivable.collectedAt = new Date();
     earning.cashPlatformReceivable.collectedBy = req.adminId || null;
     if (notes) earning.cashPlatformReceivable.notes = notes;
-    earning.driverPayoutEligible = true;
+    // Cash ride driver share is not paid via bank; collection only clears platform debt.
+    earning.driverPayoutEligible = false;
     await earning.save();
 
     res.status(200).json({

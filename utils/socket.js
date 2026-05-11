@@ -5256,6 +5256,10 @@ async function storeRideEarnings (ride, retryCount = 0) {
       ridePaymentLean || ride,
       roundedPlatformFee
     )
+    const pmSnap = String(
+      ridePaymentLean?.paymentMethod || ride?.paymentMethod || ''
+    ).toUpperCase()
+
     const earningPayload = {
       rideId: rideId,
       driverId: driverId,
@@ -5267,7 +5271,8 @@ async function storeRideEarnings (ride, retryCount = 0) {
       vehicleSnapshot,
       paymentStatus: settlement.paymentStatus,
       riderFundsStatus: settlement.riderFundsStatus,
-      driverPayoutEligible: settlement.driverPayoutEligible
+      driverPayoutEligible: settlement.driverPayoutEligible,
+      ...(pmSnap ? { paymentMethodSnapshot: pmSnap } : {})
     }
     if (settlement.cashPlatformReceivable) {
       earningPayload.cashPlatformReceivable = settlement.cashPlatformReceivable

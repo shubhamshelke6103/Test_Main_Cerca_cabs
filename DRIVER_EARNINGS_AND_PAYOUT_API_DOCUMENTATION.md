@@ -68,7 +68,13 @@ GET /api/drivers/507f1f77bcf86cd799439011/earnings?period=month
       "totalBonuses": 0,
       "netEarnings": 20500,
       "averageGrossPerRide": 500,
-      "averageNetPerRide": 410
+      "averageNetPerRide": 410,
+      "cashOwedToPlatformTotal": 0,
+      "payoutEligibleDriverTotal": 0,
+      "netSettlementBalance": 820,
+      "payoutableAmount": 820,
+      "cashOwedToPlatformAllTime": 300,
+      "tipsIncludedInNetAllTime": 0
     },
     "commission": {
       "platformFeePercentage": 20,
@@ -191,16 +197,28 @@ Get available balance that can be requested for payout.
 **Endpoint:** `GET /api/drivers/:driverId/payout/available-balance`
 
 **Response:**
+
+- **`netSettlementBalance`**: signed ledger (online credits + tips minus outstanding cash platform fees). Negative means the driver owes cash commission to the platform.
+- **`payoutableAmount`**: `max(0, netSettlementBalance)` — cap for payout requests.
+- **`availableBalance`**: same numeric value as **`netSettlementBalance`** (signed).
+- **`totalAvailable`**: same as **`payoutableAmount`** (amount that can be withdrawn).
+- **`totalTips`**: tips included only in non-cash (online) credit toward the net.
+- **`cashOwedToPlatformTotal`**: sum of outstanding **`cashPlatformReceivable.amount`** for completed cash rides.
+- **`unpaidRidesCount`**: count of completed **non-cash** earning rows not yet attached to a payout (each row may include tips in the net).
+
 ```json
 {
   "success": true,
   "data": {
-    "availableBalance": 15000,
-    "totalTips": 500,
-    "totalAvailable": 15500,
+    "netSettlementBalance": 820,
+    "payoutableAmount": 820,
+    "cashOwedToPlatformTotal": 300,
+    "availableBalance": 820,
+    "totalTips": 0,
+    "totalAvailable": 820,
     "minPayoutThreshold": 500,
     "canRequestPayout": true,
-    "unpaidRidesCount": 30
+    "unpaidRidesCount": 2
   }
 }
 ```
@@ -262,7 +280,8 @@ Request a payout to bank account.
   "message": "Insufficient balance for payout",
   "data": {
     "requested": 20000,
-    "available": 15500
+    "available": 15500,
+    "netSettlementBalance": 820
   }
 }
 ```
