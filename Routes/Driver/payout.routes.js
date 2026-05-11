@@ -28,12 +28,6 @@ router.post('/:driverId/payout/request', requestPayout);
 router.get('/:driverId/payout/history', getPayoutHistory);
 
 /**
- * @route   GET /api/drivers/:driverId/payout/:payoutId
- * @desc    Get payout by ID
- */
-router.get('/:driverId/payout/:payoutId', getPayoutById);
-
-/**
  * @route   GET /api/drivers/:driverId/payout/bank-account
  * @desc    Get bank account
  */
@@ -44,6 +38,12 @@ router.get('/:driverId/payout/bank-account', getBankAccount);
  * @desc    Update bank account
  */
 router.put('/:driverId/payout/bank-account', updateBankAccount);
+
+/**
+ * @route   GET /api/drivers/:driverId/payout/:payoutId
+ * @desc    Get payout by ID
+ */
+router.get('/:driverId/payout/:payoutId', getPayoutById);
 
 module.exports = router;
 
