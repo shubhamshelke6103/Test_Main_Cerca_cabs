@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FCM Test</title>
+  <link rel="stylesheet" href="/css/fcm-test.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Admin utility</p>
+        <h1>FCM test</h1>
+      </div>
+      <button id="clearLogsButton" class="icon-button" type="button" aria-label="Clear logs" title="Clear logs">
+        <span aria-hidden="true">CLR</span>
+      </button>
+    </header>
+
+    <main class="layout">
+      <section class="card compose-card">
+        <div class="card-header">
+          <div>
+            <h2>Compose</h2>
+            <p>Send a Firebase push to a single user, driver, or raw token list.</p>
+          </div>
+        </div>
+
+        <div class="auth-panel">
+          <label for="adminToken">Admin JWT</label>
+          <input id="adminToken" type="password" placeholder="Paste Bearer token for /admin/test/fcm">
+          <div class="auth-actions">
+            <button id="saveTokenButton" class="secondary-button" type="button">Save token</button>
+            <button id="forgetTokenButton" class="ghost-button" type="button">Forget</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label">Target</div>
+          <div class="segmented-control" id="targetModes">
+            <button type="button" class="segmented-button active" data-mode="userId">User ID</button>
+            <button type="button" class="segmented-button" data-mode="driverId">Driver ID</button>
+            <button type="button" class="segmented-button" data-mode="tokens">Raw token(s)</button>
+          </div>
+        </div>
+
+        <div id="userModeFields" class="mode-fields">
+          <label for="userIdInput">User ObjectId</label>
+          <input id="userIdInput" type="text" placeholder="MongoDB user id">
+        </div>
+
+        <div id="driverModeFields" class="mode-fields hidden">
+          <label for="driverIdInput">Driver ObjectId</label>
+          <input id="driverIdInput" type="text" placeholder="MongoDB driver id">
+        </div>
+
+        <div id="tokensModeFields" class="mode-fields hidden">
+          <label for="tokensInput">Raw token(s)</label>
+          <textarea id="tokensInput" rows="4" placeholder="One token per line or separated by commas"></textarea>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label">Preset</div>
+          <div class="preset-row" id="presetButtons">
+            <button type="button" class="preset-button" data-preset="ride_status">RIDE STATUS</button>
+            <button type="button" class="preset-button" data-preset="chat_message">CHAT MESSAGE</button>
+            <button type="button" class="preset-button" data-preset="promo">PROMO</button>
+            <button type="button" class="preset-button" data-preset="custom">CUSTOM</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="titleInput">Title</label>
+          <input id="titleInput" type="text" value="New message from driver">
+        </div>
+
+        <div class="field-group">
+          <label for="bodyInput">Body</label>
+          <textarea id="bodyInput" rows="3">Hi, I am here at the pickup point.</textarea>
+        </div>
+
+        <div class="field-group">
+          <label for="dataInput">data (JSON object)</label>
+          <textarea id="dataInput" rows="8">{&#10;  "appType": "chat_message",&#10;  "backendType": "ride_chat_message",&#10;  "rideId": "REPLACE_WITH_REAL_RIDE_ID",&#10;  "route": "/driver-chat/REPLACE_WITH_REAL_RIDE_ID"&#10;}</textarea>
+          <div id="dataError" class="inline-error hidden"></div>
+        </div>
+
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-title">Data-only payload</div>
+            <div class="toggle-subtitle">Omit the notification block and send a silent push.</div>
+          </div>
+          <label class="switch">
+            <input id="dataOnlyToggle" type="checkbox">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="field-group">
+          <label for="androidChannelId">Android channel ID (optional)</label>
+          <input id="androidChannelId" type="text" value="cerca_notifications">
+        </div>
+
+        <button id="sendButton" class="primary-button" type="button">
+          <span class="send-icon" aria-hidden="true">Send</span>
+          <span>SEND TEST PUSH</span>
+        </button>
+      </section>
+
+      <section class="card log-card">
+        <div class="card-header">
+          <div>
+            <h2>Log</h2>
+            <p id="logSubtitle">Most recent attempts first. Tokens are masked server-side.</p>
+          </div>
+        </div>
+        <div id="logList" class="log-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/js/fcm-test.js"></script>
+</body>
+</html>

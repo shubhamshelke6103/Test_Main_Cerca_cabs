@@ -1,4 +1,5 @@
 const express =  require('express');
+const path = require('path');
 const { authLimiter } = require('../middleware/rateLimiter');
 const {
     createAdmin,
@@ -48,6 +49,10 @@ const { sendTestFcm } = require('../Controllers/Admin/fcm.controller.js');
 const { authenticateAdmin, requireRole } = require('../utils/adminAuth');
 
 const router = express.Router();
+
+router.get('/fcm-test', (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public/views/fcm-test.html'));
+});
 
 // Admin login (public)
 router.post('/login', adminLogin);
