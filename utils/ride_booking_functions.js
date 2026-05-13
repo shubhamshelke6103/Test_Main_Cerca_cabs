@@ -17,6 +17,7 @@ const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
 const Vendor = require('../Models/vendor/vendor.models')
 const logger = require('./logger')
 const { sendPushNotification } = require('../firebase.notify.js')
+const { buildRiderPushData } = require('./riderFcmPayload')
 const { redis } = require('../config/redis')
 const razorpay = require('razorpay')
 const {
@@ -4591,18 +4592,32 @@ const createNotification = async notificationData => {
 
       const fcmToken = recipient?.fcmToken
       if (fcmToken) {
+        const baseData = {
+          notificationId: String(notification._id),
+          recipientId: String(recipientId),
+          recipientModel,
+          type,
+          relatedRide: relatedRide ? String(relatedRide) : '',
+        }
+
+        // Merge canonical rider deep-link fields (route + appType) so the
+        // Ionic FcmService can route every event consistently. For Driver
+        // recipients we keep the legacy shape — the Flutter app reads
+        // `data.type` directly and does not need the route mapping.
+        const riderExtras =
+          recipientModel === 'User'
+            ? buildRiderPushData({
+                notificationType: type,
+                relatedRideId: relatedRide,
+                extra: data || {},
+              })
+            : { ...(data || {}) }
+
         await sendPushNotification({
           token: fcmToken,
           title,
           body: message,
-          data: {
-            notificationId: String(notification._id),
-            recipientId: String(recipientId),
-            recipientModel,
-            type,
-            relatedRide: relatedRide ? String(relatedRide) : '',
-            ...data,
-          },
+          data: { ...baseData, ...riderExtras },
         })
       }
     } catch (pushError) {

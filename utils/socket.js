@@ -4437,6 +4437,44 @@ function initializeSocket (server) {
           }
         }
 
+        // Push notification for driver -> rider chat so the rider is alerted
+        // even when the app is backgrounded or killed. We only push to the
+        // rider side here; the driver app gets in-app socket events.
+        if (data.receiverModel === 'User' && data.messageType !== 'system') {
+          try {
+            const rawText =
+              typeof data.message === 'string' ? data.message.trim() : ''
+            if (rawText.length > 0) {
+              const senderName =
+                populatedMessage?.sender?.fullName ||
+                populatedMessage?.sender?.name ||
+                'Driver'
+              const preview =
+                rawText.length > 120 ? `${rawText.slice(0, 117)}...` : rawText
+              await createNotification({
+                recipientId: data.receiverId,
+                recipientModel: 'User',
+                title: `New message from ${senderName}`,
+                message: preview,
+                type: 'ride_chat_message',
+                relatedRide: data.rideId,
+                data: {
+                  messageId: String(message._id),
+                  senderId: String(data.senderId),
+                  senderModel: data.senderModel || 'Driver',
+                },
+              })
+              logger.info(
+                `🔔 [Socket] Chat FCM dispatched to rider ${data.receiverId}`
+              )
+            }
+          } catch (chatPushErr) {
+            logger.warn(
+              `⚠️  [Socket] chat push failed for ride ${data.rideId}: ${chatPushErr.message}`
+            )
+          }
+        }
+
         logger.info('🔔 [Socket] Emitting unread count update...')
         // Emit unread count update to receiver
         await emitUnreadCountUpdate(

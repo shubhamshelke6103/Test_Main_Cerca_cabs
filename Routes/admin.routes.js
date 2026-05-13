@@ -43,6 +43,7 @@ const {
   markAdminNotificationRead,
   markAllAdminNotificationsRead,
 } = require('../Controllers/Admin/adminNotifications.controller.js');
+const { sendTestFcm } = require('../Controllers/Admin/fcm.controller.js');
 
 const { authenticateAdmin, requireRole } = require('../utils/adminAuth');
 
@@ -102,5 +103,8 @@ router.post('/earnings/validate-totals', validateTotals);
 router.get('/notifications', listAdminNotifications);
 router.patch('/notifications/:id/read', markAdminNotificationRead);
 router.patch('/notifications/read-all', markAllAdminNotificationsRead);
+
+// FCM debugging endpoint — main ADMIN role only.
+router.post('/test/fcm', requireRole(['ADMIN']), authLimiter, sendTestFcm);
 
 module.exports = router;

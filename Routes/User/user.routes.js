@@ -1,5 +1,5 @@
 const express = require('express');
-const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken, getOutstandingDriverCancelSettlements } = require('../../Controllers/User/user.controller.js');
+const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken, getOutstandingDriverCancelSettlements, updateUserFcmToken } = require('../../Controllers/User/user.controller.js');
 
 const router = express.Router();
 
@@ -37,5 +37,8 @@ router.get('/:id/wallet', getUserWallet);
 
 // PUT /users/:id/wallet - Update user wallet
 router.put('/:id/wallet', updateUserWallet);
+
+// PATCH /users/:id/fcm-token - Persist (or clear) the rider's FCM device token
+router.patch('/:id/fcm-token', updateUserFcmToken);
 
 module.exports = router;

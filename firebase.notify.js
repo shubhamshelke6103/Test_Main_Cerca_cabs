@@ -87,6 +87,7 @@ const sendPushNotification = async ({
   data = {},
   androidChannelId = 'cerca_notifications',
   imageUrl,
+  dataOnly = false,
 } = {}) => {
   try {
     if (!admin) {
@@ -104,24 +105,30 @@ const sendPushNotification = async ({
 
     const messaging = firebaseAdmin.messaging();
     const message = {
-      notification: {
-        title,
-        body,
-        ...(imageUrl ? { imageUrl } : {}),
-      },
+      ...(dataOnly
+        ? {}
+        : {
+            notification: {
+              title,
+              body,
+              ...(imageUrl ? { imageUrl } : {}),
+            },
+          }),
       data: toFcmData(data),
       android: {
         priority: 'high',
-        notification: {
-          channelId: androidChannelId,
-          sound: 'default',
-        },
+        ...(dataOnly
+          ? {}
+          : {
+              notification: {
+                channelId: androidChannelId,
+                sound: 'default',
+              },
+            }),
       },
       apns: {
         payload: {
-          aps: {
-            sound: 'default',
-          },
+          aps: dataOnly ? { 'content-available': 1 } : { sound: 'default' },
         },
       },
     };

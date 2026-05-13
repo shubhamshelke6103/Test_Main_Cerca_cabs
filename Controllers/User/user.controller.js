@@ -504,6 +504,45 @@ const updateUserWallet = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * @desc    Update the rider's FCM device token (called by the rider app
+ *          after `PushNotifications.register` resolves the token).
+ * @route   PATCH /users/:id/fcm-token
+ * @access  Authenticated user (must match :id)
+ */
+const updateUserFcmToken = asyncHandler(async (req, res) => {
+  const authUserId = getAuthUserIdOrThrow(req);
+  if (String(authUserId) !== String(req.params.id)) {
+    throw new AppError('Forbidden', 403, { code: 'FORBIDDEN' });
+  }
+
+  const { fcmToken: rawToken, platform } = req.body || {};
+
+  // Allow explicit clear via fcmToken: null (logout / token revoke).
+  if (rawToken === null) {
+    await User.findByIdAndUpdate(req.params.id, {
+      $set: { fcmToken: null, fcmTokenUpdatedAt: new Date() },
+    });
+    logger.info(`Cleared FCM token for user ${req.params.id}`);
+    return res.status(200).json({ success: true, cleared: true });
+  }
+
+  const token = extractFcmToken(req.body);
+  if (!token) {
+    throw new AppError('fcmToken is required', 400, {
+      code: 'INVALID_FCM_TOKEN',
+    });
+  }
+
+  await User.findByIdAndUpdate(req.params.id, {
+    $set: { fcmToken: token, fcmTokenUpdatedAt: new Date() },
+  });
+  logger.info(
+    `Updated FCM token for user ${req.params.id} (platform=${platform || 'unknown'})`
+  );
+  res.status(200).json({ success: true });
+});
+
 module.exports = {
   getPrivacyPolicy,
   acceptPrivacyPolicy,
@@ -517,4 +556,5 @@ module.exports = {
   updateUserWallet,
   validateToken,
   getOutstandingDriverCancelSettlements,
+  updateUserFcmToken,
 };

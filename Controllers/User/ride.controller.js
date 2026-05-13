@@ -85,8 +85,8 @@ const notifyDestinationChangeAsync = (ride, userId, quote, refreshedRide) => {
   const msg = `New estimated fare ${fareStr}. ${addr}`
 
   const tasks = [
-    Notification.create({
-      recipient: userId,
+    rideBookingFunctions.createNotification({
+      recipientId: userId,
       recipientModel: 'User',
       title: 'Destination updated',
       message: msg,
@@ -98,8 +98,8 @@ const notifyDestinationChangeAsync = (ride, userId, quote, refreshedRide) => {
   const driverId = refreshedRide.driver?._id || refreshedRide.driver
   if (driverId) {
     tasks.push(
-      Notification.create({
-        recipient: driverId,
+      rideBookingFunctions.createNotification({
+        recipientId: driverId,
         recipientModel: 'Driver',
         title: 'Rider changed destination',
         message: msg,

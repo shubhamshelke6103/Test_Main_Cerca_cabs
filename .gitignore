@@ -1,0 +1,29 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Firebase Admin / Google Cloud service account credentials
+# Never commit these — rotate the key in Firebase Console if exposed.
+*firebase*adminsdk*.json
+service-account*.json
+google-credentials*.json
+config/firebase-service-account.json
+config/firebase-service-account.*.json
+
+# Logs
+logs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
