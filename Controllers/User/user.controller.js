@@ -35,6 +35,15 @@ const getPrivacyPolicyMetadata = () => ({
   url: PRIVACY_POLICY_URL,
 });
 
+const extractFcmToken = (payload = {}) => {
+  const token = payload.fcmToken;
+  if (typeof token !== 'string') {
+    return null;
+  }
+  const normalized = token.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
 const buildPrivacyPolicyAcceptance = (payload = {}) => {
   const accepted = parseBoolean(payload.privacyPolicyAccepted);
 
@@ -151,6 +160,12 @@ const createUser = asyncHandler(async (req, res) => {
     userData.profilePic = profilePicUrl;
   }
 
+  const fcmToken = extractFcmToken(userData);
+  if (fcmToken) {
+    userData.fcmToken = fcmToken;
+    userData.fcmTokenUpdatedAt = new Date();
+  }
+
   Object.assign(userData, acceptance);
 
   const user = new User(userData);
@@ -191,6 +206,12 @@ const updateUser = asyncHandler(async (req, res) => {
       });
     }
     payload.phoneNumber = normalizedPhone.value;
+  }
+
+  const fcmToken = extractFcmToken(payload);
+  if (fcmToken) {
+    payload.fcmToken = fcmToken;
+    payload.fcmTokenUpdatedAt = new Date();
   }
 
   const user = await User.findById(req.params.id);
@@ -351,6 +372,13 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
       await user.save();
     }
 
+    const fcmToken = extractFcmToken(req.body);
+    if (fcmToken) {
+      user.fcmToken = fcmToken;
+      user.fcmTokenUpdatedAt = new Date();
+      await user.save();
+    }
+
     const token = jwt.sign(
       { id: user._id, phoneNumber: user.phoneNumber },
       JWT_SECRET,
@@ -385,6 +413,8 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
     isActive: true,
     lastLogin: new Date(),
     isVerified: false,
+    fcmToken: extractFcmToken(req.body),
+    fcmTokenUpdatedAt: extractFcmToken(req.body) ? new Date() : null,
     ...acceptance,
   });
 

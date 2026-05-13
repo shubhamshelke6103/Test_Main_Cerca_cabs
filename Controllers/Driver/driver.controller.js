@@ -70,6 +70,15 @@ const DRIVER_JWT_SECRET =
 const signDriverAuthToken = (driver) =>
     jwt.sign({ id: driver._id, email: driver.email }, DRIVER_JWT_SECRET, { expiresIn: '7d' });
 
+const extractFcmToken = (payload = {}) => {
+    const token = payload.fcmToken;
+    if (typeof token !== 'string') {
+        return null;
+    }
+    const normalized = token.trim();
+    return normalized.length > 0 ? normalized : null;
+};
+
 const buildDriverRegisterResponsePayload = (driverObj) => ({
     id: driverObj,
     message: 'Driver added successfully',
@@ -144,6 +153,12 @@ const registerDriver = asyncHandler(async (req, res) => {
             driverObj.profilePic = buildDriverProfilePicUrl(req, req.file);
         }
 
+        const fcmToken = extractFcmToken(req.body);
+        if (fcmToken) {
+            driverObj.fcmToken = fcmToken;
+            driverObj.fcmTokenUpdatedAt = new Date();
+        }
+
         await driverObj.save();
 
         logger.info(`Driver added successfully: ${driverObj.email}`);
@@ -203,6 +218,8 @@ const addDriver = asyncHandler(async (req, res) => {
             documents: [], // Initialize with an empty array
             approvalWorkflow: buildInitialApprovalWorkflow(null),
             vendorDriverCategory: 'SELF',
+            fcmToken: extractFcmToken(req.body),
+            fcmTokenUpdatedAt: extractFcmToken(req.body) ? new Date() : null,
         });
 
         await driverObj.save();
@@ -1047,6 +1064,13 @@ const loginDriver = asyncHandler(async (req, res) => {
         });
     }
 
+        const fcmToken = extractFcmToken(req.body);
+        if (fcmToken && driver.fcmToken !== fcmToken) {
+            driver.fcmToken = fcmToken;
+            driver.fcmTokenUpdatedAt = new Date();
+            await driver.save();
+        }
+
         const token = signDriverAuthToken(driver);
 
         // Do not start an online session on login — fleet/vehicle eligibility is enforced when the driver
@@ -1159,6 +1183,12 @@ const updateDriver = asyncHandler(async (req, res) => {
 
         if (req.body.vendorId !== undefined && !driver.isVerified && req.body.approvalWorkflow === undefined) {
             req.body.approvalWorkflow = buildInitialApprovalWorkflow(req.body.vendorId || null);
+        }
+
+        const fcmToken = extractFcmToken(req.body);
+        if (fcmToken) {
+            req.body.fcmToken = fcmToken;
+            req.body.fcmTokenUpdatedAt = new Date();
         }
 
         // Update the driver with the new data (excluding files)

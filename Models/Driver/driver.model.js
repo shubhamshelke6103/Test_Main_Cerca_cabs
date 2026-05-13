@@ -224,6 +224,15 @@ const driverSchema = new mongoose.Schema({
   socketId: {
     type: String
   },
+  fcmToken: {
+    type: String,
+    default: null,
+    select: false
+  },
+  fcmTokenUpdatedAt: {
+    type: Date,
+    default: null
+  },
   phone: {
     type: String,
     required: true,

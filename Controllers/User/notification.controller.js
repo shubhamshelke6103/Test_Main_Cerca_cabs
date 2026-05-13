@@ -1,5 +1,8 @@
 const Notification = require('../../Models/User/notification.model.js');
 const logger = require('../../utils/logger.js');
+const {
+    createNotification: createNotificationService,
+} = require('../../utils/ride_booking_functions.js');
 
 /**
  * @desc    Create a notification
@@ -19,9 +22,8 @@ const createNotification = async (req, res) => {
             return res.status(400).json({ message: 'Invalid recipient model' });
         }
 
-        // Create notification
-        const notification = await Notification.create({
-            recipient: recipientId,
+        const notification = await createNotificationService({
+            recipientId,
             recipientModel,
             title,
             message,

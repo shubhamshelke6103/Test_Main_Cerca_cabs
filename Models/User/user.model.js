@@ -88,6 +88,15 @@ const userSchema = new Schema(
       type: String, // Socket ID for real-time notifications
 
     },
+    fcmToken: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    fcmTokenUpdatedAt: {
+      type: Date,
+      default: null,
+    },
     
     // Referral system
     referralCode: {

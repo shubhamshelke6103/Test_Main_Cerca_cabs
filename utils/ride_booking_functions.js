@@ -16,6 +16,7 @@ const AdminEarnings = require('../Models/Admin/adminEarnings.model')
 const FleetVehicle = require('../Models/Vendor/fleetVehicle.model')
 const Vendor = require('../Models/vendor/vendor.models')
 const logger = require('./logger')
+const { sendPushNotification } = require('../firebase.notify.js')
 const { redis } = require('../config/redis')
 const razorpay = require('razorpay')
 const {
@@ -4577,6 +4578,38 @@ const createNotification = async notificationData => {
       relatedRide,
       data
     })
+
+    try {
+      const recipientQuery = { _id: recipientId }
+      const tokenProjection = '+fcmToken'
+      const recipient =
+        recipientModel === 'User'
+          ? await User.findOne(recipientQuery).select(tokenProjection)
+          : recipientModel === 'Driver'
+            ? await Driver.findOne(recipientQuery).select(tokenProjection)
+            : null
+
+      const fcmToken = recipient?.fcmToken
+      if (fcmToken) {
+        await sendPushNotification({
+          token: fcmToken,
+          title,
+          body: message,
+          data: {
+            notificationId: String(notification._id),
+            recipientId: String(recipientId),
+            recipientModel,
+            type,
+            relatedRide: relatedRide ? String(relatedRide) : '',
+            ...data,
+          },
+        })
+      }
+    } catch (pushError) {
+      logger.warn(
+        `Push notification skipped for ${recipientModel} ${recipientId}: ${pushError.message}`
+      )
+    }
 
     return notification
   } catch (error) {
