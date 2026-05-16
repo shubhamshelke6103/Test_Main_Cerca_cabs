@@ -2898,9 +2898,34 @@ const markCashCollected = async (req, res) => {
                 message: 'This endpoint is only for CASH payments',
             });
         }
+
+        const PaymentDispute = require('../../Models/Admin/paymentDispute.model');
+        const { TERMINAL_STATUSES } = require('../../Models/Admin/paymentDispute.model');
+        const openDispute = await PaymentDispute.findOne({
+            rideId,
+            status: { $nin: TERMINAL_STATUSES },
+        });
+        if (
+            openDispute &&
+            (openDispute.paymentContext?.amountRemaining || 0) > 0 &&
+            openDispute.status !== 'AWAITING_DRIVER_CONFIRMATION'
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot mark cash collected while an open payment dispute exists. Confirm payment received on the dispute instead.',
+                disputeId: openDispute._id,
+            });
+        }
         
         // Update ride payment status
         ride.paymentStatus = 'completed';
+        if (!ride.paymentCollection) ride.paymentCollection = {};
+        ride.paymentCollection.status = 'paid';
+        ride.paymentCollection.amountReceived = ride.fare || 0;
+        ride.paymentCollection.amountRemaining = 0;
+        ride.paymentCollection.collectedAt = new Date();
+        ride.paymentCollection.autoConfirmAt = null;
+        ride.paymentCollection.activeDisputeId = null;
         await ride.save();
         
         // Update AdminEarnings: rider cash settled; platform fee owed by driver until collected

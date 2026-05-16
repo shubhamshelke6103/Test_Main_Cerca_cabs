@@ -130,6 +130,14 @@ const userSchema = new Schema(
       type: Boolean,
       default: true,
     },
+
+    paymentCompliance: {
+      totalPendingDues: { type: Number, default: 0, min: 0 },
+      bookingBlocked: { type: Boolean, default: false },
+      bookingBlockedReason: { type: String, default: null },
+      fraudScore: { type: Number, default: 0, min: 0 },
+      lastDisputeAt: { type: Date, default: null },
+    },
     privacyPolicyAccepted: {
       type: Boolean,
       default: false,

@@ -268,6 +268,11 @@ const driverSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  paymentCompliance: {
+    falseComplaintCount: { type: Number, default: 0, min: 0 },
+    fraudScore: { type: Number, default: 0, min: 0 },
+    suspendedUntil: { type: Date, default: null },
+  },
   rejectionReason: {
     type: String,
     default: null

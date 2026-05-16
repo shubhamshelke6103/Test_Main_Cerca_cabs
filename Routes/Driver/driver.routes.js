@@ -47,6 +47,12 @@ const {
     getSharedDriverLocation
 } = require('../../Controllers/Driver/driver.controller.js');
 const vendorController = require('../../Controllers/Vendor/vendor.controller.js');
+const {
+    reportPaymentIssue,
+    uploadDisputeEvidence,
+    confirmPaymentReceived,
+    listDriverDisputes,
+} = require('../../Controllers/Driver/paymentDispute.controller.js');
 const { authenticateDriver } = require('../../utils/driverAuth');
 const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.middleware');
 
@@ -287,6 +293,32 @@ router.get('/nearby', getNearbyDrivers);
 
 // Route to mark cash as collected for a ride
 router.patch('/:driverId/rides/:rideId/mark-cash-collected', markCashCollected);
+
+const disputeEvidenceStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'uploads/'),
+    filename: (req, file, cb) =>
+        cb(null, `dispute-${Date.now()}-${file.originalname}`),
+});
+const disputeUpload = multer({
+    storage: disputeEvidenceStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+router.post(
+    '/:driverId/rides/:rideId/payment-disputes',
+    disputeUpload.single('file'),
+    reportPaymentIssue
+);
+router.post(
+    '/:driverId/payment-disputes/:disputeId/evidence',
+    disputeUpload.single('file'),
+    uploadDisputeEvidence
+);
+router.patch(
+    '/:driverId/payment-disputes/:disputeId/confirm-received',
+    confirmPaymentReceived
+);
+router.get('/:driverId/payment-disputes', listDriverDisputes);
 
 // Multer error handler for file upload errors (must be after all routes)
 router.use((error, req, res, next) => {

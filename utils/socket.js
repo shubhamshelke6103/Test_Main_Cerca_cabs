@@ -1777,6 +1777,19 @@ function initializeSocket (server) {
           return
         }
 
+        try {
+          const { assertRiderCanBook, BookingBlockedError } = require('./paymentDispute/bookingGuard.service')
+          const riderIdForGuard = data.rider || data.riderId
+          await assertRiderCanBook(riderIdForGuard)
+        } catch (guardErr) {
+          socket.emit('rideError', {
+            message: guardErr.message || 'Cannot book a new ride',
+            code: guardErr.code || 'BOOKING_BLOCKED_DUES',
+            details: guardErr.details,
+          })
+          return
+        }
+
         const ride = await createRide(data)
         logger.info(
           `Ride created - rideId: ${ride._id}, fare stored: ₹${ride.fare}, distance: ${ride.distanceInKm}km`

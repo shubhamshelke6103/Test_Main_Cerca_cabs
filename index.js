@@ -48,6 +48,7 @@ const initDriverOnlineTimeoutWorker = require('./src/workers/driverOnlineTimeout
 initScheduledRideWorker()
 initRideAutoCancelWorker()
 initDriverOnlineTimeoutWorker()
+require('./src/workers/paymentDispute.worker')()
 
 /* =======================
    MIDDLEWARES
@@ -115,6 +116,7 @@ app.use('/admin', require('./Routes/Admin/rides.routes'))
 app.use('/admin', require('./Routes/Admin/payments.routes'))
 app.use('/admin', require('./Routes/Admin/analytics.routes'))
 app.use('/admin/support', require('./Routes/Admin/support.routes'))
+app.use('/admin', require('./Routes/Admin/paymentDisputes.routes'))
 app.use('/admin/vendors', require('./Routes/Admin/vendor.routes'))
 app.use('/admin/fleet-vehicles', require('./Routes/Admin/fleetVehicle.routes'))
 

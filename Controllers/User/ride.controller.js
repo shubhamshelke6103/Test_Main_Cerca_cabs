@@ -390,6 +390,19 @@ const createRide = asyncHandler(async (req, res) => {
       )
     }
 
+    const { assertRiderCanBook, BookingBlockedError } = require('../../utils/paymentDispute/bookingGuard.service')
+    try {
+      await assertRiderCanBook(riderId)
+    } catch (guardErr) {
+      if (guardErr instanceof BookingBlockedError) {
+        throw new AppError(guardErr.message, 403, {
+          code: guardErr.code,
+          details: guardErr.details
+        })
+      }
+      throw guardErr
+    }
+
 
     // ============================
     // Fetch Admin Settings

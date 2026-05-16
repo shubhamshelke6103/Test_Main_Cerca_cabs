@@ -679,6 +679,16 @@ const createRide = async rideData => {
       )
     }
 
+    const { assertRiderCanBook, BookingBlockedError } = require('./paymentDispute/bookingGuard.service')
+    try {
+      await assertRiderCanBook(riderId)
+    } catch (guardErr) {
+      if (guardErr instanceof BookingBlockedError) {
+        throw new Error(guardErr.message)
+      }
+      throw guardErr
+    }
+
     // Validate locations
     if (!rideData.pickupLocation) {
       throw new Error('pickupLocation is required')
@@ -1942,6 +1952,13 @@ const completeRide = async (rideId, fare, options = {}) => {
     } catch (cleanupError) {
       // Don't fail ride completion if cleanup fails - log for monitoring
       logger.warn(`⚠️ Redis cleanup failed for ride ${rideId}: ${cleanupError.message}`)
+    }
+
+    try {
+      const { initRidePaymentCollectionOnComplete } = require('./paymentDispute/initRidePaymentCollection')
+      await initRidePaymentCollectionOnComplete(rideId)
+    } catch (pcErr) {
+      logger.warn(`paymentCollection init failed for ride ${rideId}: ${pcErr.message}`)
     }
 
     return ride

@@ -332,6 +332,30 @@ const rideSchema = new mongoose.Schema(
       default: 'pending'
     },
 
+    paymentCollection: {
+      status: {
+        type: String,
+        enum: [
+          'pending_collection',
+          'disputed',
+          'paid',
+          'auto_confirmed',
+          'company_settled',
+        ],
+        default: 'pending_collection',
+      },
+      amountDue: { type: Number, default: 0, min: 0 },
+      amountReceived: { type: Number, default: 0, min: 0 },
+      amountRemaining: { type: Number, default: 0, min: 0 },
+      collectedAt: { type: Date, default: null },
+      activeDisputeId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PaymentDispute',
+        default: null,
+      },
+      autoConfirmAt: { type: Date, default: null },
+    },
+
     transactionId: String,
     razorpayPaymentId: String,
     razorpayRefundId: String,

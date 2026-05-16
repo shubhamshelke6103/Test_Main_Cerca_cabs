@@ -87,6 +87,16 @@ const SettingsSchema = new mongoose.Schema({
         /** When true, pure RAZORPAY bookings must include razorpayPaymentId at ride creation */
         prepaidRazorpayEnabled: { type: Boolean, default: false },
     },
+    paymentDisputePolicy: {
+        bookingBlockThresholdInr: { type: Number, default: 1 },
+        maxPendingDuesBeforeHardBlock: { type: Number, default: 2000 },
+        autoConfirmMinutes: { type: Number, default: 30 },
+        disputeReportGraceMinutes: { type: Number, default: 15 },
+        reminderIntervalHours: { type: Number, default: 6 },
+        maxReminders: { type: Number, default: 10 },
+        riderFraudSuspendThreshold: { type: Number, default: 3 },
+        driverFalseComplaintSuspendThreshold: { type: Number, default: 3 },
+    },
     /** Split of cancellation fee retained from rider (percentages sum to 100) */
     cancellationSettlement: {
         cancellationFeeSplitPlatformPercent: { type: Number, default: 50 },
