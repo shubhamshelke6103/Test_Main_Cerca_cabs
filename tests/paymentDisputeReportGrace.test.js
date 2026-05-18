@@ -21,6 +21,15 @@ describe('payment dispute report grace', () => {
     clearPolicyCache()
   })
 
+  it('resolveDisputeReportGraceMinutes defaults to 0 when env unset', async () => {
+    delete process.env.PAYMENT_DISPUTE_GRACE_MINUTES
+    const { clearPolicyCache } = require('../utils/paymentDispute/policy')
+    clearPolicyCache()
+    const { resolveDisputeReportGraceMinutes } = require('../utils/paymentDispute/dispute.service')
+    const minutes = await resolveDisputeReportGraceMinutes()
+    assert.equal(minutes, 0)
+  })
+
   it('resolveDisputeReportGraceMinutes uses PAYMENT_DISPUTE_GRACE_MINUTES when set', async () => {
     process.env.PAYMENT_DISPUTE_GRACE_MINUTES = '0'
     const { clearPolicyCache } = require('../utils/paymentDispute/policy')

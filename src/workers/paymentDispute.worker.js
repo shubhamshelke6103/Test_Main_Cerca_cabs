@@ -1,4 +1,6 @@
 const logger = require('../../utils/logger')
+const Settings = require('../../Models/Admin/settings.modal')
+const { clearPolicyCache } = require('../../utils/paymentDispute/policy')
 const { runAutoConfirmJob } = require('../../utils/paymentDispute/autoConfirm.job')
 const { runReminderJob } = require('../../utils/paymentDispute/reminder.job')
 const { runDuesReconcileJob } = require('../../utils/paymentDispute/duesReconcile.job')
@@ -19,11 +21,31 @@ const safeRun = async (name, fn) => {
   }
 }
 
+/** One-time: legacy default was 15 min; product now allows immediate driver reports. */
+const migrateLegacyDisputeReportGrace = async () => {
+  try {
+    const res = await Settings.updateMany(
+      { 'paymentDisputePolicy.disputeReportGraceMinutes': 15 },
+      { $set: { 'paymentDisputePolicy.disputeReportGraceMinutes': 0 } }
+    )
+    if (res.modifiedCount > 0) {
+      clearPolicyCache()
+      logger.info(
+        `paymentDispute.worker: migrated disputeReportGraceMinutes 15→0 on ${res.modifiedCount} settings doc(s)`
+      )
+    }
+  } catch (err) {
+    logger.warn('paymentDispute.worker: migrateLegacyDisputeReportGrace failed', err)
+  }
+}
+
 const initPaymentDisputeWorker = () => {
   if (process.env.PAYMENT_DISPUTE_WORKER_ENABLED === 'false') {
     logger.info('Payment dispute worker disabled')
     return
   }
+
+  void safeRun('migrateLegacyDisputeReportGrace', migrateLegacyDisputeReportGrace)
 
   setInterval(() => safeRun('autoConfirm', runAutoConfirmJob), AUTO_CONFIRM_MS)
   setInterval(() => safeRun('reminder', runReminderJob), REMINDER_MS)

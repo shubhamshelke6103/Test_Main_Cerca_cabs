@@ -362,7 +362,7 @@ requested → accepted → arrived → in_progress → completed
 
 **Backend logs (grep):** `[PaymentDispute]` on every request; `metric.payment_dispute.created` on success; `metric.payment_dispute.blocked` on validation failure.
 
-**Grace period:** Default 15 minutes after ride completion before a report is allowed (`disputeReportGraceMinutes` in settings). Override for dev/QA: `PAYMENT_DISPUTE_GRACE_MINUTES=0` in server `.env`.
+**Grace period:** Default **0** — drivers can report immediately after ride completion. To add a wait window, set `disputeReportGraceMinutes` in admin settings or `PAYMENT_DISPUTE_GRACE_MINUTES` in server `.env`.
 
 **Manual QA:**
 

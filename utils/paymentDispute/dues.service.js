@@ -20,9 +20,20 @@ const sumOpenDisputeDues = async (riderId) => {
   )
 }
 
+const sumDriverCancelSettlementDues = async (riderId) => {
+  const {
+    getPendingDriverInProgressCancelSettlements
+  } = require('../ride_booking_functions')
+  const { totalAdditionalDue } =
+    await getPendingDriverInProgressCancelSettlements(riderId)
+  return roundInr(totalAdditionalDue || 0)
+}
+
 const recalcRiderPendingDues = async (riderId) => {
   const policy = await getPaymentDisputePolicy()
-  const totalPendingDues = await sumOpenDisputeDues(riderId)
+  const disputeDues = await sumOpenDisputeDues(riderId)
+  const driverCancelDues = await sumDriverCancelSettlementDues(riderId)
+  const totalPendingDues = roundInr(disputeDues + driverCancelDues)
 
   let bookingBlocked = false
   let bookingBlockedReason = null
@@ -30,7 +41,9 @@ const recalcRiderPendingDues = async (riderId) => {
   if (totalPendingDues >= policy.bookingBlockThresholdInr) {
     bookingBlocked = true
     bookingBlockedReason =
-      'Please clear previous ride payment before booking another ride.'
+      driverCancelDues > 0 && disputeDues <= 0
+        ? 'Please clear your previous trip charge before booking another ride.'
+        : 'Please clear previous ride payment before booking another ride.'
   }
   if (totalPendingDues >= policy.maxPendingDuesBeforeHardBlock) {
     bookingBlocked = true

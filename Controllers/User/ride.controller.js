@@ -2464,7 +2464,7 @@ const getRiderInProgressCancelBilling = async (req, res) => {
     }
     const ride = await Ride.findById(rideId)
       .select(
-        'rider status cancelledBy driverInProgressCancelSettlement cancellationReason'
+        'rider status cancelledBy driverInProgressCancelSettlement cancellationReason paymentMethod razorpayPaymentId walletAmountUsed'
       )
       .lean()
     if (!ride) {
@@ -2489,7 +2489,8 @@ const getRiderInProgressCancelBilling = async (req, res) => {
       success: true,
       data: {
         summary,
-        cancellationReason: ride.cancellationReason || null
+        cancellationReason: ride.cancellationReason || null,
+        paymentMethod: ride.paymentMethod || null
       }
     })
   } catch (error) {

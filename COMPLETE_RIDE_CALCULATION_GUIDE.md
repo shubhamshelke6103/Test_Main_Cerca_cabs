@@ -50,6 +50,10 @@ Implemented in `utils/farePricingEngine.js`. Admin configures `pricingConfigurat
 
 When `farePricing.enabled` is false, legacy flat `perKmRate × distance` applies.
 
+### Driver early-cancel settlement (rider UX)
+
+When a driver cancels during `in_progress`, the rider is routed to **`/driver-cancel-settlement/:rideId`** to pay `additionalDue` (partial km + penalty minus prepaid). Payment methods follow the original booking: post-ride Pay Online trips use Razorpay or cash only (`PAYMENT_MODE_ONLINE_REQUIRED` blocks wallet). Booking is blocked until settlement is finalized (`BOOKING_BLOCKED_DRIVER_CANCEL_SETTLEMENT` / pending dues).
+
 ---
 
 ## Base Fare Calculation

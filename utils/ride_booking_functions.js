@@ -2858,13 +2858,20 @@ async function creditDriverForBeforeStartCancel (ride, settlement) {
  * Rides where driver cancelled in_progress and rider still owes additionalDue (ledger not finalized).
  */
 async function getPendingDriverInProgressCancelSettlements (userId) {
+  const {
+    isPostRideRazorpay,
+    getAllowedSettlementMethodsForRide
+  } = require('./paymentOrchestrator/ridePaymentMode')
+
   const rides = await Ride.find({
     rider: userId,
     status: 'cancelled',
     cancelledBy: 'driver',
     'driverInProgressCancelSettlement.riderPaymentStatus': 'pending'
   })
-    .select('_id createdAt updatedAt pickupAddress driverInProgressCancelSettlement')
+    .select(
+      '_id createdAt updatedAt pickupAddress paymentMethod razorpayPaymentId walletAmountUsed driverInProgressCancelSettlement'
+    )
     .sort({ updatedAt: -1 })
     .lean()
 
@@ -2876,6 +2883,10 @@ async function getPendingDriverInProgressCancelSettlements (userId) {
     )
     .map(r => {
       const st = r.driverInProgressCancelSettlement
+      const allowedSettlementMethods =
+        st.allowedSettlementMethods ||
+        getAllowedSettlementMethodsForRide(r)
+      const isPostRideOnlineBooking = isPostRideRazorpay(r)
       return {
         rideId: String(r._id),
         additionalDue: roundMoney(st.additionalDue || 0),
@@ -2884,6 +2895,9 @@ async function getPendingDriverInProgressCancelSettlements (userId) {
         riderTotalCharge: st.riderTotalCharge,
         prepaidTotal: st.prepaidTotal,
         refundDue: st.refundDue,
+        paymentMethod: r.paymentMethod || null,
+        allowedSettlementMethods,
+        isPostRideOnlineBooking,
         createdAt: r.createdAt,
         summary:
           r.pickupAddress && String(r.pickupAddress).trim()

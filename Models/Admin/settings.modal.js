@@ -121,7 +121,7 @@ const SettingsSchema = new mongoose.Schema({
         bookingBlockThresholdInr: { type: Number, default: 1 },
         maxPendingDuesBeforeHardBlock: { type: Number, default: 2000 },
         autoConfirmMinutes: { type: Number, default: 30 },
-        disputeReportGraceMinutes: { type: Number, default: 15 },
+        disputeReportGraceMinutes: { type: Number, default: 0 },
         reminderIntervalHours: { type: Number, default: 6 },
         maxReminders: { type: Number, default: 10 },
         riderFraudSuspendThreshold: { type: Number, default: 3 },

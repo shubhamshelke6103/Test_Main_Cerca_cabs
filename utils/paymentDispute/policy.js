@@ -4,7 +4,7 @@ const DEFAULT_POLICY = {
   bookingBlockThresholdInr: 1,
   maxPendingDuesBeforeHardBlock: 2000,
   autoConfirmMinutes: 30,
-  disputeReportGraceMinutes: 15,
+  disputeReportGraceMinutes: 0,
   reminderIntervalHours: 6,
   maxReminders: 10,
   riderFraudSuspendThreshold: 3,

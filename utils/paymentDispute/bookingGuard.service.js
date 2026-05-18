@@ -1,12 +1,15 @@
 const User = require('../../Models/User/user.model')
 const { recalcRiderPendingDues } = require('./dues.service')
 const { getPaymentDisputePolicy } = require('./policy')
+const {
+  getPendingDriverInProgressCancelSettlements
+} = require('../ride_booking_functions')
 
 class BookingBlockedError extends Error {
-  constructor(message, details = {}) {
+  constructor(message, details = {}, code = 'BOOKING_BLOCKED_DUES') {
     super(message)
     this.name = 'BookingBlockedError'
-    this.code = 'BOOKING_BLOCKED_DUES'
+    this.code = code
     this.details = details
   }
 }
@@ -42,6 +45,22 @@ const assertRiderCanBook = async (riderId) => {
         reason: 'pending_dues',
         totalPendingDues: compliance.totalPendingDues || 0,
       }
+    )
+  }
+
+  const { items, totalAdditionalDue } =
+    await getPendingDriverInProgressCancelSettlements(riderId)
+  if (totalAdditionalDue > 0) {
+    const firstRideId = items[0]?.rideId || null
+    throw new BookingBlockedError(
+      'Please clear your previous trip charge before booking another ride.',
+      {
+        reason: 'driver_cancel_settlement',
+        totalAdditionalDue,
+        pendingSettlementRideIds: items.map(i => i.rideId),
+        settlementRideId: firstRideId,
+      },
+      'BOOKING_BLOCKED_DRIVER_CANCEL_SETTLEMENT'
     )
   }
 
