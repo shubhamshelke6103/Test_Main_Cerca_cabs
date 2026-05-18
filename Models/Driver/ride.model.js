@@ -269,7 +269,20 @@ const rideSchema = new mongoose.Schema(
       pickupWaitCharge: { type: Number, default: 0 },
       tollCharges: { type: Number, default: 0 },
       parkingCharges: { type: Number, default: 0 },
-      driverAllowance: { type: Number, default: 0 }
+      driverAllowance: { type: Number, default: 0 },
+      distanceTierBreakdown: [
+        {
+          tier: String,
+          km: Number,
+          ratePerKm: Number,
+          amount: Number,
+        },
+      ],
+      timeBandId: String,
+      timeMultiplier: Number,
+      pricingComputedAt: String,
+      rawDistanceFare: Number,
+      rawTimeFare: Number,
     },
 
     riderRating: {

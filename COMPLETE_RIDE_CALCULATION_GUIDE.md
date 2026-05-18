@@ -21,13 +21,34 @@ This document provides a complete guide to all calculations involved in ride boo
 ### Calculation Flow Diagram
 
 ```
-1. Base Fare = Service Price + (Distance × Per Km Rate)
-2. Apply Minimum Fare = MAX(Base Fare, Minimum Fare)
-3. Apply Promo Code Discount (if applicable)
-4. Final Fare = Fare After Discount
-5. Platform Fee = Final Fare × (Platform Fee % / 100)
-6. Driver Earning = Final Fare × (Driver Commission % / 100)
+1. Tiered distance fare (0–10, 11–20, 21–30, 31+ km slabs) + (duration × perMinuteRate)
+2. Apply time-of-day multiplier to distance + time (when farePricing.enabled)
+3. Subtotal = vehicle tier base price + adjusted (distance + time)
+4. Apply Minimum Fare = MAX(Subtotal, Minimum Fare)
+5. Apply Promo Code Discount (if applicable)
+6. At completion: add pickup wait; platform/driver % on final fare
 ```
+
+### Tiered KM + time bands (production)
+
+Implemented in `utils/farePricingEngine.js`. Admin configures `pricingConfigurations.farePricing`:
+
+| Setting | Default |
+|---------|---------|
+| Tier 1 (0–10 km) | configurable ₹/km |
+| Tier 2 (11–20 km) | configurable ₹/km |
+| Tier 3 (21–30 km) | configurable ₹/km |
+| Beyond 30 km | same rate as tier 3 unless overridden |
+| 06:00–10:00 | ×1.2 |
+| 10:00–17:00 | ×1.0 |
+| 17:00–22:00 | ×1.5 |
+| 22:00–06:00 | ×1.8 |
+
+**Rollout:** deploy with `farePricing.enabled: false` (flat `perKmRate` behavior). After QA, enable in admin Settings.
+
+**Time anchor:** multiplier uses **server time at each calculation** (quote, booking, completion, cancellation).
+
+When `farePricing.enabled` is false, legacy flat `perKmRate × distance` applies.
 
 ---
 

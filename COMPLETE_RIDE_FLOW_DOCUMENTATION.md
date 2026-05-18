@@ -356,6 +356,25 @@ requested → accepted → arrived → in_progress → completed
 
 **Driver app:** `CashCollectionScreen` shows “Waiting for rider to pay online” until `paymentCompleted`.
 
+### Driver: Report Payment Issue (Cash Collection)
+
+**Flow:** Driver opens **Report Payment Issue** bottom sheet on [`CashCollectionScreen`](driver_cerca) → `POST /drivers/:driverId/rides/:rideId/payment-disputes` with JSON body (`issueType`, optional `driverNote`, `amountReceived`).
+
+**Backend logs (grep):** `[PaymentDispute]` on every request; `metric.payment_dispute.created` on success; `metric.payment_dispute.blocked` on validation failure.
+
+**Grace period:** Default 15 minutes after ride completion before a report is allowed (`disputeReportGraceMinutes` in settings). Override for dev/QA: `PAYMENT_DISPUTE_GRACE_MINUTES=0` in server `.env`.
+
+**Manual QA:**
+
+| Step | Expected |
+|------|----------|
+| Submit within grace window | 400, `code: GRACE_PERIOD_ACTIVE`, red snackbar with wait message; log `[PaymentDispute] report failed` |
+| Set `PAYMENT_DISPUTE_GRACE_MINUTES=0`, submit | 201, green snackbar on Cash Collection; log `[PaymentDispute] created` |
+| Wrong JWT / driverId in URL | 403 `DRIVER_RESOURCE_FORBIDDEN` |
+| Duplicate report | 400 `DISPUTE_ALREADY_ACTIVE` |
+
+**Auth:** Routes require `authenticateDriver` and `requireOwnDriverId` (JWT driver must match `:driverId`).
+
 ---
 
 ## Cancellation Scenarios

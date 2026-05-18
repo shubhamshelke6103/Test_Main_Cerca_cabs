@@ -1,11 +1,10 @@
-const path = require('path')
 const {
   createDriverDispute,
   addEvidence,
   driverConfirmPaymentReceived,
 } = require('../../utils/paymentDispute/dispute.service')
 const PaymentDispute = require('../../Models/Admin/paymentDispute.model')
-const Ride = require('../../Models/Driver/ride.model')
+const logger = require('../../utils/logger')
 
 const buildEvidenceFromFile = (req, file) => {
   if (!file) return null
@@ -19,20 +18,37 @@ const buildEvidenceFromFile = (req, file) => {
 }
 
 const reportPaymentIssue = async (req, res) => {
-  try {
-    const { driverId, rideId } = req.params
-    const { issueType, driverNote, amountReceived } = req.body
+  const startedAt = Date.now()
+  const { driverId, rideId } = req.params
+  const { issueType, driverNote, amountReceived } = req.body || {}
 
+  logger.info('[PaymentDispute] driver report request', {
+    driverId,
+    rideId,
+    issueType: issueType || null,
+    hasFile: Boolean(req.file),
+    contentType: req.get('content-type'),
+    authDriverId: req.driverId || null,
+  })
+
+  try {
     const allowed = [
       'RIDER_DID_NOT_PAY',
       'FAKE_UPI_SCREENSHOT',
       'PARTIAL_PAYMENT',
       'PAYMENT_NOT_CONFIRMED',
     ]
-    if (!allowed.includes(issueType)) {
+    if (!issueType || !allowed.includes(issueType)) {
+      logger.warn('[PaymentDispute] report failed', {
+        driverId,
+        rideId,
+        reason: 'invalid_issue_type',
+        issueType: issueType || null,
+      })
       return res.status(400).json({
         success: false,
         message: 'Invalid issue type for driver report',
+        code: 'INVALID_ISSUE_TYPE',
       })
     }
 
@@ -56,9 +72,32 @@ const reportPaymentIssue = async (req, res) => {
       evidence,
     })
 
+    logger.info('[PaymentDispute] created', {
+      disputeId: String(dispute._id),
+      rideId,
+      driverId,
+      status: dispute.status,
+      durationMs: Date.now() - startedAt,
+    })
+
     res.status(201).json({ success: true, data: dispute })
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message })
+    logger.warn('[PaymentDispute] report failed', {
+      driverId,
+      rideId,
+      message: error.message,
+      code: error.code || null,
+      durationMs: Date.now() - startedAt,
+      stack: error.stack,
+    })
+    const status = error.statusCode || 400
+    res.status(status).json({
+      success: false,
+      message: error.message,
+      code: error.code || undefined,
+      minutesRemaining: error.minutesRemaining,
+      graceMinutes: error.graceMinutes,
+    })
   }
 }
 
@@ -77,6 +116,10 @@ const uploadDisputeEvidence = async (req, res) => {
     })
     res.status(200).json({ success: true, data: dispute })
   } catch (error) {
+    logger.warn('[PaymentDispute] evidence upload failed', {
+      message: error.message,
+      disputeId: req.params.disputeId,
+    })
     res.status(400).json({ success: false, message: error.message })
   }
 }
@@ -87,6 +130,10 @@ const confirmPaymentReceived = async (req, res) => {
     const dispute = await driverConfirmPaymentReceived({ disputeId, driverId })
     res.status(200).json({ success: true, data: dispute })
   } catch (error) {
+    logger.warn('[PaymentDispute] confirm received failed', {
+      message: error.message,
+      disputeId: req.params.disputeId,
+    })
     res.status(400).json({ success: false, message: error.message })
   }
 }

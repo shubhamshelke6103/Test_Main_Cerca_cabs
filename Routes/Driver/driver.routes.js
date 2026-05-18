@@ -55,10 +55,20 @@ const {
 } = require('../../Controllers/Driver/paymentDispute.controller.js');
 const { authenticateDriver } = require('../../utils/driverAuth');
 const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.middleware');
+const { createOptionalDisputeUpload } = require('../../middleware/optionalDisputeUpload');
 
 const router = express.Router();
 const requireOwnDriver = (req, res, next) => {
     if (req.driverId !== req.params.id) {
+        return next(new AppError('You are not authorized to access this driver resource', 403, {
+            code: 'DRIVER_RESOURCE_FORBIDDEN',
+        }));
+    }
+    return next();
+};
+
+const requireOwnDriverId = (req, res, next) => {
+    if (req.driverId !== req.params.driverId) {
         return next(new AppError('You are not authorized to access this driver resource', 403, {
             code: 'DRIVER_RESOURCE_FORBIDDEN',
         }));
@@ -303,22 +313,34 @@ const disputeUpload = multer({
     storage: disputeEvidenceStorage,
     limits: { fileSize: 5 * 1024 * 1024 },
 });
+const optionalDisputeUpload = createOptionalDisputeUpload(disputeUpload);
 
 router.post(
     '/:driverId/rides/:rideId/payment-disputes',
-    disputeUpload.single('file'),
+    authenticateDriver,
+    requireOwnDriverId,
+    optionalDisputeUpload,
     reportPaymentIssue
 );
 router.post(
     '/:driverId/payment-disputes/:disputeId/evidence',
+    authenticateDriver,
+    requireOwnDriverId,
     disputeUpload.single('file'),
     uploadDisputeEvidence
 );
 router.patch(
     '/:driverId/payment-disputes/:disputeId/confirm-received',
+    authenticateDriver,
+    requireOwnDriverId,
     confirmPaymentReceived
 );
-router.get('/:driverId/payment-disputes', listDriverDisputes);
+router.get(
+    '/:driverId/payment-disputes',
+    authenticateDriver,
+    requireOwnDriverId,
+    listDriverDisputes
+);
 
 // Multer error handler for file upload errors (must be after all routes)
 router.use((error, req, res, next) => {

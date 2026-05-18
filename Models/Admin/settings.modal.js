@@ -28,9 +28,39 @@ const SettingsSchema = new mongoose.Schema({
         substantiveTripMinDistanceKm: { type: Number, default: 0.3 },
         /** Required actual km ≥ max(substantiveTripMinDistanceKm, this × estimatedDistanceInKm). */
         substantiveTripEstimateDistanceFraction: { type: Number, default: 0.05 },
+        /**
+         * Tiered per-km slabs (0–10, 11–20, 21–30, 31+ km) and time-of-day multipliers.
+         * When enabled=false, flat pricingConfigurations.perKmRate is used (legacy).
+         */
+        farePricing: {
+            enabled: { type: Boolean, default: false },
+            timezone: { type: String, default: 'Asia/Kolkata' },
+            distanceTiers: {
+                tier1: { maxKm: { type: Number, default: 10 }, ratePerKm: { type: Number } },
+                tier2: { maxKm: { type: Number, default: 20 }, ratePerKm: { type: Number } },
+                tier3: { maxKm: { type: Number, default: 30 }, ratePerKm: { type: Number } },
+                beyondTier3RatePerKm: { type: Number },
+            },
+            timeBands: [
+                {
+                    id: { type: String },
+                    label: { type: String },
+                    start: { type: String },
+                    end: { type: String },
+                    multiplier: { type: Number },
+                },
+            ],
+            timeMultiplierAppliesTo: {
+                type: String,
+                enum: ['distanceAndTime', 'subtotalExcludingBase'],
+                default: 'distanceAndTime',
+            },
+        },
     },
     intercityPricingConfigurations: {
         enabled: { type: Boolean, default: true },
+        /** When true, intercity distance uses city pricingConfigurations.farePricing tiers. */
+        useCityFarePricing: { type: Boolean, default: true },
         baseFare: { type: Number, default: 0 },
         perKmRates: {
             cercaZip: { type: Number, default: 10 },

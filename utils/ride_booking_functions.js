@@ -24,6 +24,13 @@ const {
   resolveCanonicalVehicleTier
 } = require('./vehicleServicesKeys')
 const {
+  calculateInstantFare,
+  normalizeFarePricingConfig,
+  calculateIntercityDistanceFare,
+  calculateDistanceFareForSettlement,
+  getEffectivePerKmRate,
+} = require('./farePricingEngine')
+const {
   CANCEL_BLOCK_WITHIN_DROP_RADIUS_METERS,
   PICKUP_SHIFT_REASON_THRESHOLD_METERS,
   normalizeCancellationReasonCode,
@@ -551,29 +558,56 @@ const driverCanAcceptRideType = async (driver, requestedVehicleType) => {
 }
 
 /**
- * Calculate fare with time component
- * @param {number} basePrice - Base price from service
- * @param {number} distance - Distance in km
- * @param {number} duration - Duration in minutes
- * @param {number} perKmRate - Per km rate from settings
- * @param {number} perMinuteRate - Per minute rate for vehicle type
- * @param {number} minimumFare - Minimum fare from settings
- * @returns {Object} - Fare breakdown
+ * Persist fare breakdown fields including tier/time audit metadata.
  */
-const calculateFareWithTime = (basePrice, distance, duration, perKmRate, perMinuteRate, minimumFare) => {
-  const baseFare = basePrice
-  const distanceFare = distance * perKmRate
-  const timeFare = (duration || 0) * (perMinuteRate || 0)
-  const subtotal = baseFare + distanceFare + timeFare
-  const fareAfterMinimum = Math.max(subtotal, minimumFare)
-  
+const toStoredFareBreakdown = (fb, extras = {}) => {
+  if (!fb) return null
   return {
-    baseFare: Math.round(baseFare * 100) / 100,
-    distanceFare: Math.round(distanceFare * 100) / 100,
-    timeFare: Math.round(timeFare * 100) / 100,
-    subtotal: Math.round(subtotal * 100) / 100,
-    fareAfterMinimum: Math.round(fareAfterMinimum * 100) / 100
+    baseFare: fb.baseFare,
+    distanceFare: fb.distanceFare,
+    timeFare: fb.timeFare,
+    subtotal: fb.subtotal,
+    fareAfterMinimum: fb.fareAfterMinimum,
+    distanceTierBreakdown: fb.distanceTierBreakdown || [],
+    timeBandId: fb.timeBandId,
+    timeMultiplier: fb.timeMultiplier,
+    pricingComputedAt: fb.pricingComputedAt,
+    rawDistanceFare: fb.rawDistanceFare,
+    rawTimeFare: fb.rawTimeFare,
+    ...extras,
   }
+}
+
+/**
+ * Calculate fare with time component (tiered km + time-of-day multiplier when enabled).
+ * @param {object} [settings] - full Settings document; when omitted uses flat perKmRate only
+ */
+const calculateFareWithTime = (
+  basePrice,
+  distance,
+  duration,
+  perKmRate,
+  perMinuteRate,
+  minimumFare,
+  settings = null
+) => {
+  const pricingConfig = settings
+    ? normalizeFarePricingConfig(settings)
+    : normalizeFarePricingConfig({
+        pricingConfigurations: {
+          perKmRate,
+          minimumFare,
+          farePricing: { enabled: false },
+        },
+      })
+  return calculateInstantFare({
+    basePrice,
+    distanceKm: distance,
+    durationMin: duration,
+    perMinuteRate,
+    minimumFare,
+    pricingConfig,
+  })
 }
 
 const DEFAULT_SUBSTANTIVE_MIN_DURATION_MIN = 2
@@ -834,7 +868,8 @@ const createRide = async rideData => {
         estimatedDuration,
         perKmRate,
         perMinuteRate,
-        minimumFare
+        minimumFare,
+        settings
       )
       
       // Validate: fare should be >= minimumFare
@@ -864,7 +899,8 @@ const createRide = async rideData => {
         estimatedDuration,
         perKmRate,
         perMinuteRate,
-        minimumFare
+        minimumFare,
+        settings
       )
       fare = fareBreakdown.fareAfterMinimum
       logger.info(
@@ -1003,15 +1039,9 @@ const createRide = async rideData => {
       rideFor: rideData.rideFor || 'SELF',
       passenger: rideData.passenger || null,
       // Store fare breakdown for transparency
-      fareBreakdown: fareBreakdown ? {
-        baseFare: fareBreakdown.baseFare,
-        distanceFare: fareBreakdown.distanceFare,
-        timeFare: fareBreakdown.timeFare,
-        subtotal: fareBreakdown.subtotal,
-        fareAfterMinimum: fareBreakdown.fareAfterMinimum,
-        discount: discount,
-        finalFare: finalFare
-      } : null
+      fareBreakdown: fareBreakdown
+        ? toStoredFareBreakdown(fareBreakdown, { discount, finalFare })
+        : null
       // startOtp & stopOtp come from schema defaults
     }
 
@@ -1239,7 +1269,17 @@ const calculateIntercityFareBreakdown = ({
   const distanceKm = calculateHaversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng)
   const perKmRate = getIntercityPerKmRate(vehicleType, settings)
   const baseFare = roundMoney(config.baseFare)
-  const distanceFare = roundMoney(distanceKm * perKmRate)
+  const vehicleService = settings?.vehicleServices?.[vehicleType]
+  const perMinuteRate = vehicleService?.perMinuteRate || 0
+  const intercityDist = calculateIntercityDistanceFare({
+    distanceKm,
+    durationMin: durationMinutes,
+    perMinuteRate,
+    settings,
+  })
+  const distanceFare = roundMoney(
+    intercityDist.distanceFare + (intercityDist.timeFare || 0)
+  )
   const roundedToll = roundMoney(tollCharges || config.tollChargeDefault || 0)
   const roundedParking = roundMoney(parkingCharges || config.parkingChargeDefault || 0)
   const driverAllowance = tripMode === 'round_trip'
@@ -1258,9 +1298,14 @@ const calculateIntercityFareBreakdown = ({
   return {
     distanceKm: roundMoney(distanceKm),
     durationMinutes: Math.max(0, Math.round(Number(durationMinutes) || 0)),
-    perKmRate: roundMoney(perKmRate),
+    perKmRate: roundMoney(intercityDist.effectivePerKmRate ?? perKmRate),
     baseFare,
     distanceFare,
+    timeFare: roundMoney(intercityDist.timeFare || 0),
+    distanceTierBreakdown: intercityDist.distanceTierBreakdown,
+    timeBandId: intercityDist.timeBandId,
+    timeMultiplier: intercityDist.timeMultiplier,
+    pricingComputedAt: intercityDist.pricingComputedAt,
     tollCharges: roundedToll,
     parkingCharges: roundedParking,
     driverAllowance,
@@ -1809,16 +1854,11 @@ const completeRide = async (rideId, fare, options = {}) => {
     }
     
     if (fareBreakdown) {
-      updateData.fareBreakdown = {
-        baseFare: fareBreakdown.baseFare,
-        distanceFare: fareBreakdown.distanceFare,
-        timeFare: fareBreakdown.timeFare,
-        subtotal: fareBreakdown.subtotal,
-        fareAfterMinimum: fareBreakdown.fareAfterMinimum,
+      updateData.fareBreakdown = toStoredFareBreakdown(fareBreakdown, {
         discount: fareBreakdown.discount,
         pickupWaitCharge: fareBreakdown.pickupWaitCharge || 0,
-        finalFare: recalculatedFare
-      }
+        finalFare: recalculatedFare,
+      })
       // Update discount if promo code was re-applied
       if (fareBreakdown.discount > 0) {
         updateData.discount = fareBreakdown.discount
@@ -2495,11 +2535,14 @@ async function getPerKmRateFromSettings () {
   if (!Number.isFinite(perKmRate) || perKmRate < 0) {
     throw new Error('Invalid perKmRate in admin settings')
   }
-  return perKmRate
+  const config = normalizeFarePricingConfig(settings)
+  return getEffectivePerKmRate(1, config.distanceTiers) || perKmRate
 }
 
 async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
-  const perKmRate = await getPerKmRateFromSettings()
+  const Settings = require('../Models/Admin/settings.modal.js')
+  const settings = await Settings.findOne()
+  if (!settings) throw new Error('Admin settings not found')
   const pickupCoords = originalRide?.pickupLocation?.coordinates
   const currentCoords = resolveRideCurrentCoordinates(originalRide)
 
@@ -2526,7 +2569,12 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
     policy: BEFORE_START_DISTANCE_POLICY
   })
 
-  const travelledAmount = roundMoney(travelledDistanceKm * perKmRate)
+  const distSettlement = calculateDistanceFareForSettlement(
+    travelledDistanceKm,
+    settings
+  )
+  const travelledAmount = distSettlement.amount
+  const perKmRate = distSettlement.effectivePerKmRate
   const fixedPenaltyAmount = roundMoney(BEFORE_START_FIXED_PENALTY_RUPEES)
   const totalCharge = roundMoney(travelledAmount + fixedPenaltyAmount)
 
@@ -2978,8 +3026,21 @@ function toRiderBeforeStartCancelBillingSummary (settlement) {
  * Implied ₹/km from the booked trip when available; else null.
  */
 function impliedPerKmFromBooking (ride) {
+  const estKm = Number(ride.estimatedDistanceInKm ?? ride.distanceInKm)
+  const fb = ride.fareBreakdown
+  if (fb && Number.isFinite(estKm) && estKm > 0) {
+    if (fb.rawDistanceFare != null && Number(fb.rawDistanceFare) > 0) {
+      return Number(fb.rawDistanceFare) / estKm
+    }
+    if (Array.isArray(fb.distanceTierBreakdown) && fb.distanceTierBreakdown.length) {
+      const raw = fb.distanceTierBreakdown.reduce(
+        (s, t) => s + (Number(t.amount) || 0),
+        0
+      )
+      if (raw > 0) return raw / estKm
+    }
+  }
   const fare = Number(ride.fareAtBooking ?? ride.fare)
-  const estKm = Number(ride.estimatedDistanceInKm)
   if (!Number.isFinite(fare) || fare <= 0) return null
   if (!Number.isFinite(estKm) || estKm <= 0) return null
   return fare / estKm
@@ -3007,9 +3068,11 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
   const implied = impliedPerKmFromBooking(originalRide)
   let perKmRate = adminPerKm
   let perKmRateSource = 'admin'
+  let useTieredSettlement = true
   if (implied != null && Number.isFinite(implied) && implied > 0) {
     perKmRate = implied
     perKmRateSource = 'booking_implied'
+    useTieredSettlement = false
   }
 
   const driverDoc =
@@ -3034,7 +3097,14 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
     partialKm = calculateHaversineDistance(pLat, pLng, dLat, dLng)
   }
 
-  const driverPartialAmount = roundMoney(partialKm * perKmRate)
+  let driverPartialAmount
+  if (useTieredSettlement && partialKm > 0) {
+    driverPartialAmount = calculateDistanceFareForSettlement(partialKm, settings).amount
+    perKmRate = calculateDistanceFareForSettlement(partialKm, settings).effectivePerKmRate
+    perKmRateSource = 'admin_tiered'
+  } else {
+    driverPartialAmount = roundMoney(partialKm * perKmRate)
+  }
   const riderPenaltyAmount = roundMoney(penalty)
   const riderTotalCharge = roundMoney(riderPenaltyAmount + driverPartialAmount)
 
@@ -4159,12 +4229,13 @@ const recalculateRideFare = async (rideId) => {
       actualDuration,
       perKmRate,
       perMinuteRate,
-      minimumFare
+      minimumFare,
+      settings
     )
 
     // Log fare breakdown details for transparency
     logger.info(
-      `[Fare Recalculation] Fare breakdown - baseFare: ₹${fareBreakdown.baseFare}, distanceFare: ₹${fareBreakdown.distanceFare}, timeFare: ₹${fareBreakdown.timeFare} (${actualDuration}min × ₹${perMinuteRate}/min), subtotal: ₹${fareBreakdown.subtotal}, fareAfterMinimum: ₹${fareBreakdown.fareAfterMinimum}`
+      `[Fare Recalculation] Fare breakdown - baseFare: ₹${fareBreakdown.baseFare}, distanceFare: ₹${fareBreakdown.distanceFare}, timeFare: ₹${fareBreakdown.timeFare} (${actualDuration}min × ₹${perMinuteRate}/min), band: ${fareBreakdown.timeBandId} ×${fareBreakdown.timeMultiplier}, subtotal: ₹${fareBreakdown.subtotal}, fareAfterMinimum: ₹${fareBreakdown.fareAfterMinimum}`
     )
     
     // Log if timeFare is 0 for rides with actual duration > 0 (shouldn't happen)
@@ -4270,16 +4341,11 @@ const recalculateRideFare = async (rideId) => {
 
     const finalFareWithWait = roundMoney(tripFinalAfterCap + pickupWaitCharge)
 
-    return {
-      baseFare: fareBreakdown.baseFare,
-      distanceFare: fareBreakdown.distanceFare,
-      timeFare: fareBreakdown.timeFare,
-      subtotal: fareBreakdown.subtotal,
-      fareAfterMinimum: fareBreakdown.fareAfterMinimum,
+    return toStoredFareBreakdown(fareBreakdown, {
       discount: Math.round(discount * 100) / 100,
       pickupWaitCharge,
-      finalFare: finalFareWithWait
-    }
+      finalFare: finalFareWithWait,
+    })
   } catch (error) {
     logger.error(`Error recalculating ride fare for rideId ${rideId}:`, error)
     throw new Error(`Error recalculating ride fare: ${error.message}`)

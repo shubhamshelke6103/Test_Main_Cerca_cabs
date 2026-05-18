@@ -7,6 +7,10 @@ const {
     perMinuteDefaultForKey,
     priceDefaultForKey
 } = require('../utils/vehicleServicesKeys');
+const {
+    validateFarePricingConfig,
+    seedFarePricingFromPerKmRate,
+} = require('../utils/farePricingEngine');
 
 /**
  * @desc    Get all settings
@@ -161,10 +165,44 @@ const updateSettings = async (req, res) => {
 
         // Handle pricingConfigurations merge
         if (req.body.pricingConfigurations) {
-            updateData.pricingConfigurations = {
+            const mergedPricing = {
                 ...existingSettings.pricingConfigurations,
                 ...req.body.pricingConfigurations
             };
+            const perKm = Number(mergedPricing.perKmRate) || 12;
+            if (req.body.pricingConfigurations.farePricing) {
+                mergedPricing.farePricing = {
+                    ...(existingSettings.pricingConfigurations?.farePricing || {}),
+                    ...req.body.pricingConfigurations.farePricing,
+                    distanceTiers: {
+                        ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers || {}),
+                        ...(req.body.pricingConfigurations.farePricing.distanceTiers || {}),
+                        tier1: {
+                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier1 || {}),
+                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier1 || {}),
+                        },
+                        tier2: {
+                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier2 || {}),
+                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier2 || {}),
+                        },
+                        tier3: {
+                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier3 || {}),
+                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier3 || {}),
+                        },
+                    },
+                };
+            } else if (!mergedPricing.farePricing) {
+                mergedPricing.farePricing = seedFarePricingFromPerKmRate(
+                    perKm,
+                    existingSettings.pricingConfigurations?.farePricing || {}
+                );
+            }
+            try {
+                validateFarePricingConfig(mergedPricing.farePricing);
+            } catch (validationErr) {
+                return res.status(400).json({ message: validationErr.message });
+            }
+            updateData.pricingConfigurations = mergedPricing;
         }
 
         // Handle other nested objects similarly
@@ -474,15 +512,21 @@ const getPublicSettings = async (req, res) => {
                 prepaidWalletEnabled: true,
                 prepaidRazorpayEnabled: false,
             },
-            pricingConfigurations: settings.pricingConfigurations || {
-                baseFare: 0,
-                perKmRate: 12,
-                minimumFare: 100,
-                cancellationFees: 50,
-                platformFees: 10,
-                driverCommissions: 90,
-                estimatedAverageSpeedKmh: 35
-            },
+            pricingConfigurations: (() => {
+                const pc = settings.pricingConfigurations || {
+                    baseFare: 0,
+                    perKmRate: 12,
+                    minimumFare: 100,
+                    cancellationFees: 50,
+                    platformFees: 10,
+                    driverCommissions: 90,
+                    estimatedAverageSpeedKmh: 35,
+                };
+                if (!pc.farePricing) {
+                    pc.farePricing = seedFarePricingFromPerKmRate(pc.perKmRate || 12);
+                }
+                return pc;
+            })(),
             vehicleServices: vehicleServicesForResponse
         });
     } catch (error) {

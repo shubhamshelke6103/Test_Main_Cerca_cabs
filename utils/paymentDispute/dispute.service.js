@@ -35,27 +35,56 @@ const getActiveDisputeForRide = async (rideId) => {
   })
 }
 
-const assertDriverCanReport = async (ride, driverId) => {
-  if (!ride || ride.status !== 'completed') {
-    throw new Error('Ride must be completed before reporting a payment issue')
-  }
-  if (ride.driver?.toString() !== driverId && ride.driver?._id?.toString() !== driverId) {
-    throw new Error('Ride does not belong to this driver')
+const resolveDisputeReportGraceMinutes = async () => {
+  const envOverride = process.env.PAYMENT_DISPUTE_GRACE_MINUTES
+  if (envOverride !== undefined && envOverride !== '') {
+    const n = Number(envOverride)
+    if (Number.isFinite(n) && n >= 0) {
+      return n
+    }
   }
   const policy = await getPaymentDisputePolicy()
+  return Number(policy.disputeReportGraceMinutes) || 0
+}
+
+const assertDriverCanReport = async (ride, driverId) => {
+  if (!ride || ride.status !== 'completed') {
+    const err = new Error('Ride must be completed before reporting a payment issue')
+    err.code = 'RIDE_NOT_COMPLETED'
+    err.statusCode = 400
+    throw err
+  }
+  if (ride.driver?.toString() !== driverId && ride.driver?._id?.toString() !== driverId) {
+    const err = new Error('Ride does not belong to this driver')
+    err.code = 'DRIVER_RIDE_MISMATCH'
+    err.statusCode = 403
+    throw err
+  }
+  const graceMinutes = await resolveDisputeReportGraceMinutes()
   const completedAt = ride.actualEndTime || ride.updatedAt
-  if (completedAt) {
-    const graceMs = (policy.disputeReportGraceMinutes || 0) * 60 * 1000
+  if (completedAt && graceMinutes > 0) {
+    const graceMs = graceMinutes * 60 * 1000
     const minReportAt = new Date(completedAt.getTime() + graceMs)
-    if (new Date() < minReportAt && policy.disputeReportGraceMinutes > 0) {
-      throw new Error(
-        `Please wait ${policy.disputeReportGraceMinutes} minutes after ride completion before reporting`
+    const now = new Date()
+    if (now < minReportAt) {
+      const waitMs = minReportAt.getTime() - now.getTime()
+      const minutesRemaining = Math.max(1, Math.ceil(waitMs / 60000))
+      const err = new Error(
+        `You can report a payment issue ${graceMinutes} minutes after the ride ends. Try again in about ${minutesRemaining} minute(s).`
       )
+      err.code = 'GRACE_PERIOD_ACTIVE'
+      err.statusCode = 400
+      err.graceMinutes = graceMinutes
+      err.minutesRemaining = minutesRemaining
+      throw err
     }
   }
   const existing = await getActiveDisputeForRide(ride._id)
   if (existing) {
-    throw new Error('An active payment dispute already exists for this ride')
+    const err = new Error('An active payment dispute already exists for this ride')
+    err.code = 'DISPUTE_ALREADY_ACTIVE'
+    err.statusCode = 400
+    throw err
   }
 }
 
@@ -67,8 +96,26 @@ const createDriverDispute = async ({
   amountReceived,
   evidence = [],
 }) => {
-  const ride = await Ride.findById(rideId).populate('rider driver')
-  await assertDriverCanReport(ride, driverId)
+  logger.info('[PaymentDispute] createDriverDispute start', {
+    rideId: String(rideId),
+    driverId: String(driverId),
+    issueType,
+  })
+
+  let ride
+  try {
+    ride = await Ride.findById(rideId).populate('rider driver')
+    await assertDriverCanReport(ride, driverId)
+  } catch (err) {
+    logger.warn('metric.payment_dispute.blocked', {
+      rideId: String(rideId),
+      driverId: String(driverId),
+      issueType,
+      reason: err.message,
+      code: err.code || 'unknown',
+    })
+    throw err
+  }
 
   const fare = roundInr(ride.fare || 0)
   let received = 0
@@ -160,6 +207,14 @@ const createDriverDispute = async ({
       disputeId: dispute._id,
     })
   }
+
+  logger.info('metric.payment_dispute.created', {
+    disputeId: String(dispute._id),
+    rideId: String(rideId),
+    driverId: String(driverId),
+    issueType,
+    status: initialStatus,
+  })
 
   return dispute
 }
@@ -581,6 +636,8 @@ const autoCloseDispute = async (dispute, outcome = 'AUTO_CLOSED') => {
 module.exports = {
   REVIEW_ISSUE_TYPES,
   getActiveDisputeForRide,
+  resolveDisputeReportGraceMinutes,
+  assertDriverCanReport,
   createDriverDispute,
   addEvidence,
   driverConfirmPaymentReceived,

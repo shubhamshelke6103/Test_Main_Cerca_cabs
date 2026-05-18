@@ -241,7 +241,8 @@ const buildDestinationUpdateQuote = async ({
     duration,
     perKmRate,
     perMinuteRate,
-    minimumFare
+    minimumFare,
+    settings
   )
 
   const { discount, finalFare } = await applyRidePromoDiscount(
@@ -500,9 +501,38 @@ const createRide = asyncHandler(async (req, res) => {
     // ============================
     // Fare Calculation
     // ============================
-    let fare = service.price + distance * perKmRate
-    fare = Math.max(fare, minimumFare)
     let intercityBreakdown = null
+    let fareBreakdownInstant = null
+
+    if (!isIntercityRide) {
+      const vehicleServiceKeyForFare =
+        vehicleServiceKey || mapServiceToVehicleService(selectedService || 'cercaZip')
+      const vehicleServiceForFare =
+        settings.vehicleServices?.[vehicleServiceKeyForFare]
+      const perMinuteRate = vehicleServiceForFare?.perMinuteRate || 0
+      const basePrice = vehicleServiceForFare?.price ?? service.price
+      const estimatedDuration =
+        Number(rideData.estimatedDuration) ||
+        Math.ceil(
+          (distance /
+            (Number(settings.pricingConfigurations?.estimatedAverageSpeedKmh) ||
+              35)) *
+            60
+        )
+      fareBreakdownInstant = calculateFareWithTime(
+        basePrice,
+        distance,
+        estimatedDuration,
+        perKmRate,
+        perMinuteRate,
+        minimumFare,
+        settings
+      )
+    }
+
+    let fare = fareBreakdownInstant
+      ? fareBreakdownInstant.fareAfterMinimum
+      : Math.max(service.price + distance * perKmRate, minimumFare)
 
     if (isIntercityRide) {
       const intercityConfig = getIntercityPricingConfig(settings)
@@ -559,18 +589,38 @@ const createRide = asyncHandler(async (req, res) => {
       rideData.fareBreakdown = {
         baseFare: intercityBreakdown.baseFare,
         distanceFare: intercityBreakdown.distanceFare,
-        timeFare: 0,
+        timeFare: intercityBreakdown.timeFare || 0,
         subtotal: intercityBreakdown.finalFare,
         fareAfterMinimum: intercityBreakdown.finalFare,
         discount: 0,
         finalFare: intercityBreakdown.finalFare,
         tollCharges: intercityBreakdown.tollCharges,
         parkingCharges: intercityBreakdown.parkingCharges,
-        driverAllowance: intercityBreakdown.driverAllowance
+        driverAllowance: intercityBreakdown.driverAllowance,
+        distanceTierBreakdown: intercityBreakdown.distanceTierBreakdown || [],
+        timeBandId: intercityBreakdown.timeBandId,
+        timeMultiplier: intercityBreakdown.timeMultiplier,
+        pricingComputedAt: intercityBreakdown.pricingComputedAt,
       }
     } else {
       rideData.fare = fare
       rideData.service = service.name.toLowerCase()
+      if (fareBreakdownInstant) {
+        rideData.fareBreakdown = {
+          baseFare: fareBreakdownInstant.baseFare,
+          distanceFare: fareBreakdownInstant.distanceFare,
+          timeFare: fareBreakdownInstant.timeFare,
+          subtotal: fareBreakdownInstant.subtotal,
+          fareAfterMinimum: fareBreakdownInstant.fareAfterMinimum,
+          finalFare: fare,
+          distanceTierBreakdown: fareBreakdownInstant.distanceTierBreakdown || [],
+          timeBandId: fareBreakdownInstant.timeBandId,
+          timeMultiplier: fareBreakdownInstant.timeMultiplier,
+          pricingComputedAt: fareBreakdownInstant.pricingComputedAt,
+          rawDistanceFare: fareBreakdownInstant.rawDistanceFare,
+          rawTimeFare: fareBreakdownInstant.rawTimeFare,
+        }
+      }
     }
 
 
@@ -1583,7 +1633,8 @@ const calculateFare = async (req, res) => {
       duration,
       perKmRate,
       perMinuteRate,
-      minimumFare
+      minimumFare,
+      settings
     )
 
     // Apply promo code if provided
@@ -1778,7 +1829,8 @@ const calculateAllFares = async (req, res) => {
         duration,
         perKmRate,
         perMinuteRate,
-        minimumFare
+        minimumFare,
+        settings
       )
 
       let finalFare = fareBreakdown.fareAfterMinimum
@@ -1800,7 +1852,7 @@ const calculateAllFares = async (req, res) => {
               cercaZip: 'cercaZip',
               cercaGlide: 'cercaGlide',
               cercaTitan: 'cercaTitan'
-            }
+            },
             const serviceName = serviceNameMap[vehicleServiceKey] || 'cercaZip'
 
             const serviceApplicable =

@@ -7,6 +7,16 @@ const {
 } = require('../utils/ride_booking_functions')
 
 const settings = {
+  pricingConfigurations: {
+    perKmRate: 10,
+    minimumFare: 0,
+    farePricing: { enabled: false },
+  },
+  vehicleServices: {
+    cercaZip: { perMinuteRate: 2 },
+    cercaGlide: { perMinuteRate: 3 },
+    cercaTitan: { perMinuteRate: 4 },
+  },
   intercityPricingConfigurations: {
     enabled: true,
     baseFare: 100,
