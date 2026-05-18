@@ -1852,7 +1852,7 @@ const calculateAllFares = async (req, res) => {
               cercaZip: 'cercaZip',
               cercaGlide: 'cercaGlide',
               cercaTitan: 'cercaTitan'
-            },
+            }
             const serviceName = serviceNameMap[vehicleServiceKey] || 'cercaZip'
 
             const serviceApplicable =
