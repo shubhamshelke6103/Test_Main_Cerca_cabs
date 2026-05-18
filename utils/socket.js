@@ -4,7 +4,10 @@ const { redis } = require('../config/redis')
 const { Server } = require('socket.io')
 const jwt = require('jsonwebtoken')
 const logger = require('./logger')
-const { settleWalletRideCompletionFare } = require('./walletRideSettlement')
+const {
+  finalizeRidePayment,
+  emitPaymentRequired
+} = require('./paymentOrchestrator/finalizeRidePayment')
 const {
   deriveAdminEarningsSettlementFields
 } = require('./adminEarningsSettlement')
@@ -3343,8 +3346,11 @@ function initializeSocket (server) {
         // If ride is already completed, skip OTP verification but still process
         if (currentRide.status === 'completed') {
           logger.warn(`Ride ${rideId} is already completed, skipping OTP verification`)
-          // Still emit rideCompleted event to ensure apps receive it
-          const completedRide = await Ride.findById(rideId).populate('rider driver')
+          const paymentResult = await finalizeRidePayment(rideId, {
+            reEmitOnly: true,
+            fareFromEvent: fare
+          })
+          const completedRide = paymentResult.ride
           if (completedRide) {
             const rideRoom = 'ride_' + String(completedRide._id)
             io.to(rideRoom).emit('rideCompleted', completedRide)
@@ -3357,6 +3363,9 @@ function initializeSocket (server) {
               io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
             } else {
               logger.warn(`⚠️ Driver socketId not available for already-completed ride ${rideId}`)
+            }
+            if (paymentResult.paymentPayload) {
+              emitPaymentRequired(io, completedRide, paymentResult.paymentPayload)
             }
           }
           return
@@ -3434,7 +3443,7 @@ function initializeSocket (server) {
         if (ENABLE_EARLY_END_CONFIRM && isInProgressStatus(currentRide.status) && confirmEarlyEnd) {
           completionOptions.earlyEndConfirmed = true
         }
-        const completedRide = await completeRide(rideId, fare, completionOptions)
+        let completedRide = await completeRide(rideId, fare, completionOptions)
 
         logger.info(
           `Ride completed successfully - rideId: ${rideId}, finalFare stored in ride: ₹${completedRide.fare}`
@@ -3529,131 +3538,8 @@ function initializeSocket (server) {
           }
         }
 
-        // Process WALLET payment deduction - SEPARATE BLOCK (does not affect CASH/RAZORPAY flows)
-        // This block processes WALLET payments only if not already deducted upfront
-        // CASH and RAZORPAY flows remain unchanged and unaffected
-        if (completedRide.paymentMethod === 'WALLET') {
-          try {
-            const User = require('../Models/User/user.model')
-            const WalletTransaction = require('../Models/User/walletTransaction.model')
-            const riderId = completedRide.rider._id || completedRide.rider
-            // Use fare from completed ride (final recalculated fare)
-            const fareAmount = completedRide.fare || fare || 0
-
-            logger.info(
-              `[Wallet Payment] Processing wallet deduction - rideId: ${rideId}, fareAmount: ₹${fareAmount}, paymentStatus: ${completedRide.paymentStatus || 'pending'}`
-            )
-
-            if (fareAmount > 0) {
-              // Check if payment was already processed upfront (at ride creation)
-              const existingTransaction = await WalletTransaction.findOne({
-                relatedRide: rideId,
-                transactionType: 'RIDE_PAYMENT',
-                status: 'COMPLETED'
-              })
-
-              if (existingTransaction) {
-                logger.info(
-                  `[Wallet Payment] Payment already deducted upfront - Ride: ${rideId}, Transaction: ${existingTransaction._id}, skipping deduction at completion`
-                )
-                // Ensure payment status is set to completed
-                if (completedRide.paymentStatus !== 'completed') {
-                  completedRide.paymentStatus = 'completed'
-                  await completedRide.save()
-                }
-                // Skip - already processed upfront
-              } else if (completedRide.paymentStatus === 'completed') {
-                logger.warn(
-                  `[Wallet Payment] Payment already completed but no transaction found - Ride: ${rideId}, skipping deduction`
-                )
-                // Skip - already processed (legacy case)
-              } else {
-                // Legacy flow: Deduct at ride completion (for backward compatibility)
-                // This handles rides created before upfront deduction was implemented
-                const rider = await User.findById(riderId)
-                if (!rider) {
-                  logger.warn(
-                    `[Wallet Payment] Rider not found - Ride: ${rideId}, RiderId: ${riderId}`
-                  )
-                  completedRide.paymentStatus = 'failed'
-                  await completedRide.save()
-                } else {
-                  const balanceBefore = rider.walletBalance || 0
-
-                  logger.info(
-                    `[Wallet Payment] Balance check (legacy flow) - rideId: ${rideId}, balanceBefore: ₹${balanceBefore}, fareAmount: ₹${fareAmount}`
-                  )
-
-                  if (balanceBefore >= fareAmount) {
-                    const balanceAfter = balanceBefore - fareAmount
-                    rider.walletBalance = balanceAfter
-                    await rider.save()
-
-                    // Create wallet transaction
-                    await WalletTransaction.create({
-                      user: riderId,
-                      transactionType: 'RIDE_PAYMENT',
-                      amount: fareAmount,
-                      balanceBefore: balanceBefore,
-                      balanceAfter: balanceAfter,
-                      relatedRide: rideId,
-                      paymentMethod: 'WALLET',
-                      status: 'COMPLETED',
-                      description: `Ride payment of ₹${fareAmount}`,
-                      metadata: {
-                        deductedAt: 'ride_completion',
-                        legacyFlow: true
-                      }
-                    })
-
-                    // Update ride payment status
-                    completedRide.paymentStatus = 'completed'
-                    await completedRide.save()
-
-                    logger.info(
-                      `[Wallet Payment] Deduction successful (legacy flow) - Ride: ${rideId}, Amount: ₹${fareAmount}, Balance Before: ₹${balanceBefore}, Balance After: ₹${balanceAfter}`
-                    )
-                  } else {
-                    // Handle insufficient balance - mark payment as failed
-                    completedRide.paymentStatus = 'failed'
-                    await completedRide.save()
-                    logger.warn(
-                      `[Wallet Payment] Insufficient balance - Ride: ${rideId}, Required: ₹${fareAmount}, Available: ₹${balanceBefore}`
-                    )
-                  }
-                }
-              }
-            }
-
-            // Pure WALLET: refund or charge delta vs final distance/time fare (after legacy deduct if any)
-            try {
-              const settlement = await settleWalletRideCompletionFare(completedRide)
-              logger.info(
-                `[Wallet Settlement] ride=${rideId} ${JSON.stringify(settlement)}`
-              )
-            } catch (settleErr) {
-              logger.error(
-                `[Wallet Settlement] ride=${rideId} error:`,
-                settleErr
-              )
-            }
-          } catch (walletError) {
-            logger.error(
-              `[Wallet Payment] Error processing wallet payment for ride ${rideId}:`,
-              walletError
-            )
-            // Don't fail ride completion if wallet deduction fails, but mark payment status appropriately
-            try {
-              completedRide.paymentStatus = 'failed'
-              await completedRide.save()
-            } catch (updateError) {
-              logger.error(
-                `[Wallet Payment] Error updating payment status for ride ${rideId}:`,
-                updateError
-              )
-            }
-          }
-        }
+        const paymentResult = await finalizeRidePayment(rideId, { fareFromEvent: fare })
+        completedRide = paymentResult.ride || completedRide
 
         // Persist earnings after wallet settlement so AdminEarnings.paymentStatus / payout flags match ride state
         try {
@@ -3714,6 +3600,10 @@ function initializeSocket (server) {
         logger.info(
           `Ride completion notifications sent - rideId: ${rideId}, room: ${rideRoom}, riderSocket: ${completedRide.userSocketId || 'N/A'}, driverSocket: ${completedRide.driverSocketId || 'N/A'}`
         )
+
+        if (paymentResult.paymentPayload) {
+          emitPaymentRequired(io, completedRide, paymentResult.paymentPayload)
+        }
 
         // Expire share token and broadcast to shared ride room
         if (completedRide.shareToken && completedRide.isShared) {
@@ -3909,13 +3799,18 @@ function initializeSocket (server) {
             forceFareMode: 'full_fare_to_destination',
             completionSource: 'driver_cancel_near_destination'
           })
-          const rideRoom = `ride_${completedRide._id}`
-          io.to(rideRoom).emit('rideCompleted', completedRide)
-          if (completedRide.userSocketId) {
-            io.to(completedRide.userSocketId).emit('rideCompleted', completedRide)
+          const paymentResult = await finalizeRidePayment(rideId)
+          const rideForEmit = paymentResult.ride || completedRide
+          const rideRoom = `ride_${rideForEmit._id}`
+          io.to(rideRoom).emit('rideCompleted', rideForEmit)
+          if (rideForEmit.userSocketId) {
+            io.to(rideForEmit.userSocketId).emit('rideCompleted', rideForEmit)
           }
-          if (completedRide.driverSocketId) {
-            io.to(completedRide.driverSocketId).emit('rideCompleted', completedRide)
+          if (rideForEmit.driverSocketId) {
+            io.to(rideForEmit.driverSocketId).emit('rideCompleted', rideForEmit)
+          }
+          if (paymentResult.paymentPayload) {
+            emitPaymentRequired(io, rideForEmit, paymentResult.paymentPayload)
           }
           socket.emit('rideError', {
             code: 'CANCEL_CONVERTED_TO_COMPLETION',

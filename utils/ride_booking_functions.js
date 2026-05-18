@@ -2946,6 +2946,7 @@ function toRiderInProgressCancelBillingSummary (settlement) {
     additionalDue: settlement.additionalDue,
     refundDue: settlement.refundDue,
     riderPaymentStatus: settlement.riderPaymentStatus,
+    allowedSettlementMethods: settlement.allowedSettlementMethods,
     billingNote: 'distance_based_partial',
     settlementVersion: settlement.settlementVersion
   }
@@ -3048,6 +3049,11 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
 
   const riderPaymentStatus = additionalDue > 0 ? 'pending' : 'none_due'
 
+  const {
+    getAllowedSettlementMethodsForRide
+  } = require('./paymentOrchestrator/ridePaymentMode')
+  const allowedSettlementMethods = getAllowedSettlementMethodsForRide(originalRide)
+
   return {
     partialDistanceKm: roundMoney(partialKm),
     perKmRateUsed: perKmRate,
@@ -3063,6 +3069,7 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
     platformFineAmount,
     driverCoordsAtCancel: driverCoords,
     riderPaymentStatus,
+    allowedSettlementMethods,
     ledgerFinalizedAt: null,
     settlementVersion: 1
   }
@@ -3318,6 +3325,9 @@ async function riderPayWalletDriverInProgressCancel (rideId, userId) {
   if (!ride) throw new Error('Ride not found')
   const rid = ride.rider._id || ride.rider
   if (String(rid) !== String(userId)) throw new Error('Unauthorized')
+
+  const { assertWalletSettlementAllowed } = require('./paymentOrchestrator/ridePaymentMode')
+  assertWalletSettlementAllowed(ride)
 
   const st = ride.driverInProgressCancelSettlement
   if (!st || ride.cancelledBy !== 'driver') {

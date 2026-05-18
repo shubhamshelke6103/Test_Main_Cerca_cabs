@@ -342,6 +342,20 @@ requested → accepted → arrived → in_progress → completed
 - `failed`: Payment failed (insufficient balance, etc.)
 - `refunded`: Payment refunded (for cancelled rides)
 
+### Post-ride Pay Online and early trip end
+
+**Definition:** `paymentMethod: RAZORPAY`, no `razorpayPaymentId` at booking, `paymentStatus: pending` until rider pays after the trip (`utils/paymentOrchestrator/ridePaymentMode.js`).
+
+| Path | Driver action | Rider payment UX | Wallet allowed? |
+|------|---------------|------------------|-----------------|
+| A | Early completion (OTP + confirm early end) | `rideCompleted` + `paymentRequired` → `/ride-payment` via `RideService.routeToPaymentIfRequired` | No auto wallet debit |
+| B | End trip early far from drop (`DRIVER_CANCEL_IN_TRIP`) | Cancel settlement modal: Pay online primary; wallet blocked server-side | No (`409 PAYMENT_MODE_ONLINE_REQUIRED`) |
+| C | Cancel within 1 km → forced completion | Same as path A (`finalizeRidePayment` on bypass) | No auto wallet debit |
+
+**Backend:** `finalizeRidePayment` in `utils/paymentOrchestrator/finalizeRidePayment.js` runs on all completion entry points (normal `rideCompleted`, already-completed re-emit, near-drop cancel→complete). Emits `paymentRequired` to ride room and rider/driver sockets when online collection is due.
+
+**Driver app:** `CashCollectionScreen` shows “Waiting for rider to pay online” until `paymentCompleted`.
+
 ---
 
 ## Cancellation Scenarios

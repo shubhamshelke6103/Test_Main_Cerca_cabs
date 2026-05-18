@@ -2507,7 +2507,12 @@ const payWalletDriverCancelSettlement = async (req, res) => {
     res.status(200).json({ success: true, data: { result, ride } })
   } catch (error) {
     logger.error('payWalletDriverCancelSettlement:', error)
-    res.status(400).json({ success: false, message: error.message })
+    const status = error.statusCode || (error.code === 'PAYMENT_MODE_ONLINE_REQUIRED' ? 409 : 400)
+    res.status(status).json({
+      success: false,
+      message: error.message,
+      code: error.code
+    })
   }
 }
 
