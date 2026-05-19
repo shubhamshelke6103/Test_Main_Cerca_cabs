@@ -187,6 +187,9 @@ function emitPaymentRequired (io, ride, paymentPayload) {
   logger.info(
     `metric.payment.required rideId=${paymentPayload.rideId} amount=₹${paymentPayload.amount} reason=${paymentPayload.reason}`
   )
+  logger.info(
+    `metric.trip_end.payment_ui_signal rideId=${paymentPayload.rideId} client=rider,driver`
+  )
 }
 
 module.exports = {

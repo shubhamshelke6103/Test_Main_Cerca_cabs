@@ -175,6 +175,18 @@ async function emitRideCancelledToClients (
   const riderBilling = toRiderInProgressCancelBillingSummary(
     raw.driverInProgressCancelSettlement
   )
+  if (
+    raw.driverInProgressCancelSettlement &&
+    !riderBilling
+  ) {
+    logger.warn(
+      `metric.rider.billing_payload_missing rideId=${rideId} hasSettlement=true`
+    )
+  } else if (riderBilling) {
+    logger.info(
+      `metric.trip_end.rider_billing_emitted rideId=${rideId} additionalDue=${riderBilling.additionalDue ?? 0}`
+    )
+  }
   const beforeStartBilling = toRiderBeforeStartCancelBillingSummary(
     raw.beforeStartCancelSettlement
   )
