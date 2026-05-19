@@ -1304,9 +1304,29 @@ const getRidesByUserId = async (req, res) => {
     }
     
     const rides = await ridesQuery
-    
-    // Return empty array instead of 404 when no rides found
-    res.status(200).json(rides || [])
+
+    const {
+      resolveRidePayableAmount
+    } = require('../../utils/paymentOrchestrator/resolveRidePayableAmount')
+    const { isPostRideRazorpay } = require('../../utils/paymentOrchestrator/ridePaymentMode')
+
+    const enriched = (rides || []).map((r) => {
+      const doc = r.toObject ? r.toObject() : { ...r }
+      if (
+        doc.status === 'completed' &&
+        isPostRideRazorpay(doc) &&
+        String(doc.paymentStatus || '').toLowerCase() === 'pending'
+      ) {
+        const payable = resolveRidePayableAmount(doc)
+        if (payable.ok) {
+          doc.amountDue = payable.amount
+          doc.payableAmountSource = payable.source
+        }
+      }
+      return doc
+    })
+
+    res.status(200).json(enriched)
   } catch (error) {
     logger.error('Error fetching rides for user:', error)
     res.status(500).json({ message: 'Error fetching rides for user', error })
@@ -2449,6 +2469,36 @@ const getSharedLiveLocation = async (req, res) => {
 }
 
 /**
+ * GET /rides/:id/payment-summary?userId=
+ * Canonical post-ride payment context for rider apps (amount, addresses, eligibility).
+ */
+const getRidePaymentSummary = async (req, res) => {
+  try {
+    const rideId = req.params.id
+    const userId = req.query.userId
+    if (!mongoose.Types.ObjectId.isValid(rideId)) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' })
+    }
+    const ride = await Ride.findById(rideId).lean()
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' })
+    }
+    if (String(ride.rider) !== String(userId)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' })
+    }
+    const { buildRidePaymentSummary } = require('../../utils/paymentOrchestrator/resolveRidePayableAmount')
+    const summary = buildRidePaymentSummary(ride, userId)
+    return res.status(200).json({ success: true, data: summary })
+  } catch (error) {
+    logger.error('getRidePaymentSummary:', error)
+    res.status(500).json({ success: false, message: error.message })
+  }
+}
+
+/**
  * GET /rides/:id/rider-in-progress-cancel-billing?userId=
  * Rider-safe billing summary for driver-cancelled in-progress trips (socket may omit details).
  */
@@ -2615,6 +2665,7 @@ module.exports = {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
+  getRidePaymentSummary,
   getRiderInProgressCancelBilling,
   updateRideDestination,
   getDestinationQuote,

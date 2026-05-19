@@ -251,14 +251,18 @@ const createRidePaymentOrder = async (req, res) => {
       });
     }
 
-    // Validate amount
-    const amount = ride.fare || 0;
-    if (amount <= 0) {
+    const {
+      resolveRidePayableAmount
+    } = require('../utils/paymentOrchestrator/resolveRidePayableAmount');
+    const payable = resolveRidePayableAmount(ride);
+    if (!payable.ok) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid ride fare amount'
+        code: payable.code || 'PAYABLE_AMOUNT_INVALID',
+        message: payable.message || 'Invalid ride fare amount'
       });
     }
+    const amount = payable.amount;
 
     if (amount < 10) {
       return res.status(400).json({

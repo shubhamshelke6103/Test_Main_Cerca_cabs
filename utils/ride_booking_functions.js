@@ -1842,6 +1842,13 @@ const completeRide = async (rideId, fare, options = {}) => {
       }
     }
 
+    if (recalculatedFare <= 0 && agreedAtBookingForComplete > 0) {
+      logger.warn(
+        `completeRide: zero recalculated fare — using fareAtBooking ₹${agreedAtBookingForComplete} for rideId ${rideId}`
+      )
+      recalculatedFare = agreedAtBookingForComplete
+    }
+
     // Update ride with recalculated fare, fare breakdown, end time, duration, and status
     const updateData = {
       status: 'completed',

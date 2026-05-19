@@ -20,6 +20,7 @@ const {
   listRideLiveLocationShares,
   revokeRideLiveLocationShare,
   getSharedLiveLocation,
+  getRidePaymentSummary,
   getRiderInProgressCancelBilling,
   updateRideDestination,
   getDestinationQuote,
@@ -121,6 +122,9 @@ router.post('/search/:id', searchRide);
 
 // GET /rides/:id/destination-quote — preview new fare (before /:id)
 router.get('/:id/destination-quote', destinationChangeLimiter, getDestinationQuote);
+
+// GET /rides/:id/payment-summary — post-ride Pay Online amount and trip context
+router.get('/:id/payment-summary', getRidePaymentSummary);
 
 // GET /rides/:id/rider-in-progress-cancel-billing — rider settlement summary (driver in-trip cancel)
 router.get('/:id/rider-in-progress-cancel-billing', getRiderInProgressCancelBilling);
