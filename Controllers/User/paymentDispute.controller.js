@@ -56,15 +56,18 @@ const logPendingDuesEvent = (event, req, extra = {}) => {
 }
 
 const logPendingDuesError = (event, req, error, extra = {}) => {
+  const rawError = typeof error === 'object' && error !== null ? error : { value: error }
   logger.error(`paymentDispute.${event}`, {
     method: req.method,
     path: req.originalUrl,
     routeRiderId: req.params.id || null,
-    errorName: error?.name || null,
-    errorMessage: error?.message || String(error),
-    errorStack: error?.stack || null,
-    code: error?.code || null,
-    statusCode: error?.statusCode || error?.status || null,
+    errorName: rawError?.name || null,
+    errorMessage: rawError?.message || rawError?.error?.description || rawError?.error?.reason || String(error),
+    errorStack: rawError?.stack || null,
+    code: rawError?.code || rawError?.error?.code || null,
+    statusCode: rawError?.statusCode || rawError?.status || rawError?.error?.statusCode || rawError?.error?.status || null,
+    razorpayError: rawError?.error || null,
+    razorpayBody: rawError?.response?.body || rawError?.body || null,
     ...extra,
   })
 }
@@ -199,7 +202,6 @@ const createPendingDuesRazorpayOrder = async (req, res) => {
     const orderPayload = {
       amount: Math.round(amount * 100),
       currency: 'INR',
-      receipt: `dues_${riderId}_${Date.now()}`,
       notes: {
         type: 'pending_dues_recovery',
         riderId: String(riderId),
