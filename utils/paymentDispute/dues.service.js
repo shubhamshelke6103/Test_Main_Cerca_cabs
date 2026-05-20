@@ -1,3 +1,4 @@
+const mongoose = require('mongoose')
 const User = require('../../Models/User/user.model')
 const PaymentDispute = require('../../Models/Admin/paymentDispute.model')
 const { TERMINAL_STATUSES } = require('../../Models/Admin/paymentDispute.model')
@@ -8,7 +9,17 @@ const OPEN_DUE_STATUSES = ['OPEN', 'UNDER_REVIEW', 'AWAITING_RIDER_PAYMENT', 'AW
 
 const roundInr = (n) => Math.round((Number(n) || 0) * 100) / 100
 
+const assertValidRiderId = (riderId) => {
+  if (!mongoose.Types.ObjectId.isValid(riderId)) {
+    const error = new Error('Invalid rider ID')
+    error.statusCode = 400
+    error.code = 'INVALID_RIDER_ID'
+    throw error
+  }
+}
+
 const sumOpenDisputeDues = async (riderId) => {
+  assertValidRiderId(riderId)
   const disputes = await PaymentDispute.find({
     riderId,
     status: { $in: OPEN_DUE_STATUSES },
@@ -21,6 +32,7 @@ const sumOpenDisputeDues = async (riderId) => {
 }
 
 const sumDriverCancelSettlementDues = async (riderId) => {
+  assertValidRiderId(riderId)
   const {
     getPendingDriverInProgressCancelSettlements
   } = require('../ride_booking_functions')
@@ -30,6 +42,7 @@ const sumDriverCancelSettlementDues = async (riderId) => {
 }
 
 const recalcRiderPendingDues = async (riderId) => {
+  assertValidRiderId(riderId)
   const policy = await getPaymentDisputePolicy()
   const disputeDues = await sumOpenDisputeDues(riderId)
   const driverCancelDues = await sumDriverCancelSettlementDues(riderId)
@@ -61,6 +74,7 @@ const recalcRiderPendingDues = async (riderId) => {
 }
 
 const listPendingDuesForRider = async (riderId) => {
+  assertValidRiderId(riderId)
   const disputes = await PaymentDispute.find({
     riderId,
     status: { $in: OPEN_DUE_STATUSES },
@@ -96,6 +110,7 @@ const listPendingDuesForRider = async (riderId) => {
 
 /** Nightly reconcile: fix aggregate if drifted */
 const reconcileRiderDues = async (riderId) => {
+  assertValidRiderId(riderId)
   const before = await User.findById(riderId).select('paymentCompliance.totalPendingDues').lean()
   const after = await recalcRiderPendingDues(riderId)
   const drift = Math.abs(
