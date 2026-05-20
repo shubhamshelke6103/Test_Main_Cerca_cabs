@@ -1,6 +1,7 @@
 const crypto = require('crypto')
 const razorpay = require('razorpay')
 const mongoose = require('mongoose')
+const jwt = require('jsonwebtoken')
 const {
   listPendingDuesForRider,
 } = require('../../utils/paymentDispute/dues.service')
@@ -15,15 +16,9 @@ const key = process.env.RAZORPAY_ID
 const secret = process.env.RAZORPAY_SECRET
 const razorpayInstance =
   key && secret ? new razorpay({ key_id: key, key_secret: secret }) : null
-
-const assertValidRiderId = (riderId) => {
-  if (!mongoose.Types.ObjectId.isValid(riderId)) {
-    const error = new Error('Invalid rider ID')
-    error.statusCode = 400
-    error.code = 'INVALID_RIDER_ID'
-    throw error
-  }
-}
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  '@#@!#@dasd4234jkdh3874#$@#$#$@#$#$dkjashdlk$#442343%#$%f34234T$vtwefcEC$%'
 
 const sendError = (res, error, fallbackStatus = 500) => {
   const statusCode = error.statusCode || fallbackStatus
@@ -34,10 +29,41 @@ const sendError = (res, error, fallbackStatus = 500) => {
   })
 }
 
+const getAuthRiderId = (req) => {
+  const authHeader = req.headers.authorization || req.headers.Authorization || ''
+  if (!authHeader.startsWith('Bearer ')) {
+    return null
+  }
+
+  try {
+    const token = authHeader.split(' ')[1]
+    const decoded = jwt.verify(token, JWT_SECRET)
+    return decoded.id || decoded.userId || null
+  } catch {
+    return null
+  }
+}
+
+const resolveRiderId = (req) => {
+  const { id: paramRiderId } = req.params
+  if (mongoose.Types.ObjectId.isValid(paramRiderId)) {
+    return paramRiderId
+  }
+
+  const authRiderId = getAuthRiderId(req)
+  if (authRiderId && mongoose.Types.ObjectId.isValid(authRiderId)) {
+    return authRiderId
+  }
+
+  const error = new Error('Invalid rider ID')
+  error.statusCode = 400
+  error.code = 'INVALID_RIDER_ID'
+  throw error
+}
+
 const getPendingDues = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     const data = await listPendingDuesForRider(riderId)
     res.status(200).json({ success: true, data })
   } catch (error) {
@@ -47,8 +73,7 @@ const getPendingDues = async (req, res) => {
 
 const checkBookingEligibility = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     await assertRiderCanBook(riderId)
     res.status(200).json({ success: true, canBook: true })
   } catch (error) {
@@ -67,8 +92,7 @@ const checkBookingEligibility = async (req, res) => {
 
 const payPendingDuesWallet = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     const idempotencyKey =
       req.body.idempotencyKey ||
       req.headers['idempotency-key'] ||
@@ -82,8 +106,7 @@ const payPendingDuesWallet = async (req, res) => {
 
 const createPendingDuesRazorpayOrder = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     if (!razorpayInstance) {
       return res.status(503).json({ success: false, message: 'Payment gateway unavailable' })
     }
@@ -113,8 +136,7 @@ const createPendingDuesRazorpayOrder = async (req, res) => {
 
 const verifyPendingDuesRazorpay = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     const { razorpay_payment_id, razorpay_order_id } = req.body
     if (!razorpayInstance || !razorpay_payment_id || !razorpay_order_id) {
       return res.status(400).json({ success: false, message: 'Invalid payment payload' })
@@ -136,8 +158,8 @@ const verifyPendingDuesRazorpay = async (req, res) => {
 
 const uploadRiderEvidence = async (req, res) => {
   try {
-    const { id: riderId, disputeId } = req.params
-    assertValidRiderId(riderId)
+    const { disputeId } = req.params
+    const riderId = resolveRiderId(req)
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'File required' })
     }
@@ -158,8 +180,7 @@ const uploadRiderEvidence = async (req, res) => {
 
 const listRiderDisputes = async (req, res) => {
   try {
-    const { id: riderId } = req.params
-    assertValidRiderId(riderId)
+    const riderId = resolveRiderId(req)
     const disputes = await PaymentDispute.find({ riderId })
       .sort({ createdAt: -1 })
       .limit(50)
