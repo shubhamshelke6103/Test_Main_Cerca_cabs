@@ -581,17 +581,34 @@ const payAllPendingDuesWithWallet = async ({ riderId, idempotencyKey }) => {
     }
   }
 
-  user.walletBalance = roundInr(user.walletBalance - total)
-  await user.save()
+  const balanceBefore = roundInr(user.walletBalance || 0)
+  const balanceAfter = roundInr(balanceBefore - total)
+  let walletTransaction = null
 
-  await WalletTransaction.create({
-    user: riderId,
-    amount: -total,
-    transactionType: 'RIDE_PAYMENT',
-    status: 'COMPLETED',
-    description: `Pending ride dues recovery (${dues.items.length} dispute(s))`,
-    metadata: { idempotencyKey, disputeIds: dues.items.map((i) => i.disputeId) },
-  })
+  try {
+    walletTransaction = await WalletTransaction.create({
+      user: riderId,
+      amount: total,
+      balanceBefore,
+      balanceAfter,
+      transactionType: 'RIDE_PAYMENT',
+      paymentMethod: 'WALLET',
+      status: 'COMPLETED',
+      description: `Pending ride dues recovery (${dues.items.length} dispute(s))`,
+      metadata: {
+        idempotencyKey,
+        disputeIds: dues.items.map((i) => i.disputeId),
+      },
+    })
+
+    user.walletBalance = balanceAfter
+    await user.save()
+  } catch (error) {
+    if (walletTransaction?._id) {
+      await WalletTransaction.findByIdAndDelete(walletTransaction._id)
+    }
+    throw error
+  }
 
   const resolved = []
   for (const item of dues.items) {
