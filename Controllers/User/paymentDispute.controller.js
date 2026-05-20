@@ -55,6 +55,20 @@ const logPendingDuesEvent = (event, req, extra = {}) => {
   })
 }
 
+const logPendingDuesError = (event, req, error, extra = {}) => {
+  logger.error(`paymentDispute.${event}`, {
+    method: req.method,
+    path: req.originalUrl,
+    routeRiderId: req.params.id || null,
+    errorName: error?.name || null,
+    errorMessage: error?.message || String(error),
+    errorStack: error?.stack || null,
+    code: error?.code || null,
+    statusCode: error?.statusCode || error?.status || null,
+    ...extra,
+  })
+}
+
 const resolveRiderId = (req) => {
   const { id: paramRiderId } = req.params
   const authRiderId = getAuthRiderId(req)
@@ -171,6 +185,7 @@ const createPendingDuesRazorpayOrder = async (req, res) => {
     if (!razorpayInstance) {
       return res.status(503).json({ success: false, message: 'Payment gateway unavailable' })
     }
+    logPendingDuesEvent('payOnline.lookupDues.start', req, { resolvedRiderId: riderId })
     const dues = await listPendingDuesForRider(riderId)
     const amount = dues.totalPendingDues
     logPendingDuesEvent('payOnline.calculated', req, {
@@ -181,7 +196,7 @@ const createPendingDuesRazorpayOrder = async (req, res) => {
     if (amount < 1) {
       return res.status(400).json({ success: false, message: 'No pending dues' })
     }
-    const order = await razorpayInstance.orders.create({
+    const orderPayload = {
       amount: Math.round(amount * 100),
       currency: 'INR',
       receipt: `dues_${riderId}_${Date.now()}`,
@@ -190,19 +205,24 @@ const createPendingDuesRazorpayOrder = async (req, res) => {
         riderId: String(riderId),
         disputeIds: dues.items.map((i) => String(i.disputeId)).join(','),
       },
+    }
+    logPendingDuesEvent('payOnline.createOrder.start', req, {
+      resolvedRiderId: riderId,
+      amountPaise: orderPayload.amount,
+      disputeCount: dues.items.length,
+    })
+    const order = await razorpayInstance.orders.create(orderPayload)
+    logPendingDuesEvent('payOnline.createOrder.success', req, {
+      resolvedRiderId: riderId,
+      amountPaise: orderPayload.amount,
+      orderId: order?.id || null,
     })
     res.status(200).json({
       success: true,
       data: { order, amount, key: process.env.RAZORPAY_ID },
     })
   } catch (error) {
-    logger.error('paymentDispute.payOnline.failed', {
-      method: req.method,
-      path: req.originalUrl,
-      routeRiderId: req.params.id || null,
-      error: error.message,
-      code: error.code || null,
-    })
+    logPendingDuesError('payOnline.failed', req, error)
     sendError(res, error)
   }
 }
