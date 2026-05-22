@@ -8,8 +8,8 @@ function computeRideEarningsSplit (grossFare) {
     return { platformFee: 0, driverEarning: 0, grossFare: 0 }
   }
 
-  const platformFee = roundMoney(5 + ((g - 100) / 100))
-  const driverEarning = roundMoney(g - platformFee)
+  const platformFee = 5 + ((g - 100) / 100)
+  const driverEarning = g - platformFee
 
   return {
     platformFee,

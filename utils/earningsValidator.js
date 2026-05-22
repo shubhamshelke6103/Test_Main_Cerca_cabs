@@ -70,21 +70,17 @@ const validateEarningsForRide = async (rideId) => {
     const expectedSplit = computeRideEarningsSplit(earnings.grossFare)
     const expectedPlatformFee = expectedSplit.platformFee
     const expectedDriverEarning = expectedSplit.driverEarning
-    if (true) {
-
-      if (Math.abs(earnings.platformFee - expectedPlatformFee) > fareTolerance) {
-        warnings.push(
-          `Platform fee doesn't match current settings - stored: ₹${earnings.platformFee}, expected: ₹${expectedPlatformFee} (settings may have changed)`
-        )
-      }
-
-      if (Math.abs(earnings.driverEarning - expectedDriverEarning) > fareTolerance) {
-        warnings.push(
-          `Driver earning doesn't match current settings - stored: ₹${earnings.driverEarning}, expected: ₹${expectedDriverEarning} (settings may have changed)`
-        )
-      }
+    if (Math.abs(earnings.platformFee - expectedPlatformFee) > fareTolerance) {
+      warnings.push(
+        `Platform fee does not match formula - stored: ?${earnings.platformFee}, expected: ?${expectedPlatformFee}`
+      )
     }
 
+    if (Math.abs(earnings.driverEarning - expectedDriverEarning) > fareTolerance) {
+      warnings.push(
+        `Driver earning does not match formula - stored: ?${earnings.driverEarning}, expected: ?${expectedDriverEarning}`
+      )
+    }
     return {
       valid: errors.length === 0,
       errors: errors.length > 0 ? errors : undefined,
@@ -154,9 +150,9 @@ const validateDriverEarningsTotals = async (driverId, startDate = null, endDate 
       errors: errors.length > 0 ? errors : undefined,
       driverId: driverId,
       totals: {
-        totalGrossFare: Math.round(totalGrossFare * 100) / 100,
-        totalPlatformFee: Math.round(totalPlatformFee * 100) / 100,
-        totalDriverEarning: Math.round(totalDriverEarning * 100) / 100,
+        totalGrossFare,
+        totalPlatformFee,
+        totalDriverEarning,
         recordCount: earnings.length
       }
     }
@@ -205,10 +201,10 @@ const validateAdminEarningsTotals = async (startDate = null, endDate = null) => 
       valid: errors.length === 0,
       errors: errors.length > 0 ? errors : undefined,
       totals: {
-        totalGrossFare: Math.round(totalGrossFare * 100) / 100,
-        totalPlatformFee: Math.round(totalPlatformFee * 100) / 100,
-        totalDriverEarning: Math.round(totalDriverEarning * 100) / 100,
-        adminEarnings: Math.round(totalPlatformFee * 100) / 100, // Admin earnings = platform fees
+        totalGrossFare,
+        totalPlatformFee,
+        totalDriverEarning,
+        adminEarnings: totalPlatformFee, // Admin earnings = platform fees
         recordCount: earnings.length
       }
     }

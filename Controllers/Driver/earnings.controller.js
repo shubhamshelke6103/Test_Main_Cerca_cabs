@@ -265,10 +265,10 @@ const getDriverEarnings = async (req, res) => {
       dailyBreakdown.push({
         date: value.date,
         rides: value.rides,
-        grossEarnings: Math.round(value.grossEarnings * 100) / 100,
-        driverEarnings: Math.round(value.driverEarnings * 100) / 100,
-        tips: Math.round(value.tips * 100) / 100,
-        netEarnings: Math.round(value.netEarnings * 100) / 100,
+        grossEarnings: value.grossEarnings,
+        driverEarnings: value.driverEarnings,
+        tips: value.tips,
+        netEarnings: value.netEarnings,
       });
     });
     
@@ -335,10 +335,10 @@ const getDriverEarnings = async (req, res) => {
       weeklyBreakdown.push({
         weekStart: value.weekStart,
         rides: value.rides,
-        grossEarnings: Math.round(value.grossEarnings * 100) / 100,
-        driverEarnings: Math.round(value.driverEarnings * 100) / 100,
-        tips: Math.round(value.tips * 100) / 100,
-        netEarnings: Math.round(value.netEarnings * 100) / 100,
+        grossEarnings: value.grossEarnings,
+        driverEarnings: value.driverEarnings,
+        tips: value.tips,
+        netEarnings: value.netEarnings,
       });
     });
     
@@ -402,10 +402,10 @@ const getDriverEarnings = async (req, res) => {
       monthlyBreakdown.push({
         month: value.month,
         rides: value.rides,
-        grossEarnings: Math.round(value.grossEarnings * 100) / 100,
-        driverEarnings: Math.round(value.driverEarnings * 100) / 100,
-        tips: Math.round(value.tips * 100) / 100,
-        netEarnings: Math.round(value.netEarnings * 100) / 100,
+        grossEarnings: value.grossEarnings,
+        driverEarnings: value.driverEarnings,
+        tips: value.tips,
+        netEarnings: value.netEarnings,
       });
     });
     
@@ -470,23 +470,21 @@ const getDriverEarnings = async (req, res) => {
         },
         summary: {
           totalRides,
-          totalGrossEarnings: Math.round(totalGrossEarnings * 100) / 100,
-          totalPlatformFees: Math.round(totalPlatformFees * 100) / 100,
-          totalDriverEarnings: Math.round(totalDriverEarnings * 100) / 100,
-          totalTips: Math.round(totalTips * 100) / 100,
-          totalBonuses: Math.round(totalBonuses * 100) / 100,
-          netEarnings: Math.round(netEarnings * 100) / 100,
-          averageGrossPerRide: Math.round(averageGrossPerRide * 100) / 100,
-          averageNetPerRide: Math.round(averageNetPerRide * 100) / 100,
+          totalGrossEarnings,
+          totalPlatformFees,
+          totalDriverEarnings,
+          totalTips,
+          totalBonuses,
+          netEarnings,
+          averageGrossPerRide,
+          averageNetPerRide,
           // Payment status summary
-          totalPendingEarnings: Math.round(totalPendingEarnings * 100) / 100,
-          totalCompletedEarnings: Math.round(totalCompletedEarnings * 100) / 100,
+          totalPendingEarnings,
+          totalCompletedEarnings,
           pendingEarningsCount,
           completedEarningsCount,
-          cashOwedToPlatformTotal:
-            Math.round(cashOwedToPlatformTotal * 100) / 100,
-          payoutEligibleDriverTotal:
-            Math.round(payoutEligibleDriverTotal * 100) / 100,
+          cashOwedToPlatformTotal,
+          payoutEligibleDriverTotal,
           /** All-time signed ledger (cash commission owed vs online credit), same as payout API. */
           netSettlementBalance: ledgerAllTime.netSettlementBalance,
           payoutableAmount: ledgerAllTime.payoutableAmount,
@@ -640,7 +638,7 @@ const getCashOwedSummary = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        totalOutstanding: Math.round(totalOutstanding * 100) / 100,
+        totalOutstanding,
         count: rows.length,
         items: rows.map((e) => ({
           earningId: e._id,
@@ -650,7 +648,7 @@ const getCashOwedSummary = async (req, res) => {
           pickupAddress: e.rideId?.pickupAddress,
           platformFeePercentApplied:
             e.grossFare > 0
-              ? Math.round(((e.platformFee || 0) / e.grossFare) * 10000) / 100
+              ? ((e.platformFee || 0) / e.grossFare) * 100
               : null,
         })),
       },

@@ -3280,8 +3280,8 @@ const getDriverEarningsFormula = async (req, res) => {
           `[Fare Tracking] getDriverEarnings - driverId: ${req.params.id}, totalRides: ${totalRides}, totalGrossEarnings: â‚¹${totalGrossEarnings}, allocationMethod: formula`
         );
 
-        const averageGrossPerRide = totalRides > 0 ? (totalGrossEarnings / totalRides).toFixed(2) : 0;
-        const averageNetPerRide = totalRides > 0 ? (totalDriverEarnings / totalRides).toFixed(2) : 0;
+        const averageGrossPerRide = totalRides > 0 ? (totalGrossEarnings / totalRides) : 0;
+        const averageNetPerRide = totalRides > 0 ? (totalDriverEarnings / totalRides) : 0;
 
         res.status(200).json({
             totalGrossEarnings,

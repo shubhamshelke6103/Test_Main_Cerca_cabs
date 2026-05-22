@@ -256,18 +256,10 @@ async function backfillEarnings(options = {}) {
         }
 
         // Calculate platform fee and driver earning
-        let {
+        const {
           platformFee: roundedPlatformFee,
           driverEarning: roundedDriverEarning
         } = computeRideEarningsSplit(grossFare);
-
-        // Verify calculation accuracy
-        const tolerance = 0.01;
-        const calculatedTotal = roundedPlatformFee + roundedDriverEarning;
-        if (Math.abs(grossFare - calculatedTotal) > tolerance) {
-          logger.warn(`⚠️ Calculation mismatch for ride ${rideId} - adjusting driverEarning`);
-          roundedDriverEarning = Math.round((grossFare - roundedPlatformFee) * 100) / 100;
-        }
 
         if (dryRun) {
           // Dry run: just log what would be created/updated

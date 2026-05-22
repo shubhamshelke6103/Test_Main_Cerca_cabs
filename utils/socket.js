@@ -5133,30 +5133,10 @@ async function storeRideEarnings (ride, retryCount = 0) {
     // ============================
     // CALCULATE EARNINGS
     // ============================
-    let {
+    const {
       platformFee: roundedPlatformFee,
       driverEarning: roundedDriverEarning
     } = computeRideEarningsSplit(grossFare)
-
-    // ============================
-    // CALCULATION ACCURACY VERIFICATION
-    // ============================
-    // Verify: grossFare = platformFee + driverEarning (within rounding tolerance)
-    const tolerance = 0.01 // Allow 1 paisa tolerance for rounding
-    const calculatedTotal = roundedPlatformFee + roundedDriverEarning
-    if (Math.abs(grossFare - calculatedTotal) > tolerance) {
-      logger.error(
-        `storeRideEarnings: Calculation mismatch - grossFare: ₹${grossFare}, platformFee + driverEarning: ₹${calculatedTotal}, difference: ₹${Math.abs(
-          grossFare - calculatedTotal
-        )}, rideId: ${rideId}`
-      )
-      // Adjust driverEarning to ensure grossFare = platformFee + driverEarning
-      roundedDriverEarning =
-        Math.round((grossFare - roundedPlatformFee) * 100) / 100
-      logger.info(
-        `storeRideEarnings: Adjusted driverEarning to ₹${roundedDriverEarning} to match grossFare`
-      )
-    }
 
     // Structured logging for earnings calculation
     logger.info('earnings.calculated', {
