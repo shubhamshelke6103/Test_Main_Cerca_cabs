@@ -5,6 +5,9 @@ const Vendor = require('../../Models/vendor/vendor.models.js');
 const bcrypt = require("bcryptjs");
 const jwt = require('jsonwebtoken');
 const logger = require('../../utils/logger.js');
+const {
+    computeRideEarningsSplit
+} = require('../../utils/rideEarningsSplit');
 const LiveLocationShare = require('../../Models/Shared/liveLocationShare.model.js');
 const {
     createLiveLocationShare,
@@ -2628,16 +2631,6 @@ const getDriverEarnings = async (req, res) => {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        // Get settings for commission calculation
-        const Settings = require('../../Models/Admin/settings.modal.js');
-        const settings = await Settings.findOne();
-        
-        if (!settings) {
-            return res.status(500).json({ message: 'Admin settings not found' });
-        }
-
-        const { platformFees, driverCommissions } = settings.pricingConfigurations;
-
         // Get completed rides
         const completedRides = await Ride.find({ 
             driver: req.params.id,
@@ -3239,6 +3232,74 @@ const getSharedDriverLocation = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get driver earnings using the ride split formula
+ * @route   GET /drivers/:id/earnings
+ */
+const getDriverEarningsFormula = async (req, res) => {
+    try {
+        const driver = await Driver.findById(req.params.id);
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        const completedRides = await Ride.find({
+            driver: req.params.id,
+            status: 'completed'
+        }).sort({ createdAt: -1 });
+
+        const recentRides = completedRides.slice(0, 10).map(ride => {
+            const split = computeRideEarningsSplit(ride.fare || 0);
+            return {
+                _id: ride._id,
+                fare: ride.fare,
+                platformFee: split.platformFee,
+                driverEarning: split.driverEarning,
+                distanceInKm: ride.distanceInKm,
+                actualDuration: ride.actualDuration,
+                pickupAddress: ride.pickupAddress,
+                dropoffAddress: ride.dropoffAddress,
+                createdAt: ride.createdAt,
+                completedAt: ride.actualEndTime
+            };
+        });
+
+        const totalGrossEarnings = completedRides.reduce((sum, ride) => sum + (ride.fare || 0), 0);
+        const totalPlatformFees = completedRides.reduce(
+            (sum, ride) => sum + computeRideEarningsSplit(ride.fare || 0).platformFee,
+            0
+        );
+        const totalDriverEarnings = completedRides.reduce(
+            (sum, ride) => sum + computeRideEarningsSplit(ride.fare || 0).driverEarning,
+            0
+        );
+        const totalRides = completedRides.length;
+
+        logger.info(
+          `[Fare Tracking] getDriverEarnings - driverId: ${req.params.id}, totalRides: ${totalRides}, totalGrossEarnings: â‚¹${totalGrossEarnings}, allocationMethod: formula`
+        );
+
+        const averageGrossPerRide = totalRides > 0 ? (totalGrossEarnings / totalRides).toFixed(2) : 0;
+        const averageNetPerRide = totalRides > 0 ? (totalDriverEarnings / totalRides).toFixed(2) : 0;
+
+        res.status(200).json({
+            totalGrossEarnings,
+            totalPlatformFees,
+            totalDriverEarnings,
+            platformFeeFormula: '5 + ((fare - 100) / 100)',
+            driverEarningFormula: 'fare - platformFee',
+            totalRides,
+            averageGrossPerRide,
+            averageNetPerRide,
+            recentRides
+        });
+    } catch (error) {
+        logger.error('Error fetching driver earnings:', error);
+        res.status(500).json({ message: 'Error fetching driver earnings', error });
+    }
+};
+
 module.exports = {
     addDriver,
     registerDriver,
@@ -3273,7 +3334,7 @@ module.exports = {
     approveDriverVehicleBySubdoc,
     rejectDriverVehicleBySubdoc,
     syncDriverLegacyVehicleFields: syncLegacyVehicleState,
-    getDriverEarnings,
+    getDriverEarnings: getDriverEarningsFormula,
     getDriverStats,
     getNearbyDrivers,
     updateDriverBusyStatus,

@@ -25,6 +25,9 @@ const AdminEarnings = require('../Models/Admin/adminEarnings.model');
 const Settings = require('../Models/Admin/settings.modal');
 const Driver = require('../Models/Driver/driver.model');
 const FleetVehicle = require('../Models/Vendor/fleetVehicle.model');
+const {
+  computeRideEarningsSplit
+} = require('./rideEarningsSplit');
 
 async function getVehicleSnapshotForRideDriver(driverId) {
   if (!driverId) {
@@ -253,14 +256,10 @@ async function backfillEarnings(options = {}) {
         }
 
         // Calculate platform fee and driver earning
-        const platformFee = platformFees ? grossFare * (platformFees / 100) : 0;
-        const driverEarning = driverCommissions
-          ? grossFare * (driverCommissions / 100)
-          : grossFare - platformFee;
-
-        // Calculate rounded values
-        let roundedPlatformFee = Math.round(platformFee * 100) / 100;
-        let roundedDriverEarning = Math.round(driverEarning * 100) / 100;
+        let {
+          platformFee: roundedPlatformFee,
+          driverEarning: roundedDriverEarning
+        } = computeRideEarningsSplit(grossFare);
 
         // Verify calculation accuracy
         const tolerance = 0.01;

@@ -2,6 +2,9 @@ const AdminEarnings = require('../Models/Admin/adminEarnings.model')
 const Ride = require('../Models/Driver/ride.model')
 const Settings = require('../Models/Admin/settings.modal')
 const logger = require('./logger')
+const {
+  computeRideEarningsSplit
+} = require('./rideEarningsSplit')
 
 /**
  * Validate earnings for a specific ride
@@ -63,12 +66,11 @@ const validateEarningsForRide = async (rideId) => {
       )
     }
 
-    // Verify calculations match current settings
-    const settings = await Settings.findOne().select('pricingConfigurations').lean()
-    if (settings && settings.pricingConfigurations) {
-      const { platformFees, driverCommissions } = settings.pricingConfigurations
-      const expectedPlatformFee = Math.round((earnings.grossFare * (platformFees / 100)) * 100) / 100
-      const expectedDriverEarning = Math.round((earnings.grossFare * (driverCommissions / 100)) * 100) / 100
+    // Verify calculations match the current ride split formula
+    const expectedSplit = computeRideEarningsSplit(earnings.grossFare)
+    const expectedPlatformFee = expectedSplit.platformFee
+    const expectedDriverEarning = expectedSplit.driverEarning
+    if (true) {
 
       if (Math.abs(earnings.platformFee - expectedPlatformFee) > fareTolerance) {
         warnings.push(
@@ -268,14 +270,6 @@ const findMissingEarnings = async () => {
  */
 const findIncorrectEarnings = async () => {
   try {
-    const settings = await Settings.findOne().select('pricingConfigurations').lean()
-    if (!settings || !settings.pricingConfigurations) {
-      return {
-        error: 'Settings not found'
-      }
-    }
-
-    const { platformFees, driverCommissions } = settings.pricingConfigurations
     const tolerance = 0.01
 
     // Get all earnings records
@@ -286,8 +280,9 @@ const findIncorrectEarnings = async () => {
     const incorrectEarnings = []
 
     for (const earning of earnings) {
-      const expectedPlatformFee = Math.round((earning.grossFare * (platformFees / 100)) * 100) / 100
-      const expectedDriverEarning = Math.round((earning.grossFare * (driverCommissions / 100)) * 100) / 100
+      const expectedSplit = computeRideEarningsSplit(earning.grossFare)
+      const expectedPlatformFee = expectedSplit.platformFee
+      const expectedDriverEarning = expectedSplit.driverEarning
 
       if (
         Math.abs(earning.platformFee - expectedPlatformFee) > tolerance ||

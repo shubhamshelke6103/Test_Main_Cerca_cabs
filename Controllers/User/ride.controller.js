@@ -21,6 +21,9 @@ const {
   calculateIntercityFareBreakdown,
   getIntercityPricingConfig
 } = rideBookingFunctions
+const {
+  computeRideEarningsSplit
+} = require('../../utils/rideEarningsSplit')
 const Driver = require('../../Models/Driver/driver.model')
 const {
   generateTokenForRide,
@@ -215,8 +218,7 @@ const buildDestinationUpdateQuote = async ({
     throw new Error('Admin settings not found')
   }
 
-  const { perKmRate, minimumFare, platformFees, driverCommissions } =
-    settings.pricingConfigurations
+  const { perKmRate, minimumFare } = settings.pricingConfigurations
   const { vehicleServiceKey, basePrice, perMinuteRate } =
     resolveVehiclePricingConfig(ride, settings)
 
@@ -251,12 +253,9 @@ const buildDestinationUpdateQuote = async ({
     rawFareBreakdown.fareAfterMinimum
   )
 
-  const driverEarnings = driverCommissions
-    ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
-    : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
-  const platformFee = platformFees
-    ? Math.round(finalFare * (platformFees / 100) * 100) / 100
-    : 0
+  const { platformFee, driverEarning: driverEarnings } = computeRideEarningsSplit(
+    finalFare
+  )
 
   return {
     distanceInKm: Math.round(distance * 100) / 100,
@@ -1617,8 +1616,7 @@ const calculateFare = async (req, res) => {
       })
     }
 
-    const { perKmRate, minimumFare, platformFees, driverCommissions } =
-      settings.pricingConfigurations
+    const { perKmRate, minimumFare } = settings.pricingConfigurations
 
     const vehicleServicesNorm = normalizeVehicleServicesForResponse(
       settings.vehicleServices || {}
@@ -1698,14 +1696,11 @@ const calculateFare = async (req, res) => {
       }
     }
 
-    // Calculate driver and admin earnings
-    const driverEarnings = driverCommissions
-      ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
-      : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
-    const platformFee = platformFees
-      ? Math.round(finalFare * (platformFees / 100) * 100) / 100
-      : 0
-    const adminEarnings = platformFee
+      // Calculate driver and admin earnings
+      const { platformFee, driverEarning: driverEarnings } = computeRideEarningsSplit(
+        finalFare
+      )
+      const adminEarnings = platformFee
 
     res.status(200).json({
       success: true,
@@ -1822,8 +1817,7 @@ const calculateAllFares = async (req, res) => {
       duration = Math.ceil((distance / averageSpeedKmh) * 60) // Convert to minutes
     }
 
-    const { perKmRate, minimumFare, platformFees, driverCommissions } =
-      settings.pricingConfigurations
+    const { perKmRate, minimumFare } = settings.pricingConfigurations
     const vehicleServices = normalizeVehicleServicesForResponse(
       settings.vehicleServices || {}
     )
@@ -1895,12 +1889,9 @@ const calculateAllFares = async (req, res) => {
       }
 
       // Calculate driver and admin earnings
-      const driverEarnings = driverCommissions
-        ? Math.round(finalFare * (driverCommissions / 100) * 100) / 100
-        : Math.round((finalFare - finalFare * (platformFees / 100)) * 100) / 100
-      const platformFee = platformFees
-        ? Math.round(finalFare * (platformFees / 100) * 100) / 100
-        : 0
+      const { platformFee, driverEarning: driverEarnings } = computeRideEarningsSplit(
+        finalFare
+      )
       const adminEarnings = platformFee
 
       fares[vehicleServiceKey] = {

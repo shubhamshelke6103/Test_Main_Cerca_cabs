@@ -11,6 +11,9 @@ const {
 const {
   deriveAdminEarningsSettlementFields
 } = require('./adminEarningsSettlement')
+const {
+  computeRideEarningsSplit
+} = require('./rideEarningsSplit')
 const Driver = require('../Models/Driver/driver.model')
 const User = require('../Models/User/user.model')
 const Ride = require('../Models/Driver/ride.model')
@@ -5104,27 +5107,10 @@ async function storeRideEarnings (ride, retryCount = 0) {
       return
     }
 
-    // Get settings for commission calculation
-    const settings = await Settings.findOne()
-    if (!settings) {
-      logger.error(
-        `storeRideEarnings: Settings not found, skipping earnings storage for rideId: ${rideId}`
-      )
-      return
-    }
-
-    if (!settings.pricingConfigurations) {
-      logger.error(
-        `storeRideEarnings: pricingConfigurations missing in settings for rideId: ${rideId}`
-      )
-      return
-    }
-
-    const { platformFees, driverCommissions } = settings.pricingConfigurations
     const grossFare = ridePaymentLean?.fare ?? ride.fare ?? 0
 
     logger.info(
-      `[Fare Tracking] storeRideEarnings - rideId: ${rideId}, grossFare: ₹${grossFare}, platformFees: ${platformFees}%, driverCommissions: ${driverCommissions}%`
+      `[Fare Tracking] storeRideEarnings - rideId: ${rideId}, grossFare: ₹${grossFare}, splitFormula: platformFee = 5 + ((fare - 100) / 100), driverEarning = fare - platformFee`
     )
 
     // ============================
@@ -5144,33 +5130,13 @@ async function storeRideEarnings (ride, retryCount = 0) {
       return
     }
 
-    // Validate platformFees and driverCommissions are valid percentages
-    if (platformFees < 0 || platformFees > 100) {
-      logger.error(
-        `storeRideEarnings: Invalid platformFees percentage (${platformFees}%) for rideId: ${rideId}`
-      )
-      return
-    }
-
-    if (driverCommissions < 0 || driverCommissions > 100) {
-      logger.error(
-        `storeRideEarnings: Invalid driverCommissions percentage (${driverCommissions}%) for rideId: ${rideId}`
-      )
-      return
-    }
-
     // ============================
     // CALCULATE EARNINGS
     // ============================
-    // Calculate platform fee and driver earning
-    const platformFee = platformFees ? grossFare * (platformFees / 100) : 0
-    const driverEarning = driverCommissions
-      ? grossFare * (driverCommissions / 100)
-      : grossFare - platformFee
-
-    // Round to 2 decimal places
-    let roundedPlatformFee = Math.round(platformFee * 100) / 100
-    let roundedDriverEarning = Math.round(driverEarning * 100) / 100
+    let {
+      platformFee: roundedPlatformFee,
+      driverEarning: roundedDriverEarning
+    } = computeRideEarningsSplit(grossFare)
 
     // ============================
     // CALCULATION ACCURACY VERIFICATION
@@ -5198,8 +5164,7 @@ async function storeRideEarnings (ride, retryCount = 0) {
       grossFare,
       platformFee: roundedPlatformFee,
       driverEarning: roundedDriverEarning,
-      platformFeesPercentage: platformFees,
-      driverCommissionsPercentage: driverCommissions,
+      allocationMethod: 'formula',
       calculatedTotal: roundedPlatformFee + roundedDriverEarning,
       timestamp: new Date().toISOString()
     })

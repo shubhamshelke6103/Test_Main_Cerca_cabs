@@ -1,7 +1,6 @@
 const Driver = require('../../Models/Driver/driver.model');
 const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const Ride = require('../../Models/Driver/ride.model');
-const Settings = require('../../Models/Admin/settings.modal');
 const logger = require('../../utils/logger');
 const { fetchDriverNetSettlement } = require('../../utils/driverNetSettlementBalance');
 
@@ -37,19 +36,6 @@ const getDriverEarnings = async (req, res) => {
     }
     
     logger.info(`getDriverEarnings: Driver found - driverId: ${driverId}, name: ${driver.fullName || 'N/A'}`);
-    
-    // Get settings for commission calculation
-    const settings = await Settings.findOne();
-    if (!settings) {
-      logger.error('getDriverEarnings: Settings not found');
-      return res.status(500).json({
-        success: false,
-        message: 'Settings not found',
-      });
-    }
-    
-    const { platformFees, driverCommissions } = settings.pricingConfigurations;
-    logger.info(`getDriverEarnings: Settings loaded - platformFees: ${platformFees}%, driverCommissions: ${driverCommissions}%`);
     
     // Build date filter
     const dateFilter = { driverId };
@@ -509,8 +495,8 @@ const getDriverEarnings = async (req, res) => {
           tipsIncludedInNetAllTime: ledgerAllTime.tipsIncludedInNet,
         },
         commission: {
-          platformFeePercentage: platformFees || 0,
-          driverCommissionPercentage: driverCommissions || 0,
+          platformFeeFormula: '5 + ((fare - 100) / 100)',
+          driverEarningFormula: 'fare - platformFee',
         },
         breakdown: {
           daily: dailyBreakdown,

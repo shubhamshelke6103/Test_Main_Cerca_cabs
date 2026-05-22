@@ -64,11 +64,11 @@ test('splitBeforeStartCancelPrepaid: hybrid consumes razorpay then refunds remai
   assert.equal(split.razorpayRefund, 50)
 })
 
-test('computePlatformSplitFromGrossFare matches 80/20', () => {
+test('computePlatformSplitFromGrossFare uses the ride formula', () => {
   const { platformFee, driverEarning } = computePlatformSplitFromGrossFare(100, {
     platformFees: 20,
     driverCommissions: 80
   })
-  assert.equal(platformFee, 20)
-  assert.equal(driverEarning, 80)
+  assert.equal(platformFee, 5)
+  assert.equal(driverEarning, 95)
 })

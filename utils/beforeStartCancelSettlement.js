@@ -2,9 +2,10 @@
  * Pure helpers for rider cancel before start OTP: distance policy and prepaid split.
  */
 
-function roundMoney (n) {
-  return Math.round(Number(n) * 100) / 100
-}
+const {
+  roundMoney,
+  computeRideEarningsSplit
+} = require('./rideEarningsSplit')
 
 /**
  * @param {object} opts
@@ -60,30 +61,8 @@ function walletBalanceAfterBeforeStartCancel (W_current, Pw, { use_w, shortfall 
   return roundMoney(W_current + (Pw - use_w) - shortfall)
 }
 
-/**
- * Match storeRideEarnings split in socket.js
- */
 function computePlatformSplitFromGrossFare (grossFare, pricingConfigurations) {
-  const g = Math.max(0, Number(grossFare) || 0)
-  if (g <= 0) {
-    return { platformFee: 0, driverEarning: 0, grossFare: 0 }
-  }
-  const platformFees = Number(pricingConfigurations?.platformFees)
-  const driverCommissions = Number(pricingConfigurations?.driverCommissions)
-  const pfPct = Number.isFinite(platformFees) && platformFees >= 0 ? platformFees : 0
-  const dcPct = Number.isFinite(driverCommissions) && driverCommissions >= 0
-    ? driverCommissions
-    : null
-
-  let platformFee = pfPct ? g * (pfPct / 100) : 0
-  let driverEarning = dcPct != null ? g * (dcPct / 100) : g - platformFee
-  platformFee = roundMoney(platformFee)
-  driverEarning = roundMoney(driverEarning)
-  const tolerance = 0.01
-  if (Math.abs(g - platformFee - driverEarning) > tolerance) {
-    driverEarning = roundMoney(g - platformFee)
-  }
-  return { platformFee, driverEarning, grossFare: g }
+  return computeRideEarningsSplit(grossFare)
 }
 
 module.exports = {
