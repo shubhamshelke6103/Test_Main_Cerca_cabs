@@ -21,7 +21,7 @@ This document provides a complete guide to all calculations involved in ride boo
 ### Calculation Flow Diagram
 
 ```
-1. Tiered distance fare (0–10, 11–20, 21–30, 31+ km slabs) + (duration × perMinuteRate)
+1. Tiered distance fare per vehicle (0–5, 5–10, 10+ km slabs) + (duration × perMinuteRate)
 2. Apply time-of-day multiplier to distance + time (when farePricing.enabled)
 3. Subtotal = vehicle tier base price + adjusted (distance + time)
 4. Apply Minimum Fare = MAX(Subtotal, Minimum Fare)
@@ -31,14 +31,13 @@ This document provides a complete guide to all calculations involved in ride boo
 
 ### Tiered KM + time bands (production)
 
-Implemented in `utils/farePricingEngine.js`. Admin configures `pricingConfigurations.farePricing`:
+Implemented in `utils/farePricingEngine.js`. Per-vehicle distance tiers live on `vehicleServices.{cercaZip|cercaGlide|cercaTitan}.distanceTiers`. City-wide time bands: `pricingConfigurations.farePricing`:
 
 | Setting | Default |
 |---------|---------|
-| Tier 1 (0–10 km) | configurable ₹/km |
-| Tier 2 (11–20 km) | configurable ₹/km |
-| Tier 3 (21–30 km) | configurable ₹/km |
-| Beyond 30 km | same rate as tier 3 unless overridden |
+| Tier 1 (0–5 km) | configurable ₹/km per vehicle |
+| Tier 2 (5–10 km) | configurable ₹/km per vehicle |
+| After 10 km | configurable ₹/km per vehicle |
 | 06:00–10:00 | ×1.2 |
 | 10:00–17:00 | ×1.0 |
 | 17:00–22:00 | ×1.5 |

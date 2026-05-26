@@ -5,12 +5,31 @@ const {
     remapVehicleServicesInput,
     normalizeVehicleServiceDisplayNames,
     perMinuteDefaultForKey,
-    priceDefaultForKey
+    priceDefaultForKey,
 } = require('../utils/vehicleServicesKeys');
 const {
     validateFarePricingConfig,
+    validateVehicleDistanceTiers,
     seedFarePricingFromPerKmRate,
+    seedVehicleDistanceTiers,
+    resolveVehicleDistanceTiersFromSettings,
 } = require('../utils/farePricingEngine');
+
+const ensureVehicleServiceDistanceTiers = (vehicleServices, perKmRate = 12) => {
+    const out = remapVehicleServicesInput({ ...(vehicleServices || {}) });
+    VEHICLE_SERVICE_KEYS.forEach((serviceKey) => {
+        if (!out[serviceKey]) return;
+        out[serviceKey] = {
+            ...out[serviceKey],
+            distanceTiers: seedVehicleDistanceTiers(
+                perKmRate,
+                serviceKey,
+                out[serviceKey].distanceTiers || {}
+            ),
+        };
+    });
+    return out;
+};
 
 /**
  * @desc    Get all settings
@@ -145,22 +164,45 @@ const updateSettings = async (req, res) => {
 
             VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
                 if (incoming[serviceKey]) {
+                    const existing = vehicleServices[serviceKey] || {};
+                    const incomingService = incoming[serviceKey];
                     vehicleServices[serviceKey] = {
-                        ...vehicleServices[serviceKey],
-                        ...incoming[serviceKey],
-                        perMinuteRate: incoming[serviceKey].perMinuteRate !== undefined
-                            ? incoming[serviceKey].perMinuteRate
-                            : vehicleServices[serviceKey]?.perMinuteRate ||
+                        ...existing,
+                        ...incomingService,
+                        perMinuteRate: incomingService.perMinuteRate !== undefined
+                            ? incomingService.perMinuteRate
+                            : existing?.perMinuteRate ||
                               perMinuteDefaultForKey(serviceKey),
-                        price: incoming[serviceKey].price !== undefined
-                            ? incoming[serviceKey].price
-                            : vehicleServices[serviceKey]?.price ||
+                        price: incomingService.price !== undefined
+                            ? incomingService.price
+                            : existing?.price ||
                               priceDefaultForKey(serviceKey),
                     };
+                    if (incomingService.distanceTiers) {
+                        vehicleServices[serviceKey].distanceTiers = {
+                            ...(existing.distanceTiers || {}),
+                            ...incomingService.distanceTiers,
+                            tier1: {
+                                ...(existing.distanceTiers?.tier1 || {}),
+                                ...(incomingService.distanceTiers?.tier1 || {}),
+                            },
+                            tier2: {
+                                ...(existing.distanceTiers?.tier2 || {}),
+                                ...(incomingService.distanceTiers?.tier2 || {}),
+                            },
+                        };
+                    }
                 }
             });
 
-            updateData.vehicleServices = vehicleServices;
+            const perKm = Number(
+                updateData.pricingConfigurations?.perKmRate ??
+                existingSettings.pricingConfigurations?.perKmRate
+            ) || 12;
+            updateData.vehicleServices = ensureVehicleServiceDistanceTiers(
+                vehicleServices,
+                perKm
+            );
         }
 
         // Handle pricingConfigurations merge
@@ -174,22 +216,6 @@ const updateSettings = async (req, res) => {
                 mergedPricing.farePricing = {
                     ...(existingSettings.pricingConfigurations?.farePricing || {}),
                     ...req.body.pricingConfigurations.farePricing,
-                    distanceTiers: {
-                        ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers || {}),
-                        ...(req.body.pricingConfigurations.farePricing.distanceTiers || {}),
-                        tier1: {
-                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier1 || {}),
-                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier1 || {}),
-                        },
-                        tier2: {
-                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier2 || {}),
-                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier2 || {}),
-                        },
-                        tier3: {
-                            ...(existingSettings.pricingConfigurations?.farePricing?.distanceTiers?.tier3 || {}),
-                            ...(req.body.pricingConfigurations.farePricing.distanceTiers?.tier3 || {}),
-                        },
-                    },
                 };
             } else if (!mergedPricing.farePricing) {
                 mergedPricing.farePricing = seedFarePricingFromPerKmRate(
@@ -223,23 +249,35 @@ const updateSettings = async (req, res) => {
         // Validate vehicleServices if provided
         if (updateData.vehicleServices) {
             const vehicleServices = updateData.vehicleServices;
-            
+            const fareEnabled =
+                updateData.pricingConfigurations?.farePricing?.enabled === true ||
+                existingSettings.pricingConfigurations?.farePricing?.enabled === true;
+
             // Validate all required fields exist
-            VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
-                if (vehicleServices[serviceKey]) {
-                    const service = vehicleServices[serviceKey];
-                    if (service.price === undefined || service.price < 0) {
-                        return res.status(400).json({ 
-                            message: `Invalid price for ${serviceKey}. Price must be a positive number.` 
-                        });
-                    }
-                    if (service.perMinuteRate === undefined || service.perMinuteRate < 0) {
-                        return res.status(400).json({ 
-                            message: `Invalid perMinuteRate for ${serviceKey}. perMinuteRate must be a positive number.` 
-                        });
+            for (const serviceKey of VEHICLE_SERVICE_KEYS) {
+                if (!vehicleServices[serviceKey]) continue;
+                const service = vehicleServices[serviceKey];
+                if (service.price === undefined || service.price < 0) {
+                    return res.status(400).json({
+                        message: `Invalid price for ${serviceKey}. Price must be a positive number.`,
+                    });
+                }
+                if (service.perMinuteRate === undefined || service.perMinuteRate < 0) {
+                    return res.status(400).json({
+                        message: `Invalid perMinuteRate for ${serviceKey}. perMinuteRate must be a positive number.`,
+                    });
+                }
+                if (fareEnabled && service.enabled !== false) {
+                    try {
+                        validateVehicleDistanceTiers(
+                            service.distanceTiers,
+                            `vehicleServices.${serviceKey}.distanceTiers`
+                        );
+                    } catch (validationErr) {
+                        return res.status(400).json({ message: validationErr.message });
                     }
                 }
-            });
+            }
         }
         
         const updatedSettings = await Settings.findOneAndUpdate({}, updateData, {
@@ -414,7 +452,7 @@ const getSystemSettings = async (req, res) => {
  */
 const getPublicSettings = async (req, res) => {
     try {
-        const settings = await Settings.findOne().select('pricingConfigurations vehicleServices paymentFeatures');
+        const settings = await Settings.findOne().select('pricingConfigurations vehicleServices paymentFeatures intercityPricingConfigurations');
         
         if (!settings) {
             // Return default values if settings don't exist
@@ -491,14 +529,25 @@ const getPublicSettings = async (req, res) => {
 
         // Ensure perMinuteRate exists for each service
         if (settings.vehicleServices) {
-            vehicleServices = remapVehicleServicesInput({ ...settings.vehicleServices });
+            vehicleServices = ensureVehicleServiceDistanceTiers(
+                settings.vehicleServices,
+                settings.pricingConfigurations?.perKmRate || 12
+            );
             VEHICLE_SERVICE_KEYS.forEach(serviceKey => {
                 if (vehicleServices[serviceKey]) {
                     vehicleServices[serviceKey] = {
                         ...vehicleServices[serviceKey],
                         perMinuteRate: vehicleServices[serviceKey].perMinuteRate !== undefined
                             ? vehicleServices[serviceKey].perMinuteRate
-                            : perMinuteDefaultForKey(serviceKey)
+                            : perMinuteDefaultForKey(serviceKey),
+                        distanceTiers: resolveVehicleDistanceTiersFromSettings(
+                            {
+                                pricingConfigurations: settings.pricingConfigurations,
+                                vehicleServices,
+                                intercityPricingConfigurations: settings.intercityPricingConfigurations,
+                            },
+                            serviceKey
+                        ),
                     };
                 }
             });

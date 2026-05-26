@@ -1,9 +1,17 @@
 /**
- * Central fare pricing: tiered distance slabs + time-of-day multipliers.
+ * Central fare pricing: per-vehicle tiered distance slabs (0-5, 5-10, 10+ km)
+ * + city-wide time-of-day multipliers.
  * All amounts rounded to 2 decimal places at boundaries.
  */
 
+const {
+  VEHICLE_SERVICE_KEYS,
+  perKmDefaultForKey,
+} = require('./vehicleServicesKeys')
+
 const DEFAULT_TIMEZONE = 'Asia/Kolkata'
+const TIER1_MAX_KM = 5
+const TIER2_MAX_KM = 10
 
 const DEFAULT_TIME_BANDS = [
   { id: 'morning', label: 'Morning peak', start: '06:00', end: '10:00', multiplier: 1.2 },
@@ -92,19 +100,95 @@ const resolveTimeBandMultiplier = (date, bands, timezone = DEFAULT_TIMEZONE) => 
 }
 
 /**
- * Build distance tiers from flat perKmRate when tiers not configured.
+ * Build 3-slab distance tiers from flat perKmRate when tiered pricing is disabled.
  */
 const buildTiersFromFlatRate = (perKmRate) => {
   const r = Number(perKmRate) || 0
   return {
-    tier1: { maxKm: 10, ratePerKm: r },
-    tier2: { maxKm: 20, ratePerKm: r },
-    tier3: { maxKm: 30, ratePerKm: r },
-    beyondTier3RatePerKm: r,
+    tier1: { maxKm: TIER1_MAX_KM, ratePerKm: r },
+    tier2: { maxKm: TIER2_MAX_KM, ratePerKm: r },
+    beyondTier2RatePerKm: r,
   }
 }
 
 /**
+ * Map legacy city-wide 4-slab config to new 3-slab vehicle config.
+ */
+const migrateLegacyCityTiersToVehicle = (oldTiers, perKmRate, vehiclePerKmOverride) => {
+  const fallback = Number(perKmRate) || 0
+  const vehicleRate = Number(vehiclePerKmOverride) || fallback
+  const old = oldTiers || {}
+  const shortRate = Number(old.tier1?.ratePerKm) || fallback
+  const midRate = Number(old.tier2?.ratePerKm) || shortRate
+  const beyondRate =
+    Number(old.beyondTier3RatePerKm ?? old.tier3?.ratePerKm ?? old.tier2?.ratePerKm) ||
+    vehicleRate
+  return {
+    tier1: { maxKm: TIER1_MAX_KM, ratePerKm: shortRate },
+    tier2: { maxKm: TIER2_MAX_KM, ratePerKm: shortRate },
+    beyondTier2RatePerKm: midRate !== shortRate ? midRate : beyondRate,
+  }
+}
+
+/**
+ * Normalize a vehicle's 3-slab distance tier config.
+ */
+const normalizeVehicleDistanceTiers = (vehicleService, fallbackPerKm, vehiclePerKmOverride) => {
+  const fallback = Number(fallbackPerKm) || 0
+  const vehicleRate = Number(vehiclePerKmOverride) || fallback
+  const raw = vehicleService?.distanceTiers || {}
+
+  if (raw.tier1?.ratePerKm != null || raw.tier2?.ratePerKm != null || raw.beyondTier2RatePerKm != null) {
+    const r1 = Number(raw.tier1?.ratePerKm ?? fallback) || fallback
+    const r2 = Number(raw.tier2?.ratePerKm ?? r1) || r1
+    const rBeyond = Number(raw.beyondTier2RatePerKm ?? r2) || r2
+    return {
+      tier1: { maxKm: TIER1_MAX_KM, ratePerKm: r1 },
+      tier2: { maxKm: TIER2_MAX_KM, ratePerKm: r2 },
+      beyondTier2RatePerKm: rBeyond,
+    }
+  }
+
+  return {
+    tier1: { maxKm: TIER1_MAX_KM, ratePerKm: vehicleRate },
+    tier2: { maxKm: TIER2_MAX_KM, ratePerKm: vehicleRate },
+    beyondTier2RatePerKm: vehicleRate,
+  }
+}
+
+/**
+ * Resolve vehicle distance tiers from settings, with legacy city-tier fallback.
+ */
+const resolveVehicleDistanceTiersFromSettings = (settings, vehicleServiceKey = 'cercaZip') => {
+  const pc = settings?.pricingConfigurations || {}
+  const perKmRate = Number(pc.perKmRate) || 0
+  const key = VEHICLE_SERVICE_KEYS.includes(vehicleServiceKey) ? vehicleServiceKey : 'cercaZip'
+  const vehicleService = settings?.vehicleServices?.[key]
+  const vehiclePerKm =
+    Number(settings?.intercityPricingConfigurations?.perKmRates?.[key]) ||
+    perKmDefaultForKey(key)
+
+  const rawVehicle = vehicleService?.distanceTiers
+  const hasVehicleTiers =
+    rawVehicle &&
+    (rawVehicle.tier1?.ratePerKm != null ||
+      rawVehicle.tier2?.ratePerKm != null ||
+      rawVehicle.beyondTier2RatePerKm != null)
+
+  if (hasVehicleTiers) {
+    return normalizeVehicleDistanceTiers(vehicleService, perKmRate, vehiclePerKm)
+  }
+
+  const legacyCityTiers = pc.farePricing?.distanceTiers
+  if (legacyCityTiers && (legacyCityTiers.tier1 || legacyCityTiers.tier2 || legacyCityTiers.tier3)) {
+    return migrateLegacyCityTiersToVehicle(legacyCityTiers, perKmRate, vehiclePerKm)
+  }
+
+  return normalizeVehicleDistanceTiers(vehicleService, perKmRate, vehiclePerKm)
+}
+
+/**
+ * City-level fare config (time bands only; distance tiers resolved per vehicle).
  * @param {object} settings - full Settings doc or { pricingConfigurations }
  */
 const normalizeFarePricingConfig = (settings) => {
@@ -112,31 +196,6 @@ const normalizeFarePricingConfig = (settings) => {
   const perKmRate = Number(pc.perKmRate) || 0
   const fp = pc.farePricing || {}
   const enabled = fp.enabled === true
-
-  const rawTiers = fp.distanceTiers || {}
-  const tier1Max = Number(rawTiers.tier1?.maxKm) || 10
-  const tier2Max = Number(rawTiers.tier2?.maxKm) || 20
-  const tier3Max = Number(rawTiers.tier3?.maxKm) || 30
-
-  const distanceTiers = enabled
-    ? {
-        tier1: {
-          maxKm: tier1Max,
-          ratePerKm: Number(rawTiers.tier1?.ratePerKm ?? perKmRate) || perKmRate,
-        },
-        tier2: {
-          maxKm: tier2Max,
-          ratePerKm: Number(rawTiers.tier2?.ratePerKm ?? perKmRate) || perKmRate,
-        },
-        tier3: {
-          maxKm: tier3Max,
-          ratePerKm: Number(rawTiers.tier3?.ratePerKm ?? perKmRate) || perKmRate,
-        },
-        beyondTier3RatePerKm:
-          Number(rawTiers.beyondTier3RatePerKm ?? rawTiers.tier3?.ratePerKm ?? perKmRate) ||
-          perKmRate,
-      }
-    : buildTiersFromFlatRate(perKmRate)
 
   const timeBands =
     enabled && Array.isArray(fp.timeBands) && fp.timeBands.length
@@ -152,7 +211,6 @@ const normalizeFarePricingConfig = (settings) => {
     enabled,
     perKmRate,
     minimumFare: Number(pc.minimumFare) || 0,
-    distanceTiers,
     timeBands,
     timezone,
     timeMultiplierAppliesTo:
@@ -163,12 +221,23 @@ const normalizeFarePricingConfig = (settings) => {
 }
 
 /**
- * Resolve fare pricing for intercity (city tiers or intercity override).
+ * Full pricing config for a specific vehicle (city time bands + vehicle distance tiers).
  */
-const normalizeIntercityFarePricingConfig = (settings) => {
+const resolveVehiclePricingConfig = (settings, vehicleServiceKey = 'cercaZip') => {
+  const cityConfig = normalizeFarePricingConfig(settings)
+  const distanceTiers = cityConfig.enabled
+    ? resolveVehicleDistanceTiersFromSettings(settings, vehicleServiceKey)
+    : buildTiersFromFlatRate(cityConfig.perKmRate)
+  return { ...cityConfig, distanceTiers }
+}
+
+/**
+ * Resolve fare pricing for intercity (per-vehicle tiers when useCityFarePricing).
+ */
+const normalizeIntercityFarePricingConfig = (settings, vehicleServiceKey = 'cercaZip') => {
   const intercity = settings?.intercityPricingConfigurations || {}
   if (intercity.useCityFarePricing !== false) {
-    return normalizeFarePricingConfig(settings)
+    return resolveVehiclePricingConfig(settings, vehicleServiceKey)
   }
   const city = normalizeFarePricingConfig(settings)
   const fp = intercity.farePricing || {}
@@ -176,34 +245,22 @@ const normalizeIntercityFarePricingConfig = (settings) => {
     return {
       ...city,
       enabled: true,
-      distanceTiers: {
-        tier1: {
-          maxKm: Number(fp.distanceTiers.tier1?.maxKm) || 10,
-          ratePerKm: Number(fp.distanceTiers.tier1?.ratePerKm) || city.perKmRate,
-        },
-        tier2: {
-          maxKm: Number(fp.distanceTiers.tier2?.maxKm) || 20,
-          ratePerKm: Number(fp.distanceTiers.tier2?.ratePerKm) || city.perKmRate,
-        },
-        tier3: {
-          maxKm: Number(fp.distanceTiers.tier3?.maxKm) || 30,
-          ratePerKm: Number(fp.distanceTiers.tier3?.ratePerKm) || city.perKmRate,
-        },
-        beyondTier3RatePerKm:
-          Number(fp.beyondTier3RatePerKm ?? fp.distanceTiers?.tier3?.ratePerKm) ||
-          city.perKmRate,
-      },
+      distanceTiers: migrateLegacyCityTiersToVehicle(
+        fp.distanceTiers,
+        city.perKmRate,
+        perKmDefaultForKey(vehicleServiceKey)
+      ),
       timeBands:
         Array.isArray(fp.timeBands) && fp.timeBands.length ? fp.timeBands : city.timeBands,
       timezone: fp.timezone && isValidTimezone(fp.timezone) ? fp.timezone : city.timezone,
     }
   }
-  return city
+  return resolveVehiclePricingConfig(settings, vehicleServiceKey)
 }
 
 /**
  * @param {number} distanceKm
- * @param {object} tiers - normalized distanceTiers
+ * @param {object} tiers - normalized distanceTiers (3 slabs)
  * @returns {{ total: number, breakdown: Array<{ tier, km, ratePerKm, amount }> }}
  */
 const calculateTieredDistanceFare = (distanceKm, tiers) => {
@@ -212,13 +269,11 @@ const calculateTieredDistanceFare = (distanceKm, tiers) => {
     return { total: 0, breakdown: [] }
   }
 
-  const t1Max = Number(tiers.tier1?.maxKm) || 10
-  const t2Max = Number(tiers.tier2?.maxKm) || 20
-  const t3Max = Number(tiers.tier3?.maxKm) || 30
+  const t1Max = Number(tiers.tier1?.maxKm) || TIER1_MAX_KM
+  const t2Max = Number(tiers.tier2?.maxKm) || TIER2_MAX_KM
   const r1 = Number(tiers.tier1?.ratePerKm) || 0
   const r2 = Number(tiers.tier2?.ratePerKm) || 0
-  const r3 = Number(tiers.tier3?.ratePerKm) || 0
-  const rBeyond = Number(tiers.beyondTier3RatePerKm ?? r3) || 0
+  const rBeyond = Number(tiers.beyondTier2RatePerKm ?? r2) || 0
 
   const breakdown = []
   let remaining = d
@@ -232,19 +287,15 @@ const calculateTieredDistanceFare = (distanceKm, tiers) => {
   }
 
   const km1 = Math.min(remaining, t1Max)
-  addSlab('tier1_0_10', km1, r1)
+  addSlab('tier1_0_5', km1, r1)
   remaining -= km1
 
   const km2 = Math.min(remaining, t2Max - t1Max)
-  addSlab('tier2_11_20', km2, r2)
+  addSlab('tier2_5_10', km2, r2)
   remaining -= km2
 
-  const km3 = Math.min(remaining, t3Max - t2Max)
-  addSlab('tier3_21_30', km3, r3)
-  remaining -= km3
-
   if (remaining > 0) {
-    addSlab('beyond_30', remaining, rBeyond)
+    addSlab('beyond_10', remaining, rBeyond)
   }
 
   return { total: roundMoney(total), breakdown }
@@ -267,8 +318,9 @@ const getEffectivePerKmRate = (distanceKm, tiers) => {
  * @param {number} params.durationMin
  * @param {number} params.perMinuteRate
  * @param {number} params.minimumFare
- * @param {object} [params.pricingConfig] - output of normalizeFarePricingConfig
+ * @param {object} [params.pricingConfig] - output of resolveVehiclePricingConfig
  * @param {object} [params.settings] - full settings (alternative to pricingConfig)
+ * @param {string} [params.vehicleServiceKey]
  * @param {Date} [params.at] - defaults to now
  */
 const calculateInstantFare = ({
@@ -279,9 +331,14 @@ const calculateInstantFare = ({
   minimumFare,
   pricingConfig,
   settings,
+  vehicleServiceKey = 'cercaZip',
   at,
 }) => {
-  const config = pricingConfig || normalizeFarePricingConfig(settings)
+  const config =
+    pricingConfig ||
+    (settings
+      ? resolveVehiclePricingConfig(settings, vehicleServiceKey)
+      : normalizeFarePricingConfig(settings))
   const when = at instanceof Date ? at : at ? new Date(at) : new Date()
   const minFare = Number.isFinite(Number(minimumFare))
     ? Number(minimumFare)
@@ -383,9 +440,14 @@ const buildFareResult = (fields) => ({
 
 /**
  * Distance-only fare for cancellation settlements (no base, no per-minute).
+ * @param {number} distanceKm
+ * @param {object} settings
+ * @param {{ vehicleServiceKey?: string, at?: Date }} [options]
  */
-const calculateDistanceFareForSettlement = (distanceKm, settings, at) => {
-  const config = normalizeFarePricingConfig(settings)
+const calculateDistanceFareForSettlement = (distanceKm, settings, options = {}) => {
+  const vehicleServiceKey = options.vehicleServiceKey || 'cercaZip'
+  const at = options.at
+  const config = resolveVehiclePricingConfig(settings, vehicleServiceKey)
   const when = at instanceof Date ? at : at ? new Date(at) : new Date()
   const { total: tieredDistanceFare, breakdown } = calculateTieredDistanceFare(
     distanceKm,
@@ -417,9 +479,10 @@ const calculateIntercityDistanceFare = ({
   durationMin = 0,
   perMinuteRate = 0,
   settings,
+  vehicleServiceKey = 'cercaZip',
   at,
 }) => {
-  const config = normalizeIntercityFarePricingConfig(settings)
+  const config = normalizeIntercityFarePricingConfig(settings, vehicleServiceKey)
   const when = at instanceof Date ? at : at ? new Date(at) : new Date()
   const result = calculateInstantFare({
     basePrice: 0,
@@ -443,29 +506,12 @@ const calculateIntercityDistanceFare = ({
 }
 
 /**
- * Seed farePricing from flat perKmRate for admin migration.
+ * Seed farePricing (time bands only) from flat perKmRate for admin bootstrap.
  */
 const seedFarePricingFromPerKmRate = (perKmRate, existing = {}) => {
-  const r = Number(perKmRate) || 12
   return {
     enabled: existing.enabled === true,
     timezone: existing.timezone || DEFAULT_TIMEZONE,
-    distanceTiers: {
-      tier1: {
-        maxKm: 10,
-        ratePerKm: Number(existing.distanceTiers?.tier1?.ratePerKm) || r,
-      },
-      tier2: {
-        maxKm: 20,
-        ratePerKm: Number(existing.distanceTiers?.tier2?.ratePerKm) || r,
-      },
-      tier3: {
-        maxKm: 30,
-        ratePerKm: Number(existing.distanceTiers?.tier3?.ratePerKm) || r,
-      },
-      beyondTier3RatePerKm:
-        Number(existing.distanceTiers?.beyondTier3RatePerKm) || r,
-    },
     timeBands:
       Array.isArray(existing.timeBands) && existing.timeBands.length
         ? existing.timeBands
@@ -475,29 +521,50 @@ const seedFarePricingFromPerKmRate = (perKmRate, existing = {}) => {
 }
 
 /**
- * Validate farePricing payload; throws Error on invalid config.
+ * Default 3-slab distance tiers for a vehicle service.
+ */
+const seedVehicleDistanceTiers = (perKmRate, vehicleServiceKey = 'cercaZip', existing = {}) => {
+  const cityRate = Number(perKmRate) || 12
+  const vehicleRate = Number(existing.beyondTier2RatePerKm) ||
+    Number(existing.tier1?.ratePerKm) ||
+    perKmDefaultForKey(vehicleServiceKey) ||
+    cityRate
+  const r1 = Number(existing.tier1?.ratePerKm) || vehicleRate
+  const r2 = Number(existing.tier2?.ratePerKm) || r1
+  const rBeyond = Number(existing.beyondTier2RatePerKm) || vehicleRate
+  return {
+    tier1: { maxKm: TIER1_MAX_KM, ratePerKm: r1 },
+    tier2: { maxKm: TIER2_MAX_KM, ratePerKm: r2 },
+    beyondTier2RatePerKm: rBeyond,
+  }
+}
+
+/**
+ * Validate vehicle distance tier payload; throws Error on invalid config.
+ */
+const validateVehicleDistanceTiers = (tiers, label = 'distanceTiers') => {
+  const t1 = Number(tiers?.tier1?.maxKm ?? TIER1_MAX_KM)
+  const t2 = Number(tiers?.tier2?.maxKm ?? TIER2_MAX_KM)
+  if (!(t1 > 0 && t2 > t1)) {
+    throw new Error(`${label}: tier maxKm must be strictly increasing (e.g. 5, 10)`)
+  }
+  for (const key of ['tier1', 'tier2']) {
+    const rate = Number(tiers[key]?.ratePerKm)
+    if (!Number.isFinite(rate) || rate < 0) {
+      throw new Error(`${label}.${key}.ratePerKm must be a non-negative number`)
+    }
+  }
+  const beyond = Number(tiers.beyondTier2RatePerKm ?? tiers.tier2?.ratePerKm)
+  if (!Number.isFinite(beyond) || beyond < 0) {
+    throw new Error(`${label}.beyondTier2RatePerKm must be a non-negative number`)
+  }
+}
+
+/**
+ * Validate farePricing payload (time bands); throws Error on invalid config.
  */
 const validateFarePricingConfig = (farePricing) => {
   if (!farePricing || farePricing.enabled !== true) return
-
-  const tiers = farePricing.distanceTiers || {}
-  const t1 = Number(tiers.tier1?.maxKm)
-  const t2 = Number(tiers.tier2?.maxKm)
-  const t3 = Number(tiers.tier3?.maxKm)
-  if (!(t1 > 0 && t2 > t1 && t3 > t2)) {
-    throw new Error('Distance tier maxKm must be strictly increasing (e.g. 10, 20, 30)')
-  }
-
-  for (const key of ['tier1', 'tier2', 'tier3']) {
-    const rate = Number(tiers[key]?.ratePerKm)
-    if (!Number.isFinite(rate) || rate < 0) {
-      throw new Error(`distanceTiers.${key}.ratePerKm must be a non-negative number`)
-    }
-  }
-  const beyond = Number(tiers.beyondTier3RatePerKm ?? tiers.tier3?.ratePerKm)
-  if (!Number.isFinite(beyond) || beyond < 0) {
-    throw new Error('distanceTiers.beyondTier3RatePerKm must be a non-negative number')
-  }
 
   if (farePricing.timezone && !isValidTimezone(farePricing.timezone)) {
     throw new Error(`Invalid timezone: ${farePricing.timezone}`)
@@ -530,15 +597,17 @@ const calculateFareWithTimeShim = (
   perMinuteRate,
   minimumFare,
   settings,
-  at
+  at,
+  vehicleServiceKey = 'cercaZip'
 ) => {
-  const pricingConfig = normalizeFarePricingConfig({
-    pricingConfigurations: {
-      perKmRate,
-      minimumFare,
-      farePricing: settings?.pricingConfigurations?.farePricing,
-    },
-  })
+  const pricingConfig = settings
+    ? resolveVehiclePricingConfig(settings, vehicleServiceKey)
+    : {
+        ...normalizeFarePricingConfig({
+          pricingConfigurations: { perKmRate, minimumFare, farePricing: { enabled: false } },
+        }),
+        distanceTiers: buildTiersFromFlatRate(perKmRate),
+      }
   return calculateInstantFare({
     basePrice,
     distanceKm: distance,
@@ -553,12 +622,19 @@ const calculateFareWithTimeShim = (
 module.exports = {
   DEFAULT_TIMEZONE,
   DEFAULT_TIME_BANDS,
+  TIER1_MAX_KM,
+  TIER2_MAX_KM,
   roundMoney,
   parseHmToMinutes,
   getLocalTimeParts,
   isValidTimezone,
   resolveTimeBandMultiplier,
+  buildTiersFromFlatRate,
+  migrateLegacyCityTiersToVehicle,
+  normalizeVehicleDistanceTiers,
+  resolveVehicleDistanceTiersFromSettings,
   normalizeFarePricingConfig,
+  resolveVehiclePricingConfig,
   normalizeIntercityFarePricingConfig,
   calculateTieredDistanceFare,
   getEffectivePerKmRate,
@@ -566,6 +642,8 @@ module.exports = {
   calculateDistanceFareForSettlement,
   calculateIntercityDistanceFare,
   seedFarePricingFromPerKmRate,
+  seedVehicleDistanceTiers,
+  validateVehicleDistanceTiers,
   validateFarePricingConfig,
   calculateFareWithTimeShim,
 }

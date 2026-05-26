@@ -25,7 +25,7 @@ const {
 } = require('./vehicleServicesKeys')
 const {
   calculateInstantFare,
-  normalizeFarePricingConfig,
+  resolveVehiclePricingConfig,
   calculateIntercityDistanceFare,
   calculateDistanceFareForSettlement,
   getEffectivePerKmRate,
@@ -589,17 +589,22 @@ const calculateFareWithTime = (
   perKmRate,
   perMinuteRate,
   minimumFare,
-  settings = null
+  settings = null,
+  options = {}
 ) => {
+  const { vehicleServiceKey = 'cercaZip', at } = options
   const pricingConfig = settings
-    ? normalizeFarePricingConfig(settings)
-    : normalizeFarePricingConfig({
-        pricingConfigurations: {
-          perKmRate,
-          minimumFare,
-          farePricing: { enabled: false },
+    ? resolveVehiclePricingConfig(settings, vehicleServiceKey)
+    : resolveVehiclePricingConfig(
+        {
+          pricingConfigurations: {
+            perKmRate,
+            minimumFare,
+            farePricing: { enabled: false },
+          },
         },
-      })
+        vehicleServiceKey
+      )
   return calculateInstantFare({
     basePrice,
     distanceKm: distance,
@@ -607,6 +612,7 @@ const calculateFareWithTime = (
     perMinuteRate,
     minimumFare,
     pricingConfig,
+    at,
   })
 }
 
@@ -869,7 +875,8 @@ const createRide = async rideData => {
         perKmRate,
         perMinuteRate,
         minimumFare,
-        settings
+        settings,
+        { vehicleServiceKey }
       )
       
       // Validate: fare should be >= minimumFare
@@ -900,7 +907,8 @@ const createRide = async rideData => {
         perKmRate,
         perMinuteRate,
         minimumFare,
-        settings
+        settings,
+        { vehicleServiceKey }
       )
       fare = fareBreakdown.fareAfterMinimum
       logger.info(
@@ -1276,6 +1284,7 @@ const calculateIntercityFareBreakdown = ({
     durationMin: durationMinutes,
     perMinuteRate,
     settings,
+    vehicleServiceKey: vehicleType,
   })
   const distanceFare = roundMoney(
     intercityDist.distanceFare + (intercityDist.timeFare || 0)
@@ -2542,7 +2551,7 @@ async function getPerKmRateFromSettings () {
   if (!Number.isFinite(perKmRate) || perKmRate < 0) {
     throw new Error('Invalid perKmRate in admin settings')
   }
-  const config = normalizeFarePricingConfig(settings)
+  const config = resolveVehiclePricingConfig(settings, 'cercaZip')
   return getEffectivePerKmRate(1, config.distanceTiers) || perKmRate
 }
 
@@ -2576,9 +2585,14 @@ async function buildBeforeStartOtpRiderCancelSettlement (originalRide) {
     policy: BEFORE_START_DISTANCE_POLICY
   })
 
+  const vehicleServiceKey =
+    originalRide.vehicleService ||
+    mapServiceToVehicleService(originalRide.service || originalRide.vehicleType || 'cercaZip')
+
   const distSettlement = calculateDistanceFareForSettlement(
     travelledDistanceKm,
-    settings
+    settings,
+    { vehicleServiceKey }
   )
   const travelledAmount = distSettlement.amount
   const perKmRate = distSettlement.effectivePerKmRate
@@ -3118,10 +3132,15 @@ async function computeDriverInProgressCancelSettlement (originalRide) {
     partialKm = calculateHaversineDistance(pLat, pLng, dLat, dLng)
   }
 
+  const vehicleServiceKey =
+    originalRide.vehicleService ||
+    mapServiceToVehicleService(originalRide.service || originalRide.vehicleType || 'cercaZip')
+
   let driverPartialAmount
   if (useTieredSettlement && partialKm > 0) {
-    driverPartialAmount = calculateDistanceFareForSettlement(partialKm, settings).amount
-    perKmRate = calculateDistanceFareForSettlement(partialKm, settings).effectivePerKmRate
+    const settlementOpts = { vehicleServiceKey }
+    driverPartialAmount = calculateDistanceFareForSettlement(partialKm, settings, settlementOpts).amount
+    perKmRate = calculateDistanceFareForSettlement(partialKm, settings, settlementOpts).effectivePerKmRate
     perKmRateSource = 'admin_tiered'
   } else {
     driverPartialAmount = roundMoney(partialKm * perKmRate)
@@ -4251,7 +4270,8 @@ const recalculateRideFare = async (rideId) => {
       perKmRate,
       perMinuteRate,
       minimumFare,
-      settings
+      settings,
+      { vehicleServiceKey: vehicleServiceKey || 'cercaZip' }
     )
 
     // Log fare breakdown details for transparency

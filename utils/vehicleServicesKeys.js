@@ -26,6 +26,13 @@ function priceDefaultForKey (serviceKey) {
   return 699
 }
 
+/** Default per-km rate for vehicle distance tiers (matches intercity perKmRates). */
+function perKmDefaultForKey (serviceKey) {
+  if (serviceKey === 'cercaZip') return 10
+  if (serviceKey === 'cercaGlide') return 12
+  return 16
+}
+
 /**
  * Remap legacy vehicleServices keys to canonical keys (mutates shallow copy).
  */
@@ -146,5 +153,6 @@ module.exports = {
   normalizeVehicleServiceDisplayNames,
   perMinuteDefaultForKey,
   priceDefaultForKey,
+  perKmDefaultForKey,
   resolveCanonicalVehicleTier
 }

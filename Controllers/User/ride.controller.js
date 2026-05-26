@@ -244,7 +244,8 @@ const buildDestinationUpdateQuote = async ({
     perKmRate,
     perMinuteRate,
     minimumFare,
-    settings
+    settings,
+    { vehicleServiceKey }
   )
 
   const { discount, finalFare } = await applyRidePromoDiscount(
@@ -525,7 +526,8 @@ const createRide = asyncHandler(async (req, res) => {
         perKmRate,
         perMinuteRate,
         minimumFare,
-        settings
+        settings,
+        { vehicleServiceKey: vehicleServiceKeyForFare }
       )
     }
 
@@ -1652,7 +1654,8 @@ const calculateFare = async (req, res) => {
       perKmRate,
       perMinuteRate,
       minimumFare,
-      settings
+      settings,
+      { vehicleServiceKey }
     )
 
     // Apply promo code if provided
@@ -1844,7 +1847,8 @@ const calculateAllFares = async (req, res) => {
         perKmRate,
         perMinuteRate,
         minimumFare,
-        settings
+        settings,
+        { vehicleServiceKey }
       )
 
       let finalFare = fareBreakdown.fareAfterMinimum

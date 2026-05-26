@@ -29,18 +29,13 @@ const SettingsSchema = new mongoose.Schema({
         /** Required actual km ≥ max(substantiveTripMinDistanceKm, this × estimatedDistanceInKm). */
         substantiveTripEstimateDistanceFraction: { type: Number, default: 0.05 },
         /**
-         * Tiered per-km slabs (0–10, 11–20, 21–30, 31+ km) and time-of-day multipliers.
+         * Time-of-day multipliers for distance + time fares.
+         * Per-km distance slabs (0–5, 5–10, 10+ km) live on vehicleServices.*.distanceTiers.
          * When enabled=false, flat pricingConfigurations.perKmRate is used (legacy).
          */
         farePricing: {
             enabled: { type: Boolean, default: false },
             timezone: { type: String, default: 'Asia/Kolkata' },
-            distanceTiers: {
-                tier1: { maxKm: { type: Number, default: 10 }, ratePerKm: { type: Number } },
-                tier2: { maxKm: { type: Number, default: 20 }, ratePerKm: { type: Number } },
-                tier3: { maxKm: { type: Number, default: 30 }, ratePerKm: { type: Number } },
-                beyondTier3RatePerKm: { type: Number },
-            },
             timeBands: [
                 {
                     id: { type: String },
@@ -153,7 +148,12 @@ const SettingsSchema = new mongoose.Schema({
             perMinuteRate: { type: Number, required: true, default: 2 },
             seats: { type: Number, default: 4 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/cerca-zip.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-zip.png' },
+            distanceTiers: {
+                tier1: { maxKm: { type: Number, default: 5 }, ratePerKm: { type: Number } },
+                tier2: { maxKm: { type: Number, default: 10 }, ratePerKm: { type: Number } },
+                beyondTier2RatePerKm: { type: Number },
+            },
         },
         cercaGlide: {
             name: { type: String, default: 'Cerca Glide' },
@@ -161,7 +161,12 @@ const SettingsSchema = new mongoose.Schema({
             perMinuteRate: { type: Number, required: true, default: 3 },
             seats: { type: Number, default: 6 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/cerca-glide.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-glide.png' },
+            distanceTiers: {
+                tier1: { maxKm: { type: Number, default: 5 }, ratePerKm: { type: Number } },
+                tier2: { maxKm: { type: Number, default: 10 }, ratePerKm: { type: Number } },
+                beyondTier2RatePerKm: { type: Number },
+            },
         },
         cercaTitan: {
             name: { type: String, default: 'Cerca Titan' },
@@ -169,7 +174,12 @@ const SettingsSchema = new mongoose.Schema({
             perMinuteRate: { type: Number, required: true, default: 4 },
             seats: { type: Number, default: 8 },
             enabled: { type: Boolean, default: true },
-            imagePath: { type: String, default: 'assets/cars/cerca-titan.png' }
+            imagePath: { type: String, default: 'assets/cars/cerca-titan.png' },
+            distanceTiers: {
+                tier1: { maxKm: { type: Number, default: 5 }, ratePerKm: { type: Number } },
+                tier2: { maxKm: { type: Number, default: 10 }, ratePerKm: { type: Number } },
+                beyondTier2RatePerKm: { type: Number },
+            },
         }
     },
 }, { timestamps: true });
