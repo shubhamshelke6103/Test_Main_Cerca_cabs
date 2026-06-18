@@ -68,9 +68,55 @@ const sanitizeRideListContactsForDriver = rides =>
     ? rides.map(sanitizeRideContactsForDriver)
     : sanitizeRideContactsForDriver(rides)
 
+const sanitizeContactForRider = contact => {
+  if (!contact || Array.isArray(contact)) return contact
+
+  const sanitizedContact = toPlainObject(contact)
+  const actualPhone = sanitizedContact.phone || null
+
+  if (!actualPhone) {
+    return sanitizedContact
+  }
+
+  const maskedPhoneNumber = maskPhone(actualPhone)
+
+  return {
+    ...sanitizedContact,
+    maskedPhoneNumber,
+    callPhoneNumber: actualPhone,
+    ...(Object.prototype.hasOwnProperty.call(sanitizedContact, 'phone')
+      ? { phone: maskedPhoneNumber }
+      : {})
+  }
+}
+
+const sanitizeRideContactsForRider = ride => {
+  if (!ride) return ride
+
+  const sanitizedRide = toPlainObject(ride)
+
+  if (
+    sanitizedRide.driver &&
+    typeof sanitizedRide.driver === 'object' &&
+    !Array.isArray(sanitizedRide.driver)
+  ) {
+    sanitizedRide.driver = sanitizeContactForRider(sanitizedRide.driver)
+  }
+
+  return sanitizedRide
+}
+
+const sanitizeRideListContactsForRider = rides =>
+  Array.isArray(rides)
+    ? rides.map(sanitizeRideContactsForRider)
+    : sanitizeRideContactsForRider(rides)
+
 module.exports = {
   maskPhone,
   sanitizeContactForDriver,
+  sanitizeContactForRider,
   sanitizeRideContactsForDriver,
-  sanitizeRideListContactsForDriver
+  sanitizeRideContactsForRider,
+  sanitizeRideListContactsForDriver,
+  sanitizeRideListContactsForRider
 }

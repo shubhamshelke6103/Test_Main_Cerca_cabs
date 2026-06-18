@@ -523,7 +523,11 @@ const updateUserFcmToken = asyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(req.params.id, {
       $set: { fcmToken: null, fcmTokenUpdatedAt: new Date() },
     });
-    logger.info(`Cleared FCM token for user ${req.params.id}`);
+    logger.info('FCM token update', {
+      userId: req.params.id,
+      platform: platform || 'unknown',
+      action: 'cleared',
+    });
     return res.status(200).json({ success: true, cleared: true });
   }
 
@@ -537,9 +541,12 @@ const updateUserFcmToken = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.params.id, {
     $set: { fcmToken: token, fcmTokenUpdatedAt: new Date() },
   });
-  logger.info(
-    `Updated FCM token for user ${req.params.id} (platform=${platform || 'unknown'})`
-  );
+  logger.info('FCM token update', {
+    userId: req.params.id,
+    platform: platform || 'unknown',
+    action: 'success',
+    tokenLength: token.length,
+  });
   res.status(200).json({ success: true });
 });
 

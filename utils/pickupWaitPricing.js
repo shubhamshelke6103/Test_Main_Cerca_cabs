@@ -11,7 +11,7 @@ const DEFAULT_POLICY = {
   pickupWaitTier1EndMinute: 8,
   pickupWaitTier1RatePerMin: 4,
   pickupWaitTier2RatePerMin: 2,
-  pickupWaitDriverCancelAfterMinutes: 8
+  pickupWaitDriverCancelAfterMinutes: 7
 }
 
 function getPickupWaitPolicyFromSettings (settings) {

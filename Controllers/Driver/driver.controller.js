@@ -48,6 +48,7 @@ const {
 const {
     sanitizeRideListContactsForDriver,
     sanitizeRideContactsForDriver,
+    sanitizeRideContactsForRider,
 } = require('../../utils/rideContactPrivacy.service.js');
 const {
     cancelRide: cancelRideFromBooking,
@@ -2111,6 +2112,7 @@ const acceptRide = async (req, res) => {
             };
 
             const driverRidePayload = sanitizeRideContactsForDriver(rideWithMetadata);
+            const riderRidePayload = sanitizeRideContactsForRider(rideWithMetadata);
             const roomName = `ride_${rideId}`;
 
             // Safely compute rider/driver identifiers
@@ -2136,7 +2138,7 @@ const acceptRide = async (req, res) => {
             // Notify rider
             if (riderIdentifier) {
                 try {
-                    io.to(`user_${riderIdentifier}`).emit('rideAccepted', driverRidePayload);
+                    io.to(`user_${riderIdentifier}`).emit('rideAccepted', riderRidePayload);
                 } catch (e) {
                     logger.warn('Emit rideAccepted to rider failed', { err: e.message });
                 }

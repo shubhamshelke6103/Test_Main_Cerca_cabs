@@ -9,6 +9,7 @@ const {
   adjustWallet,
   updateUser,
   deleteUser,
+  getUserFcmStats,
 } = require('../../Controllers/Admin/users.controller');
 const { authenticateAdmin } = require('../../utils/adminAuth');
 
@@ -44,6 +45,7 @@ const upload = multer({
 });
 
 router.use(authenticateAdmin);
+router.get('/users/fcm-stats', getUserFcmStats);
 router.get('/users', listUsers);
 router.get('/users/:id', getUserDetails);
 router.put('/users/:id', upload.single('profilePic'), updateUser);

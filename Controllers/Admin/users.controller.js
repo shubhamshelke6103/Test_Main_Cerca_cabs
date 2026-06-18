@@ -266,6 +266,35 @@ const deleteUser = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Rider FCM token coverage (fcmToken is select:false on User model).
+ * @route   GET /admin/users/fcm-stats
+ */
+const getUserFcmStats = async (req, res) => {
+  try {
+    const [withToken, total] = await Promise.all([
+      User.countDocuments({
+        fcmToken: { $exists: true, $ne: null, $ne: '' },
+      }),
+      User.countDocuments({}),
+    ]);
+    const withoutToken = Math.max(0, total - withToken);
+    res.status(200).json({
+      success: true,
+      withToken,
+      withoutToken,
+      total,
+      coveragePercent: total > 0 ? Math.round((withToken / total) * 1000) / 10 : 0,
+    });
+  } catch (error) {
+    logger.error('Error fetching rider FCM stats:', error);
+    res.status(500).json({
+      message: 'Error fetching FCM stats',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   listUsers,
   getUserDetails,
@@ -274,5 +303,6 @@ module.exports = {
   adjustWallet,
   updateUser,
   deleteUser,
+  getUserFcmStats,
 };
 

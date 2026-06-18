@@ -82,7 +82,8 @@ const {
 } = require('./driverSession.service')
 const {
   maskPhone,
-  sanitizeRideContactsForDriver
+  sanitizeRideContactsForDriver,
+  sanitizeRideContactsForRider
 } = require('./rideContactPrivacy.service')
 
 let io
@@ -2258,11 +2259,13 @@ function initializeSocket (server) {
             return
           }
 
-          const stackedPayload = sanitizeRideContactsForDriver(
-            assignedStackedRide.toObject
-              ? assignedStackedRide.toObject()
-              : assignedStackedRide
-          )
+          const stackedRideBase = assignedStackedRide.toObject
+            ? assignedStackedRide.toObject()
+            : assignedStackedRide
+          const stackedDriverPayload =
+            sanitizeRideContactsForDriver(stackedRideBase)
+          const stackedRiderPayload =
+            sanitizeRideContactsForRider(stackedRideBase)
 
           // Notify the accepting driver: their offer is now queued. The driver
           // app stores this as `queuedRide` and shows a banner without
@@ -2271,7 +2274,7 @@ function initializeSocket (server) {
             try {
               io.to(assignedStackedRide.driverSocketId).emit(
                 'rideQueued',
-                stackedPayload
+                stackedDriverPayload
               )
             } catch (e) {
               logger.warn('Emit rideQueued to driver failed', {
@@ -2288,7 +2291,7 @@ function initializeSocket (server) {
             try {
               io.to(`user_${stackedRiderId}`).emit(
                 'rideAccepted',
-                stackedPayload
+                stackedRiderPayload
               )
             } catch (e) {
               logger.warn(
@@ -2301,7 +2304,7 @@ function initializeSocket (server) {
           io.to('admin').emit('rideStatusUpdated', {
             rideId,
             status: 'accepted',
-            ride: stackedPayload
+            ride: stackedDriverPayload
           })
 
           // Notify other drivers (rideNoLongerAvailable) — same as standard branch.
@@ -2379,6 +2382,7 @@ function initializeSocket (server) {
           isFullDayBooking
         }
         const driverRidePayload = sanitizeRideContactsForDriver(rideWithMetadata)
+        const riderRidePayload = sanitizeRideContactsForRider(rideWithMetadata)
 
         const roomName = `ride_${rideId}`
 
@@ -2416,7 +2420,7 @@ function initializeSocket (server) {
           try {
             io.to(`user_${riderIdentifier}`).emit(
               'rideAccepted',
-              driverRidePayload
+              riderRidePayload
             )
           } catch (e) {
             logger.warn('Emit rideAccepted to rider failed', { err: e.message })
@@ -3749,7 +3753,7 @@ function initializeSocket (server) {
               const settings = await Settings.findOne().lean()
               const policy = getPickupWaitPolicyFromSettings(settings || {})
               const needMs =
-                (policy.pickupWaitDriverCancelAfterMinutes || 8) * 60 * 1000
+                (policy.pickupWaitDriverCancelAfterMinutes || 7) * 60 * 1000
               const elapsed = Date.now() - new Date(arrivedAt).getTime()
               if (elapsed < needMs) {
                 const unlockAt = new Date(
