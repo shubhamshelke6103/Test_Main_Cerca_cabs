@@ -10,6 +10,11 @@ const {
   getPriorityDocument,
   getFleetOnlineHoursReport,
 } = require('../../Controllers/Admin/drivers.controller');
+const {
+  getDriverDistanceSummary,
+  getDriverDistanceReport,
+  getDriverDistanceLeaderboard,
+} = require('../../Controllers/Admin/driverDistance.controller');
 const { authenticateAdmin } = require('../../utils/adminAuth');
 const {
   approvePriorityDriver,
@@ -25,6 +30,9 @@ const {
 const router = express.Router();
 
 router.use(authenticateAdmin);
+router.get('/drivers/distance/summary', getDriverDistanceSummary);
+router.get('/drivers/distance/report', getDriverDistanceReport);
+router.get('/drivers/distance/leaderboard', getDriverDistanceLeaderboard);
 router.get('/drivers', listDrivers);
 router.get('/drivers/:id', getDriverDetails);
 router.patch('/drivers/:id/approve', approveDriver);

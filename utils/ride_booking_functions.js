@@ -1402,6 +1402,173 @@ const calculateRouteDistanceInKm = routePoints => {
   return Math.round(totalDistance * 100) / 100
 }
 
+const getCoordsFromGeoPoint = pt => {
+  if (!pt?.coordinates || pt.coordinates.length < 2) return null
+  const [lng, lat] = pt.coordinates
+  return { lat, lng }
+}
+
+const roundKm = km =>
+  km == null || !Number.isFinite(Number(km))
+    ? null
+    : Math.round(Number(km) * 100) / 100
+
+/**
+ * Snapshot driver location at accept (Point A) and seed route polyline if empty.
+ */
+const captureDriverAcceptSnapshot = async (rideId, driverId) => {
+  const driver = await Driver.findById(driverId).select('location').lean()
+  const coords = driver?.location?.coordinates
+  if (!coords || coords.length < 2) {
+    logger.warn(
+      `captureDriverAcceptSnapshot: no driver location for driverId=${driverId} rideId=${rideId}`
+    )
+    return null
+  }
+
+  const acceptAt = new Date()
+  const point = {
+    type: 'Point',
+    coordinates: [coords[0], coords[1]]
+  }
+
+  const ride = await Ride.findById(rideId).select('routePoints').lean()
+  const hasRoutePoints =
+    Array.isArray(ride?.routePoints) && ride.routePoints.length > 0
+
+  const update = {
+    $set: {
+      driverAcceptLocation: point,
+      driverAcceptAt: acceptAt
+    }
+  }
+
+  if (!hasRoutePoints) {
+    update.$push = {
+      routePoints: {
+        $each: [
+          {
+            type: 'Point',
+            coordinates: point.coordinates,
+            recordedAt: acceptAt
+          }
+        ],
+        $slice: -BEFORE_START_ROUTE_POINTS_MAX
+      }
+    }
+  }
+
+  await Ride.findByIdAndUpdate(rideId, update)
+  return { driverAcceptLocation: point, driverAcceptAt: acceptAt }
+}
+
+const computeDriverDistanceFromRide = ride => {
+  if (!ride) return null
+
+  const routePoints = Array.isArray(ride.routePoints) ? ride.routePoints : []
+  const tripStartCutoff = ride.actualStartTime || ride.driverArrivedAt
+
+  if (routePoints.length >= 2) {
+    const acceptToDropKm = calculateRouteDistanceInKm(routePoints)
+    let acceptToPickupKm = null
+    let pickupToDropKm = null
+
+    if (tripStartCutoff) {
+      const cutoff = new Date(tripStartCutoff).getTime()
+      const beforeStart = []
+      const afterStart = []
+      for (const p of routePoints) {
+        if (!p?.recordedAt) {
+          beforeStart.push(p)
+          continue
+        }
+        if (new Date(p.recordedAt).getTime() < cutoff) {
+          beforeStart.push(p)
+        } else {
+          afterStart.push(p)
+        }
+      }
+
+      if (beforeStart.length >= 2) {
+        acceptToPickupKm = calculateRouteDistanceInKm(beforeStart)
+      }
+      if (afterStart.length >= 2) {
+        pickupToDropKm = calculateRouteDistanceInKm(afterStart)
+      } else if (beforeStart.length >= 1 && afterStart.length >= 1) {
+        pickupToDropKm = calculateRouteDistanceInKm([
+          beforeStart[beforeStart.length - 1],
+          ...afterStart
+        ])
+      }
+    }
+
+    return {
+      driverTravelledKm: acceptToDropKm,
+      driverDistanceBreakdown: {
+        acceptToPickupKm: roundKm(acceptToPickupKm),
+        pickupToDropKm: roundKm(pickupToDropKm),
+        acceptToDropKm: acceptToDropKm,
+        source: 'polyline'
+      }
+    }
+  }
+
+  const a = getCoordsFromGeoPoint(ride.driverAcceptLocation)
+  const b = getCoordsFromGeoPoint(ride.pickupLocation)
+  const c = getCoordsFromGeoPoint(ride.dropoffLocation)
+
+  let acceptToPickupKm = null
+  let pickupToDropKm = null
+  let acceptToDropKm = 0
+
+  if (a && b) {
+    acceptToPickupKm = calculateHaversineDistance(a.lat, a.lng, b.lat, b.lng)
+    acceptToDropKm += acceptToPickupKm
+  }
+  if (b && c) {
+    pickupToDropKm = calculateHaversineDistance(b.lat, b.lng, c.lat, c.lng)
+    acceptToDropKm += pickupToDropKm
+  } else if (a && c && !b) {
+    acceptToDropKm = calculateHaversineDistance(a.lat, a.lng, c.lat, c.lng)
+  }
+
+  acceptToDropKm = roundKm(acceptToDropKm)
+  if (!acceptToDropKm || acceptToDropKm <= 0) return null
+
+  return {
+    driverTravelledKm: acceptToDropKm,
+    driverDistanceBreakdown: {
+      acceptToPickupKm: roundKm(acceptToPickupKm),
+      pickupToDropKm: roundKm(pickupToDropKm),
+      acceptToDropKm,
+      source: 'estimated'
+    }
+  }
+}
+
+const computeAndPersistDriverTravelledKm = async rideId => {
+  const ride = await Ride.findById(rideId)
+    .select(
+      'routePoints driverAcceptLocation pickupLocation dropoffLocation actualStartTime driverArrivedAt status'
+    )
+    .lean()
+
+  if (!ride || ride.status !== 'completed') return null
+
+  const computed = computeDriverDistanceFromRide(ride)
+  if (!computed) return null
+
+  await Ride.findByIdAndUpdate(rideId, {
+    $set: {
+      driverTravelledKm: computed.driverTravelledKm,
+      driverTravelledKmComputedAt: new Date(),
+      driverDistanceBreakdown: computed.driverDistanceBreakdown
+    }
+  })
+
+  return computed
+}
+
 const appendRideRoutePoint = async (rideId, location) => {
   try {
     const coordinates = toLngLat(location)
@@ -1515,6 +1682,14 @@ const assignDriverToRide = async (rideId, driverId, driverSocketId) => {
     logger.info(
       `✅ Atomic assignment successful - rideId: ${rideId}, driverId: ${driverId}`
     )
+
+    try {
+      await captureDriverAcceptSnapshot(rideId, driverId)
+    } catch (captureErr) {
+      logger.warn(
+        `captureDriverAcceptSnapshot failed rideId=${rideId}: ${captureErr.message}`
+      )
+    }
 
     logger.info(`✅ Driver ${driverId} assigned to ride ${rideId}`)
 
@@ -1664,6 +1839,14 @@ const assignStackedDriverToRide = async (rideId, driverId, driverSocketId) => {
         throw new Error('Ride already accepted by another driver')
       }
       throw new Error('Ride no longer available')
+    }
+
+    try {
+      await captureDriverAcceptSnapshot(rideId, driverId)
+    } catch (captureErr) {
+      logger.warn(
+        `captureDriverAcceptSnapshot failed (stacked) rideId=${rideId}: ${captureErr.message}`
+      )
     }
 
     // Atomic driver update: only succeed if queuedRideId is still null. This
@@ -1887,6 +2070,14 @@ const completeRide = async (rideId, fare, options = {}) => {
       { new: true }
     ).populate('driver rider')
     if (!ride) throw new Error('Ride not found')
+
+    try {
+      await computeAndPersistDriverTravelledKm(rideId)
+    } catch (kmErr) {
+      logger.warn(
+        `computeAndPersistDriverTravelledKm failed rideId=${rideId}: ${kmErr.message}`
+      )
+    }
 
     // NOW update driver isBusy to false AFTER ride status is 'completed'
     // This ensures validateAndFixDriverStatus won't find this ride as active
@@ -5481,6 +5672,9 @@ module.exports = {
   clearRideLock,
   clearWorkerLock,
   appendRideRoutePoint,
+  captureDriverAcceptSnapshot,
+  computeDriverDistanceFromRide,
+  computeAndPersistDriverTravelledKm,
   evaluateRideCancellationPolicy,
   toRiderInProgressCancelBillingSummary,
   toRiderBeforeStartCancelBillingSummary,

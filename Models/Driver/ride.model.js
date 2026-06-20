@@ -105,6 +105,32 @@ const rideSchema = new mongoose.Schema(
     estimatedDistanceInKm: Number,
     actualDistanceInKm: Number,
     distanceInKm: Number,
+    /** Driver GPS at accept (Point A). */
+    driverAcceptLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined
+      }
+    },
+    driverAcceptAt: { type: Date, default: null },
+    /** Polyline km from accept through drop (A → C). */
+    driverTravelledKm: { type: Number, default: null },
+    driverTravelledKmComputedAt: { type: Date, default: null },
+    driverDistanceBreakdown: {
+      acceptToPickupKm: { type: Number, default: null },
+      pickupToDropKm: { type: Number, default: null },
+      acceptToDropKm: { type: Number, default: null },
+      source: {
+        type: String,
+        enum: ['polyline', 'estimated'],
+        default: 'polyline'
+      }
+    },
     routePoints: [
       {
         type: {
@@ -566,6 +592,7 @@ rideSchema.index({ pickupLocation: '2dsphere' })
 rideSchema.index({ dropoffLocation: '2dsphere' })
 rideSchema.index({ shareToken: 1 })
 rideSchema.index({ 'passenger.phone': 1 })
+rideSchema.index({ driver: 1, actualEndTime: -1, status: 1 })
 
 /* =====================================================
    ⭐ Keep updatedAt synced

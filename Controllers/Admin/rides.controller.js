@@ -4,10 +4,10 @@ const logger = require('../../utils/logger');
 const {
   buildPickupWaitAdminDetail
 } = require('../../utils/pickupWaitAdminDetail');
-const { cancelRide: cancelRideFromBooking } = require('../../utils/ride_booking_functions');
+const { cancelRide: cancelRideFromBooking, captureDriverAcceptSnapshot } = require('../../utils/ride_booking_functions');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket');
 
-const SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'status', 'fare', 'actualStartTime', 'actualEndTime'];
+const SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'status', 'fare', 'actualStartTime', 'actualEndTime', 'driverTravelledKm'];
 
 const listRides = async (req, res) => {
   try {
@@ -77,9 +77,22 @@ const getRideById = async (req, res) => {
     }
 
     const pickupWaitAdminDetail = buildPickupWaitAdminDetail(ride);
+    const rideObj = ride.toObject ? ride.toObject() : ride;
+    rideObj.routePointCount = Array.isArray(ride.routePoints)
+      ? ride.routePoints.length
+      : 0;
+    if (Array.isArray(ride.routePoints) && ride.routePoints.length > 0) {
+      const maxPolylinePoints = 500;
+      const step = Math.max(1, Math.ceil(ride.routePoints.length / maxPolylinePoints));
+      rideObj.routePointsPreview = ride.routePoints.filter(
+        (_, index) => index % step === 0 || index === ride.routePoints.length - 1
+      );
+    } else {
+      rideObj.routePointsPreview = [];
+    }
 
     res.status(200).json({
-      ride: ride.toObject ? ride.toObject() : ride,
+      ride: rideObj,
       pickupWaitAdminDetail
     });
   } catch (error) {
@@ -149,6 +162,12 @@ const assignDriver = async (req, res) => {
     ride.driver = driverId;
     ride.status = 'accepted';
     await ride.save();
+
+    try {
+      await captureDriverAcceptSnapshot(id, driverId);
+    } catch (captureErr) {
+      logger.warn(`Admin assignDriver capture failed rideId=${id}: ${captureErr.message}`);
+    }
 
     res.status(200).json({ message: 'Driver assigned', ride });
   } catch (error) {
