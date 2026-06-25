@@ -48,6 +48,10 @@ const {
 } = require('../../Controllers/Driver/driver.controller.js');
 const vendorController = require('../../Controllers/Vendor/vendor.controller.js');
 const {
+    getDriverDistanceSummaryForDriver,
+    getDriverDistanceRidesForDriver,
+} = require('../../Controllers/Driver/driverMileage.controller.js');
+const {
     reportPaymentIssue,
     uploadDisputeEvidence,
     confirmPaymentReceived,
@@ -293,6 +297,20 @@ router.delete(
 // Route to update driver busy status
 router.patch('/:id/busy-status', updateDriverBusyStatus);
 router.patch('/:id/intercity-toggle', updateDriverIntercityToggle);
+
+// Driver mileage (authenticated, own driver only)
+router.get(
+    '/:id/distance/summary',
+    authenticateDriver,
+    requireOwnDriver,
+    getDriverDistanceSummaryForDriver
+);
+router.get(
+    '/:id/distance/rides',
+    authenticateDriver,
+    requireOwnDriver,
+    getDriverDistanceRidesForDriver
+);
 
 // Route to get driver statistics
 router.get('/:id/stats', getDriverStats);

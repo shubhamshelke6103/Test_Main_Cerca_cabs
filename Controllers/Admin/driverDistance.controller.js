@@ -1,79 +1,12 @@
-const mongoose = require('mongoose')
 const Ride = require('../../Models/Driver/ride.model')
 const Driver = require('../../Models/Driver/driver.model')
 const logger = require('../../utils/logger')
 const {
   REPORT_TZ,
-  getReportDayKey,
-} = require('../../utils/adminReportTimezone')
-
-const roundKm = value =>
-  value == null || !Number.isFinite(Number(value))
-    ? 0
-    : Math.round(Number(value) * 100) / 100
-
-async function getMongoPeriodKeys(date = new Date(), timeZone = REPORT_TZ) {
-  const [row] = await Ride.aggregate([
-    { $documents: [{ d: date }] },
-    {
-      $project: {
-        dayKey: {
-          $dateToString: { format: '%Y-%m-%d', date: '$d', timezone: timeZone },
-        },
-        weekKey: {
-          $dateToString: { format: '%G-W%V', date: '$d', timezone: timeZone },
-        },
-      },
-    },
-  ])
-  return row || { dayKey: getReportDayKey(date, timeZone), weekKey: null }
-}
-
-function buildCompletedRideMatch({
-  driverId,
-  startDate,
-  endDate,
-}) {
-  const match = {
-    status: 'completed',
-    driver: { $exists: true, $ne: null },
-    driverTravelledKm: { $gt: 0 },
-  }
-
-  if (driverId) {
-    if (!mongoose.Types.ObjectId.isValid(driverId)) {
-      const err = new Error('Invalid driverId')
-      err.statusCode = 400
-      throw err
-    }
-    match.driver = new mongoose.Types.ObjectId(driverId)
-  }
-
-  if (startDate || endDate) {
-    match.$expr = {
-      $and: [
-        startDate
-          ? {
-              $gte: [
-                { $ifNull: ['$actualEndTime', '$updatedAt'] },
-                new Date(startDate),
-              ],
-            }
-          : true,
-        endDate
-          ? {
-              $lte: [
-                { $ifNull: ['$actualEndTime', '$updatedAt'] },
-                new Date(endDate),
-              ],
-            }
-          : true,
-      ].filter(v => v !== true),
-    }
-  }
-
-  return match
-}
+  roundKm,
+  getMongoPeriodKeys,
+  buildCompletedRideMatch,
+} = require('../../utils/driverDistanceReport')
 
 const getDriverDistanceSummary = async (req, res) => {
   try {
@@ -81,14 +14,14 @@ const getDriverDistanceSummary = async (req, res) => {
     if (!driverId) {
       return res.status(400).json({ message: 'driverId is required' })
     }
-    if (!mongoose.Types.ObjectId.isValid(driverId)) {
+    if (!require('mongoose').Types.ObjectId.isValid(driverId)) {
       return res.status(400).json({ message: 'Invalid driverId' })
     }
 
     const refDate = date ? new Date(date) : new Date()
     const { dayKey, weekKey } = await getMongoPeriodKeys(refDate)
 
-    const driverObjectId = new mongoose.Types.ObjectId(driverId)
+    const driverObjectId = new (require('mongoose').Types.ObjectId)(driverId)
     const baseStages = [
       {
         $match: {
