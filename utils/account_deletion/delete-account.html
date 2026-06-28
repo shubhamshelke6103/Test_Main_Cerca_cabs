@@ -4,15 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Delete Account - Cerca Cars</title>
+
     <link rel="stylesheet" href="delete-account.css">
+
     <script defer src="delete-account.js"></script>
-<script defer src="delete-account.js"></script>
 </head>
 <body>
 
 <div class="container">
+
     <div class="card">
-        <div class="icon">⚠️</div>
+
+        <div class="icon">
+            ⚠️
+        </div>
 
         <h1>Delete Your Account</h1>
 
@@ -23,27 +28,86 @@
         <p class="description">
             Deleting your account is permanent and cannot be undone.
             All your personal information, ride history, saved addresses,
-            wallet balance, and preferences will be permanently removed.
+            wallet balance and preferences will be permanently removed.
         </p>
 
         <ul>
             <li>✓ Your profile will be deleted.</li>
-            <li>✓ Ride history will be removed.</li>
+            <li>✓ Ride history will be deleted.</li>
             <li>✓ Saved payment methods will be removed.</li>
             <li>✓ Wallet balance cannot be recovered.</li>
         </ul>
 
-        <div class="buttons">
-            <button id="cancel-button" class="cancel">Keep My Account</button>
-            <button id="delete-button" class="delete">Delete My Account</button>
+        <div class="form-group">
+
+            <label for="identifier">
+                Email or Mobile Number
+            </label>
+
+            <input
+                type="text"
+                id="identifier"
+                placeholder="Enter Email or Mobile Number">
+
         </div>
 
-        <div id="delete-message" class="message" aria-live="polite"></div>
+        <div class="buttons">
+
+            <button id="cancel-button" class="cancel">
+                Keep My Account
+            </button>
+
+            <button id="delete-button" class="delete">
+                Delete My Account
+            </button>
+
+        </div>
+
+        <div
+            id="delete-message"
+            class="message"
+            aria-live="polite">
+        </div>
 
         <p class="footer">
             Need help? Contact Cerca Cars Support before deleting your account.
         </p>
+
     </div>
+
+</div>
+
+
+<!-- Confirmation Modal -->
+
+<div id="confirmModal" class="modal">
+
+    <div class="modal-content">
+
+        <h2>⚠ Delete Account</h2>
+
+        <p>
+            Are you sure you want to permanently delete your account?
+        </p>
+
+        <p class="warning">
+            This action cannot be undone.
+        </p>
+
+        <div class="modal-buttons">
+
+            <button id="cancelDelete">
+                Cancel
+            </button>
+
+            <button id="confirmDelete">
+                Yes, Delete
+            </button>
+
+        </div>
+
+    </div>
+
 </div>
 
 </body>

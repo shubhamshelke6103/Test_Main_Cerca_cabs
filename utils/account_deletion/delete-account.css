@@ -1,123 +1,108 @@
-*{
-    margin:0;
-    padding:0;
-    box-sizing:border-box;
-    font-family:Arial, Helvetica, sans-serif;
+.form-group{
+    margin-bottom:25px;
+    text-align:left;
 }
 
-body{
-    background:#f5f7fb;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    min-height:100vh;
-    padding:20px;
+.form-group label{
+    display:block;
+    margin-bottom:8px;
+    font-weight:600;
 }
 
-.container{
+.form-group input{
+
     width:100%;
-    max-width:550px;
+    padding:14px;
+
+    border:1px solid #ddd;
+
+    border-radius:8px;
+
+    font-size:16px;
 }
 
-.card{
-    background:#fff;
-    padding:40px;
-    border-radius:18px;
-    box-shadow:0 15px 35px rgba(0,0,0,.1);
+.message{
+
+    margin-top:20px;
+
+    text-align:center;
+
+    font-weight:bold;
+}
+
+.modal{
+
+    display:none;
+
+    position:fixed;
+
+    top:0;
+
+    left:0;
+
+    width:100%;
+
+    height:100%;
+
+    background:rgba(0,0,0,.5);
+
+    justify-content:center;
+
+    align-items:center;
+
+    z-index:999;
+}
+
+.modal-content{
+
+    background:white;
+
+    padding:30px;
+
+    width:400px;
+
+    max-width:90%;
+
+    border-radius:12px;
+
     text-align:center;
 }
 
-.icon{
-    width:80px;
-    height:80px;
-    background:#fff3f3;
-    color:#ff3b30;
-    border-radius:50%;
+.warning{
+
+    color:red;
+
+    margin:20px 0;
+}
+
+.modal-buttons{
+
     display:flex;
-    justify-content:center;
-    align-items:center;
-    margin:auto;
-    font-size:40px;
-    margin-bottom:20px;
-}
 
-h1{
-    color:#222;
-    margin-bottom:10px;
-}
-
-.subtitle{
-    color:#555;
-    margin-bottom:20px;
-    font-size:18px;
-}
-
-.description{
-    color:#666;
-    line-height:1.7;
-    margin-bottom:25px;
-}
-
-ul{
-    text-align:left;
-    margin-bottom:30px;
-    color:#444;
-}
-
-ul li{
-    list-style:none;
-    padding:8px 0;
-    border-bottom:1px solid #eee;
-}
-
-.buttons{
-    display:flex;
     gap:15px;
 }
 
-button{
+.modal-buttons button{
+
     flex:1;
-    padding:15px;
+
+    padding:12px;
+
     border:none;
-    border-radius:10px;
+
+    border-radius:8px;
+
     cursor:pointer;
-    font-size:16px;
-    font-weight:600;
-    transition:.3s;
 }
 
-.cancel{
-    background:#eceff4;
-    color:#333;
+#cancelDelete{
+
+    background:#ccc;
 }
 
-.cancel:hover{
-    background:#dfe3ea;
-}
+#confirmDelete{
 
-.delete{
     background:#e53935;
-    color:#fff;
-}
 
-.delete:hover{
-    background:#c62828;
-}
-
-.footer{
-    margin-top:25px;
-    color:#888;
-    font-size:14px;
-}
-
-@media(max-width:600px){
-
-.card{
-    padding:25px;
-}
-
-.buttons{
-    flex-direction:column;
-}
-
+    color:white;
 }

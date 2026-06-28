@@ -1,50 +1,78 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const deleteButton = document.getElementById('delete-button');
-  const cancelButton = document.getElementById('cancel-button');
-  const deleteMessage = document.getElementById('delete-message');
+const deleteButton = document.getElementById("delete-button");
+const modal = document.getElementById("confirmModal");
 
-  if (!deleteButton || !cancelButton || !deleteMessage) {
-    return;
-  }
+const cancelDelete = document.getElementById("cancelDelete");
+const confirmDelete = document.getElementById("confirmDelete");
 
-  cancelButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    window.history.back();
-  });
+const message = document.getElementById("delete-message");
 
-  deleteButton.addEventListener('click', async (event) => {
-    event.preventDefault();
-    deleteMessage.textContent = 'Deleting account...';
-    deleteButton.disabled = true;
-    cancelButton.disabled = true;
+deleteButton.addEventListener("click", () => {
 
-    try {
-      const response = await fetch('/request/delete-account.html', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ confirm: true }),
-      });
+    const identifier = document
+        .getElementById("identifier")
+        .value
+        .trim();
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Server error: ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      deleteMessage.textContent = result.message || 'Your account has been deleted successfully.';
-      deleteMessage.classList.add('success');
-
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 2500);
-    } catch (error) {
-      deleteMessage.textContent = error.message || 'Failed to delete account. Please try again.';
-      deleteMessage.classList.add('error');
-      deleteButton.disabled = false;
-      cancelButton.disabled = false;
+    if(identifier===""){
+        alert("Please enter your Email or Mobile Number.");
+        return;
     }
-  });
+
+    modal.style.display="flex";
 });
+
+cancelDelete.onclick=()=>{
+
+    modal.style.display="none";
+}
+
+confirmDelete.onclick=async()=>{
+
+    modal.style.display="none";
+
+    const identifier=document
+        .getElementById("identifier")
+        .value
+        .trim();
+
+    try{
+
+        const res=await fetch("/request/delete-account",{
+
+            method:"POST",
+
+            headers:{
+                "Content-Type":"application/json"
+            },
+
+            body:JSON.stringify({
+                identifier
+            })
+
+        });
+
+        const data=await res.json();
+
+        if(data.success){
+
+            message.style.color="green";
+
+            message.innerHTML=data.message;
+
+        }else{
+
+            message.style.color="red";
+
+            message.innerHTML=data.message;
+
+        }
+
+    }catch(err){
+
+        message.style.color="red";
+
+        message.innerHTML="Something went wrong.";
+
+    }
+
+}
