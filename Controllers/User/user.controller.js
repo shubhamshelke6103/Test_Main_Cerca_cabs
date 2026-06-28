@@ -319,36 +319,43 @@ const deleteAuthenticatedUser = asyncHandler(async (req, res) => {
 })
 
 const deleteAccountByIdentifier = asyncHandler(async (req, res) => {
-  const { identifier } = req.body
+  const { identifier } = req.body;
 
   if (!identifier) {
-    throw new AppError('Email or Mobile Number is required', 400)
+    throw new AppError("Email or Mobile Number is required", 400);
   }
 
+  console.log("Identifier:", identifier);
+
   const user = await User.findOne({
-    $or: [{ email: identifier }, { mobile: identifier }]
-  })
+    $or: [
+      { email: identifier.trim().toLowerCase() },
+      { phoneNumber: identifier.trim() }
+    ]
+  });
+
+  console.log("User Found:", user);
 
   if (!user) {
-    throw new AppError('User not found', 404)
+    throw new AppError("User not found", 404);
   }
 
   if (user.profilePic) {
     const profilePicPath = path.join(
-      'uploads/profilePics',
+      "uploads/profilePics",
       path.basename(user.profilePic)
-    )
+    );
 
-    fs.unlink(profilePicPath, () => {})
+    fs.unlink(profilePicPath, () => {});
   }
 
-  await User.findByIdAndDelete(user._id)
+  await User.findByIdAndDelete(user._id);
 
   res.json({
     success: true,
-    message: 'Your account has been deleted successfully.'
-  })
-})
+    message: "Your account has been deleted successfully."
+  });
+});
 
 const validateToken = asyncHandler(async (req, res) => {
   const authHeader =
