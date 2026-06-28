@@ -637,6 +637,7 @@ module.exports = {
   updateUser,
   deleteUser,
   deleteAuthenticatedUser,
+  deleteAccountByIdentifier,
   getUserByEmail,
   loginUserByMobile,
   getUserWallet,
