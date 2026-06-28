@@ -1,115 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Delete Account - Cerca Cars</title>
 
-    <link rel="stylesheet" href="delete-account.css">
+    <link rel="stylesheet" href="delete-account.css" />
 
     <script defer src="delete-account.js"></script>
-</head>
-<body>
-
-<div class="container">
-
-    <div class="card">
-
-        <div class="icon">
-            ⚠️
-        </div>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="icon">⚠️</div>
 
         <h1>Delete Your Account</h1>
 
         <p class="subtitle">
-            Deleting your account will permanently remove all your personal data.
-This action cannot be undone.
+          Deleting your account will permanently remove all your personal data.
+          This action cannot be undone.
         </p>
 
         <p class="description">
-            Deleting your account is permanent and cannot be undone.
-            All your personal information, ride history, saved addresses,
-            wallet balance and preferences will be permanently removed.
+          Deleting your account is permanent and cannot be undone. All your
+          personal information, ride history, saved addresses, wallet balance
+          and preferences will be permanently removed.
         </p>
 
         <ul>
-            <li>✓ Your profile will be deleted.</li>
-            <li>✓ Ride history will be deleted.</li>
-            <li>✓ Saved payment methods will be removed.</li>
-            <li>✓ Wallet balance cannot be recovered.</li>
+          <li>✓ Your profile will be deleted.</li>
+          <li>✓ Ride history will be deleted.</li>
+          <li>✓ Saved payment methods will be removed.</li>
+          <li>✓ Wallet balance cannot be recovered.</li>
         </ul>
 
         <div class="form-group">
+          <label for="identifier"> Email or Mobile Number </label>
 
-            <label for="identifier">
-                Email or Mobile Number
-            </label>
-
-            <input
-                type="text"
-                id="identifier"
-                placeholder="Enter Email or Mobile Number">
-
+          <input
+            type="text"
+            id="identifier"
+            placeholder="Enter Email or Mobile Number"
+          />
         </div>
 
         <div class="buttons">
+          <button id="cancel-button" class="cancel">Keep Account</button>
 
-            <button id="cancel-button" class="cancel">
-                Keep Account
-            </button>
-
-            <button id="delete-button" class="delete">
-                Delete Account
-            </button>
-
-        </div>
-
-        <div
-            id="delete-message"
-            class="message"
-            aria-live="polite">
+          <button id="delete-button" class="delete">Delete Account</button>
         </div>
 
         <p class="footer">
-            Need help? Contact Cerca Cars Support before deleting your account.
+          Need help? Contact Cerca Cars Support before deleting your account.
         </p>
+      </div>
+    </div>
+    <!-- Result Modal -->
+    <div id="resultModal" class="modal">
+      <div class="modal-content">
+        <div id="resultIcon" class="result-icon">❌</div>
 
+        <h2 id="resultTitle"></h2>
+
+        <p id="resultMessage"></p>
+
+        <button id="closeResultModal" class="delete">OK</button>
+      </div>
     </div>
 
-</div>
+    <!-- Confirmation Modal -->
 
-
-<!-- Confirmation Modal -->
-
-<div id="confirmModal" class="modal">
-
-    <div class="modal-content">
-
+    <div id="confirmModal" class="modal">
+      <div class="modal-content">
         <h2>⚠ Delete Account</h2>
 
-        <p>
-            Are you sure you want to permanently delete your account?
-        </p>
+        <p>Are you sure you want to permanently delete your account?</p>
 
-        <p class="warning">
-            This action cannot be undone.
-        </p>
+        <p class="warning">This action cannot be undone.</p>
 
         <div class="modal-buttons">
+          <button id="cancelDelete">Cancel</button>
 
-            <button id="cancelDelete">
-                Cancel
-            </button>
-
-            <button id="confirmDelete">
-                Yes, Delete
-            </button>
-
+          <button id="confirmDelete">Yes, Delete</button>
         </div>
-
+      </div>
     </div>
-
-</div>
-
-</body>
+  </body>
 </html>

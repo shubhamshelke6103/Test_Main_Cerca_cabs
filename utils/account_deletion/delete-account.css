@@ -1,252 +1,322 @@
-*{
-    margin:0;
-    padding:0;
-    box-sizing:border-box;
-    font-family:Arial, Helvetica, sans-serif;
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, Helvetica, sans-serif;
 }
 
-body{
-    background:#f4f7fb;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    min-height:100vh;
-    padding:20px;
+body {
+    background: #f4f7fb;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
 }
 
-.container{
-    width:100%;
-    max-width:550px;
+.container {
+    width: 100%;
+    max-width: 550px;
 }
 
-.card{
-    background:#fff;
-    padding:40px;
-    border-radius:18px;
-    box-shadow:0 15px 35px rgba(0,0,0,.12);
-    text-align:center;
+.card {
+    background: #fff;
+    padding: 40px;
+    border-radius: 18px;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.12);
+    text-align: center;
+    transition: transform .25s ease;
 }
 
-.icon{
-    width:80px;
-    height:80px;
-    margin:0 auto 20px;
-    border-radius:50%;
-    background:#fff1f0;
-    color:#ff4d4f;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    font-size:40px;
+.card:hover {
+    transform: translateY(-2px);
 }
 
-h1{
-    font-size:36px;
-    color:#222;
-    margin-bottom:10px;
+.icon {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    background: #fff1f0;
+    color: #ff4d4f;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 40px;
 }
 
-.subtitle{
-    color:#666;
-    font-size:18px;
-    margin-bottom:20px;
+h1 {
+    font-size: 34px;
+    color: #222;
+    margin-bottom: 10px;
 }
 
-.description{
-    color:#666;
-    line-height:1.8;
-    margin-bottom:25px;
+.subtitle {
+    color: #555;
+    font-size: 17px;
+    line-height: 1.6;
+    margin-bottom: 20px;
 }
 
-ul{
-    text-align:left;
-    list-style:none;
-    margin-bottom:30px;
+.description {
+    color: #666;
+    line-height: 1.8;
+    margin-bottom: 25px;
 }
 
-ul li{
-    padding:12px 0;
-    border-bottom:1px solid #eee;
-    color:#444;
+ul {
+    text-align: left;
+    list-style: none;
+    margin-bottom: 30px;
 }
 
-.form-group{
-    text-align:left;
-    margin-bottom:25px;
+ul li {
+    padding: 12px 0;
+    border-bottom: 1px solid #eee;
+    color: #444;
 }
 
-.form-group label{
-    display:block;
-    font-weight:600;
-    margin-bottom:8px;
-    color:#333;
+.form-group {
+    text-align: left;
+    margin-bottom: 25px;
 }
 
-.form-group input{
-    width:100%;
-    padding:15px;
-    border:1px solid #ddd;
-    border-radius:10px;
-    font-size:16px;
-    transition:.3s;
+.form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #333;
 }
 
-.form-group input:focus{
-    outline:none;
-    border-color:#0d6efd;
-    box-shadow:0 0 0 3px rgba(13,110,253,.15);
+.form-group input {
+    width: 100%;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    font-size: 16px;
+    transition: .25s ease;
 }
 
-.buttons{
-    display:flex;
-    gap:15px;
+.form-group input:focus {
+    outline: none;
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 4px rgba(13, 110, 253, .15);
 }
 
-.buttons button{
-    flex:1;
-    padding:15px;
-    border:none;
-    border-radius:10px;
-    cursor:pointer;
-    font-size:16px;
-    font-weight:bold;
-    transition:.3s;
+.buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 10px;
 }
 
-.cancel{
-    background:#e9ecef;
-    color:#333;
+.buttons button {
+    flex: 1;
+    padding: 15px;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: all .25s ease;
 }
 
-.cancel:hover{
-    background:#d8dde2;
+.cancel {
+    background: #0d6efd;
+    color: #fff;
 }
 
-.delete{
-    background:#dc3545;
-    color:#fff;
+.cancel:hover {
+    background: #0b5ed7;
 }
 
-.delete:hover{
-    background:#bb2d3b;
+.delete {
+    background: #dc3545;
+    color: #fff;
 }
 
-.message{
-    margin-top:20px;
-    text-align:center;
-    font-weight:bold;
-    font-size:16px;
+.delete:hover {
+    background: #bb2d3b;
 }
 
-.success{
-    color:#198754;
+.footer {
+    margin-top: 30px;
+    color: #888;
+    font-size: 14px;
+    line-height: 1.6;
 }
 
-.error{
-    color:#dc3545;
+/* ===========================
+   MODAL
+=========================== */
+
+.modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .55);
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
 }
 
-.footer{
-    margin-top:25px;
-    color:#888;
-    font-size:14px;
+.modal-content {
+    width: 420px;
+    max-width: 92%;
+    background: #fff;
+    padding: 30px;
+    border-radius: 16px;
+    text-align: center;
+    animation: popup .25s ease;
+    box-shadow: 0 15px 40px rgba(0,0,0,.2);
 }
 
-/* Modal */
+@keyframes popup {
 
-.modal{
-    display:none;
-    position:fixed;
-    inset:0;
-    background:rgba(0,0,0,.55);
-    justify-content:center;
-    align-items:center;
-    z-index:9999;
-}
-
-.modal-content{
-    width:420px;
-    max-width:90%;
-    background:#fff;
-    padding:30px;
-    border-radius:15px;
-    text-align:center;
-    animation:popup .25s ease;
-}
-
-@keyframes popup{
-    from{
-        transform:scale(.9);
-        opacity:0;
+    from {
+        transform: scale(.9);
+        opacity: 0;
     }
-    to{
-        transform:scale(1);
-        opacity:1;
+
+    to {
+        transform: scale(1);
+        opacity: 1;
     }
+
 }
 
-.modal-content h2{
-    margin-bottom:15px;
-    color:#222;
+.modal-content h2 {
+    margin-bottom: 15px;
+    color: #222;
 }
 
-.modal-content p{
-    color:#666;
-    line-height:1.6;
+.modal-content p {
+    color: #666;
+    line-height: 1.7;
 }
 
-.warning{
-    color:#dc3545 !important;
-    font-weight:bold;
-    margin:18px 0;
+.warning {
+    color: #dc3545 !important;
+    font-weight: bold;
+    margin: 18px 0;
 }
 
-.modal-buttons{
-    display:flex;
-    gap:15px;
-    margin-top:20px;
+.modal-buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 25px;
 }
 
-.modal-buttons button{
-    flex:1;
-    padding:14px;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-    font-size:15px;
-    font-weight:bold;
+.modal-buttons button {
+    flex: 1;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: bold;
+    transition: .25s;
 }
 
-#cancelDelete{
-    background:#e9ecef;
+#cancelDelete {
+    background: #e9ecef;
 }
 
-#cancelDelete:hover{
-    background:#d8dde2;
+#cancelDelete:hover {
+    background: #d8dde2;
 }
 
-#confirmDelete{
-    background:#dc3545;
-    color:#fff;
+#confirmDelete {
+    background: #dc3545;
+    color: #fff;
 }
 
-#confirmDelete:hover{
-    background:#bb2d3b;
+#confirmDelete:hover {
+    background: #bb2d3b;
 }
 
-@media(max-width:600px){
+/* ===========================
+   RESULT MODAL
+=========================== */
 
-.card{
-    padding:25px;
+.result-icon {
+    font-size: 65px;
+    margin-bottom: 15px;
 }
 
-h1{
-    font-size:28px;
+#resultTitle {
+    font-size: 28px;
+    color: #222;
+    margin-bottom: 15px;
 }
 
-.buttons,
-.modal-buttons{
-    flex-direction:column;
+#resultMessage {
+    color: #666;
+    line-height: 1.8;
+    margin-bottom: 25px;
+    white-space: normal;
+    word-break: break-word;
 }
+
+#closeResultModal {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    color: #fff;
+    background: #dc3545;
+    transition: .25s;
+}
+
+#closeResultModal:hover {
+    background: #bb2d3b;
+}
+
+/* ===========================
+   MOBILE
+=========================== */
+
+@media (max-width:600px) {
+
+    .card {
+        padding: 25px;
+    }
+
+    h1 {
+        font-size: 28px;
+    }
+
+    .subtitle {
+        font-size: 16px;
+    }
+
+    .description {
+        font-size: 15px;
+    }
+
+    .icon {
+        width: 65px;
+        height: 65px;
+        font-size: 34px;
+    }
+
+    .form-group input {
+        font-size: 15px;
+    }
+
+    .buttons,
+    .modal-buttons {
+        flex-direction: column;
+    }
+
+    .modal-content {
+        padding: 22px;
+    }
+
+    #resultTitle {
+        font-size: 24px;
+    }
 
 }

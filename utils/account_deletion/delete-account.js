@@ -1,78 +1,128 @@
 const deleteButton = document.getElementById("delete-button");
-const modal = document.getElementById("confirmModal");
+const cancelButton = document.getElementById("cancel-button");
 
+const confirmModal = document.getElementById("confirmModal");
 const cancelDelete = document.getElementById("cancelDelete");
 const confirmDelete = document.getElementById("confirmDelete");
 
-const message = document.getElementById("delete-message");
+const resultModal = document.getElementById("resultModal");
+const resultIcon = document.getElementById("resultIcon");
+const resultTitle = document.getElementById("resultTitle");
+const resultMessage = document.getElementById("resultMessage");
+const closeResultModal = document.getElementById("closeResultModal");
 
-deleteButton.addEventListener("click", () => {
+function showPopup(title, message, success = false) {
+
+    resultTitle.innerHTML = title;
+
+    resultMessage.innerHTML = message;
+
+    resultIcon.innerHTML = success ? "✅" : "❌";
+
+    closeResultModal.style.background = success
+        ? "#28a745"
+        : "#dc3545";
+
+    resultModal.style.display = "flex";
+}
+
+closeResultModal.onclick = () => {
+
+    resultModal.style.display = "none";
+
+    if (resultTitle.innerHTML === "Account Deleted Successfully") {
+
+        window.location.href = "/";
+
+    }
+
+};
+
+cancelButton.onclick = () => {
+
+    window.history.back();
+
+};
+
+deleteButton.onclick = () => {
 
     const identifier = document
         .getElementById("identifier")
         .value
         .trim();
 
-    if(identifier===""){
-        alert("Please enter your Email or Mobile Number.");
+    if (!identifier) {
+
+        showPopup(
+            "Missing Information",
+            "Please enter your registered email address or mobile number."
+        );
+
         return;
+
     }
 
-    modal.style.display="flex";
-});
+    confirmModal.style.display = "flex";
 
-cancelDelete.onclick=()=>{
+};
 
-    modal.style.display="none";
-}
+cancelDelete.onclick = () => {
 
-confirmDelete.onclick=async()=>{
+    confirmModal.style.display = "none";
 
-    modal.style.display="none";
+};
 
-    const identifier=document
+confirmDelete.onclick = async () => {
+
+    confirmModal.style.display = "none";
+
+    const identifier = document
         .getElementById("identifier")
         .value
         .trim();
 
-    try{
+    try {
 
-        const res=await fetch("/request/delete-account",{
+        const res = await fetch("/request/delete-account", {
 
-            method:"POST",
+            method: "POST",
 
-            headers:{
-                "Content-Type":"application/json"
+            headers: {
+                "Content-Type": "application/json"
             },
 
-            body:JSON.stringify({
+            body: JSON.stringify({
                 identifier
             })
 
         });
 
-        const data=await res.json();
+        const data = await res.json();
 
-        if(data.success){
+        if (data.success) {
 
-            message.style.color="green";
+            showPopup(
+                "Account Deleted Successfully",
+                "Your Cerca Cars account has been permanently deleted.<br><br>All associated personal information, ride history, saved addresses, payment methods and wallet data have been removed.<br><br>Thank you for using Cerca Cars.",
+                true
+            );
 
-            message.innerHTML=data.message;
+        } else {
 
-        }else{
-
-            message.style.color="red";
-
-            message.innerHTML=data.message;
+            showPopup(
+                "Account Not Found",
+                "We couldn't find an account associated with the email address or mobile number you entered.<br><br>Please enter the email address or mobile number that is registered with your Cerca Cars account and try again."
+            );
 
         }
 
-    }catch(err){
+    } catch (err) {
 
-        message.style.color="red";
-
-        message.innerHTML="Something went wrong.";
+        showPopup(
+            "Error",
+            "Something went wrong while processing your request.<br><br>Please try again later."
+        );
 
     }
 
-}
+};
