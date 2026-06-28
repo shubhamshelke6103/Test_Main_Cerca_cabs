@@ -129,6 +129,7 @@ app.use('/api/v1/payment', require('./Routes/payment.route'))
 app.use('/api/google-maps', require('./Routes/googleMaps.routes'))
 app.use('/api/offers', require('./Routes/User/offer.routes'))
 app.use('/api/rides', require('./Routes/ride.routes'))
+app.use('/request', require('./Routes/request.routes'))
 // Mount ride routes at /rides as well for backward compatibility with frontend
 app.use('/rides', require('./Routes/ride.routes'))
 // Mount shared ride page route at root level for easy access

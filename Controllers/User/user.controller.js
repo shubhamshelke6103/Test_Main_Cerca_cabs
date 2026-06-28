@@ -276,6 +276,37 @@ const deleteUser = asyncHandler(async (req, res) => {
   res.status(200).json({ message: 'User deleted successfully' });
 });
 
+const deleteAuthenticatedUser = asyncHandler(async (req, res) => {
+  const userId = getAuthUserIdOrThrow(req);
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new AppError('User not found', 404, {
+      code: 'USER_NOT_FOUND',
+    });
+  }
+
+  if (user.profilePic) {
+    const profilePicPath = path.join(
+      'uploads/profilePics',
+      path.basename(user.profilePic)
+    );
+    fs.unlink(profilePicPath, (err) => {
+      if (err) {
+        logger.warn(`Failed to delete profile picture: ${profilePicPath}`);
+      } else {
+        logger.info(`Deleted profile picture: ${profilePicPath}`);
+      }
+    });
+  }
+
+  await User.findByIdAndDelete(userId);
+
+  res.status(200).json({
+    success: true,
+    message: 'User deleted successfully',
+  });
+});
+
 const validateToken = asyncHandler(async (req, res) => {
   const authHeader = req.headers.authorization || req.headers.Authorization || '';
 
@@ -557,6 +588,7 @@ module.exports = {
   createUser,
   updateUser,
   deleteUser,
+  deleteAuthenticatedUser,
   getUserByEmail,
   loginUserByMobile,
   getUserWallet,
