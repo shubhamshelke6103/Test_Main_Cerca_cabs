@@ -1,108 +1,252 @@
-.form-group{
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family:Arial, Helvetica, sans-serif;
+}
+
+body{
+    background:#f4f7fb;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    min-height:100vh;
+    padding:20px;
+}
+
+.container{
+    width:100%;
+    max-width:550px;
+}
+
+.card{
+    background:#fff;
+    padding:40px;
+    border-radius:18px;
+    box-shadow:0 15px 35px rgba(0,0,0,.12);
+    text-align:center;
+}
+
+.icon{
+    width:80px;
+    height:80px;
+    margin:0 auto 20px;
+    border-radius:50%;
+    background:#fff1f0;
+    color:#ff4d4f;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    font-size:40px;
+}
+
+h1{
+    font-size:36px;
+    color:#222;
+    margin-bottom:10px;
+}
+
+.subtitle{
+    color:#666;
+    font-size:18px;
+    margin-bottom:20px;
+}
+
+.description{
+    color:#666;
+    line-height:1.8;
     margin-bottom:25px;
+}
+
+ul{
     text-align:left;
+    list-style:none;
+    margin-bottom:30px;
+}
+
+ul li{
+    padding:12px 0;
+    border-bottom:1px solid #eee;
+    color:#444;
+}
+
+.form-group{
+    text-align:left;
+    margin-bottom:25px;
 }
 
 .form-group label{
     display:block;
-    margin-bottom:8px;
     font-weight:600;
+    margin-bottom:8px;
+    color:#333;
 }
 
 .form-group input{
-
     width:100%;
-    padding:14px;
-
+    padding:15px;
     border:1px solid #ddd;
-
-    border-radius:8px;
-
+    border-radius:10px;
     font-size:16px;
+    transition:.3s;
 }
 
-.message{
-
-    margin-top:20px;
-
-    text-align:center;
-
-    font-weight:bold;
+.form-group input:focus{
+    outline:none;
+    border-color:#0d6efd;
+    box-shadow:0 0 0 3px rgba(13,110,253,.15);
 }
 
-.modal{
-
-    display:none;
-
-    position:fixed;
-
-    top:0;
-
-    left:0;
-
-    width:100%;
-
-    height:100%;
-
-    background:rgba(0,0,0,.5);
-
-    justify-content:center;
-
-    align-items:center;
-
-    z-index:999;
-}
-
-.modal-content{
-
-    background:white;
-
-    padding:30px;
-
-    width:400px;
-
-    max-width:90%;
-
-    border-radius:12px;
-
-    text-align:center;
-}
-
-.warning{
-
-    color:red;
-
-    margin:20px 0;
-}
-
-.modal-buttons{
-
+.buttons{
     display:flex;
-
     gap:15px;
 }
 
-.modal-buttons button{
-
+.buttons button{
     flex:1;
-
-    padding:12px;
-
+    padding:15px;
     border:none;
-
-    border-radius:8px;
-
+    border-radius:10px;
     cursor:pointer;
+    font-size:16px;
+    font-weight:bold;
+    transition:.3s;
+}
+
+.cancel{
+    background:#e9ecef;
+    color:#333;
+}
+
+.cancel:hover{
+    background:#d8dde2;
+}
+
+.delete{
+    background:#dc3545;
+    color:#fff;
+}
+
+.delete:hover{
+    background:#bb2d3b;
+}
+
+.message{
+    margin-top:20px;
+    text-align:center;
+    font-weight:bold;
+    font-size:16px;
+}
+
+.success{
+    color:#198754;
+}
+
+.error{
+    color:#dc3545;
+}
+
+.footer{
+    margin-top:25px;
+    color:#888;
+    font-size:14px;
+}
+
+/* Modal */
+
+.modal{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.55);
+    justify-content:center;
+    align-items:center;
+    z-index:9999;
+}
+
+.modal-content{
+    width:420px;
+    max-width:90%;
+    background:#fff;
+    padding:30px;
+    border-radius:15px;
+    text-align:center;
+    animation:popup .25s ease;
+}
+
+@keyframes popup{
+    from{
+        transform:scale(.9);
+        opacity:0;
+    }
+    to{
+        transform:scale(1);
+        opacity:1;
+    }
+}
+
+.modal-content h2{
+    margin-bottom:15px;
+    color:#222;
+}
+
+.modal-content p{
+    color:#666;
+    line-height:1.6;
+}
+
+.warning{
+    color:#dc3545 !important;
+    font-weight:bold;
+    margin:18px 0;
+}
+
+.modal-buttons{
+    display:flex;
+    gap:15px;
+    margin-top:20px;
+}
+
+.modal-buttons button{
+    flex:1;
+    padding:14px;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:15px;
+    font-weight:bold;
 }
 
 #cancelDelete{
+    background:#e9ecef;
+}
 
-    background:#ccc;
+#cancelDelete:hover{
+    background:#d8dde2;
 }
 
 #confirmDelete{
+    background:#dc3545;
+    color:#fff;
+}
 
-    background:#e53935;
+#confirmDelete:hover{
+    background:#bb2d3b;
+}
 
-    color:white;
+@media(max-width:600px){
+
+.card{
+    padding:25px;
+}
+
+h1{
+    font-size:28px;
+}
+
+.buttons,
+.modal-buttons{
+    flex-direction:column;
+}
+
 }
