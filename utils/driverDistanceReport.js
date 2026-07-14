@@ -1,5 +1,4 @@
 const mongoose = require('mongoose')
-const Ride = require('../Models/Driver/ride.model')
 const {
   REPORT_TZ,
   getReportDayKey,
@@ -11,29 +10,35 @@ const roundKm = value =>
     : Math.round(Number(value) * 100) / 100
 
 async function getMongoPeriodKeys(date = new Date(), timeZone = REPORT_TZ) {
-  const [row] = await Ride.aggregate([
-    { $documents: [{ d: date }] },
-    {
-      $project: {
-        dayKey: {
-          $dateToString: { format: '%Y-%m-%d', date: '$d', timezone: timeZone },
-        },
-        weekKey: {
-          $dateToString: { format: '%G-W%V', date: '$d', timezone: timeZone },
-        },
-        monthKey: {
-          $dateToString: { format: '%Y-%m', date: '$d', timezone: timeZone },
-        },
-      },
-    },
-  ])
-  return (
-    row || {
-      dayKey: getReportDayKey(date, timeZone),
-      weekKey: null,
-      monthKey: null,
-    }
+  const localDate = new Date(
+    date.toLocaleString('en-US', { timeZone })
   )
+
+  const dayKey = localDate.toISOString().slice(0, 10)
+  const monthKey = dayKey.slice(0, 7)
+
+  const temp = new Date(localDate)
+  temp.setHours(0, 0, 0, 0)
+  temp.setDate(temp.getDate() + 3 - ((temp.getDay() + 6) % 7))
+
+  const weekYear = temp.getFullYear()
+
+  const week1 = new Date(weekYear, 0, 4)
+  week1.setDate(week1.getDate() - ((week1.getDay() + 6) % 7))
+
+  const weekNo =
+    1 +
+    Math.round(
+      ((temp - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
+    )
+
+  const weekKey = `${weekYear}-W${String(weekNo).padStart(2, '0')}`
+
+  return {
+    dayKey,
+    weekKey,
+    monthKey,
+  }
 }
 
 function buildCompletedRideMatch({ driverId, startDate, endDate }) {
@@ -49,29 +54,34 @@ function buildCompletedRideMatch({ driverId, startDate, endDate }) {
       err.statusCode = 400
       throw err
     }
+
     match.driver = new mongoose.Types.ObjectId(driverId)
   }
 
   if (startDate || endDate) {
     match.$expr = {
       $and: [
-        startDate
-          ? {
-              $gte: [
-                { $ifNull: ['$actualEndTime', '$updatedAt'] },
-                new Date(startDate),
-              ],
-            }
-          : true,
-        endDate
-          ? {
-              $lte: [
-                { $ifNull: ['$actualEndTime', '$updatedAt'] },
-                new Date(endDate),
-              ],
-            }
-          : true,
-      ].filter(v => v !== true),
+        ...(startDate
+          ? [
+              {
+                $gte: [
+                  { $ifNull: ['$actualEndTime', '$updatedAt'] },
+                  new Date(startDate),
+                ],
+              },
+            ]
+          : []),
+        ...(endDate
+          ? [
+              {
+                $lte: [
+                  { $ifNull: ['$actualEndTime', '$updatedAt'] },
+                  new Date(endDate),
+                ],
+              },
+            ]
+          : []),
+      ],
     }
   }
 
@@ -80,11 +90,12 @@ function buildCompletedRideMatch({ driverId, startDate, endDate }) {
 
 function formatPeriodSummary(bucket) {
   const row = bucket?.[0] || { totalKm: 0, rideCount: 0 }
+
   return {
     totalKm: roundKm(row.totalKm),
     rideCount: row.rideCount || 0,
     avgKmPerRide:
-      (row.rideCount || 0) > 0
+      row.rideCount > 0
         ? roundKm(row.totalKm / row.rideCount)
         : 0,
   }
