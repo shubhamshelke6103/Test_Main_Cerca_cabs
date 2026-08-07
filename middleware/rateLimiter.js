@@ -104,6 +104,7 @@ const vendorResetPasswordStore = createRedisStore('rl:vendor-reset-pw:', 15 * 60
 const destinationChangeStore = createRedisStore('rl:destination-change:', 15 * 60 * 1000) // 15 min
 const vendorEarningsExportStore = createRedisStore('rl:vendor-earnings-export:', 15 * 60 * 1000) // 15 min
 const userOtpStore = createRedisStore('rl:user-otp:', 15 * 60 * 1000) // 15 min
+const userOtpVerifyStore = createRedisStore('rl:user-otp-verify:', 60 * 1000) // 1 min
 const userOtpResendStore = createRedisStore('rl:user-otp-resend:', 2 * 60 * 1000) // 2 min
 
 if (isRedisAvailable()) {
@@ -348,6 +349,34 @@ const userOtpLimiterConfig = {
 
 const userOtpLimiter = createRateLimiter(userOtpLimiterConfig, userOtpStore, 'userOtpLimiter')
 
+// OTP verification: keep a shorter window so users can retry quickly without waiting 15 minutes
+const userOtpVerifyLimiterConfig = {
+  windowMs: 60 * 1000,
+  max: 5,
+  message: 'Too many OTP verification attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`User OTP verify rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 60
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many OTP verification attempts. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const userOtpVerifyLimiter = createRateLimiter(
+  userOtpVerifyLimiterConfig,
+  userOtpVerifyStore,
+  'userOtpVerifyLimiter'
+)
+
 const userOtpResendLimiterConfig = {
   windowMs: 2 * 60 * 1000,
   max: 1,
@@ -412,6 +441,10 @@ module.exports = {
     'vendorEarningsExportLimiter'
   ),
   userOtpLimiter: ensureMiddleware(userOtpLimiter, 'userOtpLimiter'),
+  userOtpVerifyLimiter: ensureMiddleware(
+    userOtpVerifyLimiter,
+    'userOtpVerifyLimiter'
+  ),
   userOtpResendLimiter: ensureMiddleware(
     userOtpResendLimiter,
     'userOtpResendLimiter'

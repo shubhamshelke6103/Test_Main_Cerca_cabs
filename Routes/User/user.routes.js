@@ -11,7 +11,11 @@ const {
   uploadRiderEvidence,
   listRiderDisputes,
 } = require('../../Controllers/User/paymentDispute.controller.js');
-const { userOtpLimiter, userOtpResendLimiter } = require('../../middleware/rateLimiter.js');
+const {
+  userOtpLimiter,
+  userOtpVerifyLimiter,
+  userOtpResendLimiter
+} = require('../../middleware/rateLimiter.js');
 
 const disputeUpload = multer({
   storage: multer.diskStorage({
@@ -33,7 +37,7 @@ router.post('/privacy-policy/accept', acceptPrivacyPolicy);
 // POST /users/login - Login user
 router.post('/login', loginUserByMobile);
 router.get('/login/resend-otp', userOtpLimiter, userOtpResendLimiter, resendUserLoginOtp);
-router.post('/login/verify', userOtpLimiter, verifyUserLoginOtp);
+router.post('/login/verify', userOtpVerifyLimiter, verifyUserLoginOtp);
 
 // POST /users - Create user
 router.post('/', createUser);
