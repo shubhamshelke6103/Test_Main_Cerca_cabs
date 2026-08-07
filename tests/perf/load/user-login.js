@@ -24,7 +24,6 @@ export default function () {
   const phoneNumber = __ENV.PHONE_NUMBER || randomPhoneNumber()
   const payload = JSON.stringify({
     phoneNumber,
-    privacyPolicyAccepted: true,
   })
 
   const res = http.post(`${BASE_URL}/users/login`, payload, {
@@ -33,9 +32,9 @@ export default function () {
 
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'login returned token': (r) => {
+    'login returned request id': (r) => {
       const json = r.json()
-      return json && json.token && json.userId
+      return json && json.requestId && json.success === true
     },
   })
 }

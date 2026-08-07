@@ -11,6 +11,12 @@ const {
   normalizeEmail,
   normalizeMobileDigits
 } = require('../../utils/contactValidation')
+const {
+  normalizeMobileForMsg91,
+  sendLoginOtp,
+  resendLoginOtp,
+  verifyLoginOtp
+} = require('../../utils/msg91Otp.service')
 const AppError = require('../../utils/errors/AppError')
 const asyncHandler = require('../../utils/errors/asyncHandler')
 
@@ -43,6 +49,19 @@ const extractFcmToken = (payload = {}) => {
   }
   const normalized = token.trim()
   return normalized.length > 0 ? normalized : null
+}
+
+const findUserByLoginPhone = async phoneVariants => {
+  const candidates = [...new Set(phoneVariants.filter(Boolean))]
+  if (!candidates.length) {
+    return null
+  }
+
+  if (candidates.length === 1) {
+    return User.findOne({ phoneNumber: candidates[0] })
+  }
+
+  return User.findOne({ phoneNumber: { $in: candidates } })
 }
 
 const buildPrivacyPolicyAcceptance = (payload = {}) => {
@@ -420,8 +439,42 @@ const getUserByEmail = asyncHandler(async (req, res) => {
   res.status(200).json(user)
 })
 
+const sendOtpLoginResponse = (res, payload) =>
+  res.status(200).json({
+    success: true,
+    message: 'OTP sent successfully',
+    ...payload
+  })
+
+const issueUserLoginToken = async (user, req, isNewUser = false) => {
+  const fcmToken = extractFcmToken(req.body)
+  if (fcmToken) {
+    user.fcmToken = fcmToken
+    user.fcmTokenUpdatedAt = new Date()
+  }
+
+  user.lastLogin = new Date()
+  await user.save()
+
+  const token = jwt.sign(
+    { id: user._id, phoneNumber: user.phoneNumber },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  )
+
+  return {
+    message: 'Login successful',
+    token,
+    userId: user._id,
+    phoneNumber: user.phoneNumber,
+    isNewUser
+  }
+}
+
 const loginUserByMobile = asyncHandler(async (req, res) => {
-  const normalizedPhone = normalizeMobileDigits(req.body.phoneNumber)
+  const normalizedPhone = normalizeMobileForMsg91(
+    req.body.phoneNumber ?? req.query.phoneNumber
+  )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
       normalizedPhone.error || 'Phone number is required',
@@ -431,13 +484,114 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
       }
     )
   }
-  const phoneNumber = normalizedPhone.value
 
-  const user = await User.findOne({ phoneNumber })
+  const { local, international } = normalizedPhone.value
+  const user = await findUserByLoginPhone([local, international])
+
+  if (user && user.isActive === false) {
+    logger.warn(`Blocked user attempted login OTP request: ${user.phoneNumber}`)
+    throw new AppError('Your account has been blocked', 403, {
+      code: 'USER_BLOCKED',
+      details: { isBlocked: true }
+    })
+  }
+
+  const otpResponse = await sendLoginOtp(international)
+  if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+    throw new AppError('OTP delivery failed', 502, {
+      code: 'OTP_DELIVERY_FAILED',
+      details: { response: otpResponse }
+    })
+  }
+
+  logger.info(`OTP sent for mobile login: ${international}`)
+  return sendOtpLoginResponse(res, {
+    requestId: otpResponse.request_id || otpResponse.requestId || null,
+    mobile: local,
+    maskedMobile: `${international.slice(0, 4)}******${international.slice(-2)}`
+  })
+})
+
+const resendUserLoginOtp = asyncHandler(async (req, res) => {
+  const normalizedPhone = normalizeMobileForMsg91(
+    req.body.phoneNumber ?? req.query.phoneNumber
+  )
+  if (normalizedPhone.error || !normalizedPhone.value) {
+    throw new AppError(
+      normalizedPhone.error || 'Phone number is required',
+      400,
+      {
+        code: 'INVALID_PHONE_NUMBER'
+      }
+    )
+  }
+
+  const { local, international } = normalizedPhone.value
+  const user = await findUserByLoginPhone([local, international])
+
+  if (user && user.isActive === false) {
+    logger.warn(`Blocked user attempted OTP resend: ${user.phoneNumber}`)
+    throw new AppError('Your account has been blocked', 403, {
+      code: 'USER_BLOCKED',
+      details: { isBlocked: true }
+    })
+  }
+
+  const otpResponse = await resendLoginOtp(international)
+  if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+    throw new AppError('OTP resend failed', 502, {
+      code: 'OTP_RESEND_FAILED',
+      details: { response: otpResponse }
+    })
+  }
+
+  logger.info(`OTP resent for mobile login: ${international}`)
+  return sendOtpLoginResponse(res, {
+    requestId: otpResponse.request_id || otpResponse.requestId || null,
+    mobile: local,
+    maskedMobile: `${international.slice(0, 4)}******${international.slice(-2)}`
+  })
+})
+
+const verifyUserLoginOtp = asyncHandler(async (req, res) => {
+  const normalizedPhone = normalizeMobileForMsg91(
+    req.body.phoneNumber ?? req.query.phoneNumber
+  )
+  if (normalizedPhone.error || !normalizedPhone.value) {
+    throw new AppError(
+      normalizedPhone.error || 'Phone number is required',
+      400,
+      {
+        code: 'INVALID_PHONE_NUMBER'
+      }
+    )
+  }
+
+  const otp = String(req.body.otp || '').trim()
+  if (!otp) {
+    throw new AppError('OTP is required', 400, {
+      code: 'INVALID_OTP'
+    })
+  }
+
+  const { local, international } = normalizedPhone.value
+  const otpResponse = await verifyLoginOtp({
+    mobile: international,
+    otp
+  })
+
+  if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+    throw new AppError('OTP verification failed', 400, {
+      code: 'OTP_VERIFICATION_FAILED',
+      details: { response: otpResponse }
+    })
+  }
+
+  let user = await findUserByLoginPhone([local, international])
 
   if (user) {
     if (user.isActive === false) {
-      logger.warn(`Blocked user attempted login: ${user.phoneNumber}`)
+      logger.warn(`Blocked user attempted verified login: ${user.phoneNumber}`)
       throw new AppError('Your account has been blocked', 403, {
         code: 'USER_BLOCKED',
         details: { isBlocked: true }
@@ -454,37 +608,18 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
           }
         })
       }
+
       Object.assign(user, acceptance)
-      await user.save()
     }
 
-    const fcmToken = extractFcmToken(req.body)
-    if (fcmToken) {
-      user.fcmToken = fcmToken
-      user.fcmTokenUpdatedAt = new Date()
-      await user.save()
-    }
-
-    const token = jwt.sign(
-      { id: user._id, phoneNumber: user.phoneNumber },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    )
-
-    logger.info(`User logged in: ${user.phoneNumber}`)
-    return res.status(200).json({
-      message: 'Login successful',
-      token,
-      userId: user._id,
-      phoneNumber: user.phoneNumber,
-      isNewUser: false
-    })
+    const response = await issueUserLoginToken(user, req, false)
+    logger.info(`User logged in after OTP verification: ${user.phoneNumber}`)
+    return res.status(200).json(response)
   }
 
-  logger.info(`Auto-creating new user with phone number: ${phoneNumber}`)
   const acceptance = buildPrivacyPolicyAcceptance(req.body)
   if (acceptance.error) {
-    throw new AppError(acceptance.error.message, 400, {
+    throw new AppError(acceptance.error.message, 428, {
       code: 'PRIVACY_POLICY_ACCEPTANCE_REQUIRED',
       details: {
         privacyPolicy: acceptance.error.privacyPolicy
@@ -492,35 +627,21 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
     })
   }
 
-  const newUser = new User({
-    phoneNumber,
+  user = new User({
+    phoneNumber: local,
     fullName: 'Pending',
-    email: `temp_${phoneNumber}@cerca.temp`,
+    email: `temp_${local}@cerca.temp`,
     isActive: true,
-    lastLogin: new Date(),
     isVerified: false,
+    lastLogin: new Date(),
     fcmToken: extractFcmToken(req.body),
     fcmTokenUpdatedAt: extractFcmToken(req.body) ? new Date() : null,
     ...acceptance
   })
 
-  await newUser.save()
-  logger.info(`New user created successfully: ${newUser._id}`)
-
-  const token = jwt.sign(
-    { id: newUser._id, phoneNumber: newUser.phoneNumber },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  )
-
-  logger.info(`New user logged in: ${newUser.phoneNumber}`)
-  return res.status(200).json({
-    message: 'Login successful',
-    token,
-    userId: newUser._id,
-    phoneNumber: newUser.phoneNumber,
-    isNewUser: true
-  })
+  const response = await issueUserLoginToken(user, req, true)
+  logger.info(`New user created and logged in after OTP verification: ${user.phoneNumber}`)
+  return res.status(200).json(response)
 })
 
 const getOutstandingDriverCancelSettlements = asyncHandler(async (req, res) => {
@@ -647,6 +768,8 @@ module.exports = {
   deleteAccountByIdentifier,
   getUserByEmail,
   loginUserByMobile,
+  resendUserLoginOtp,
+  verifyUserLoginOtp,
   getUserWallet,
   updateUserWallet,
   validateToken,

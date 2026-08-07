@@ -102,6 +102,7 @@ const vendorForgotPasswordStore = createRedisStore('rl:vendor-forgot-pw:', 15 * 
 const vendorResetPasswordStore = createRedisStore('rl:vendor-reset-pw:', 15 * 60 * 1000) // 15 min
 const destinationChangeStore = createRedisStore('rl:destination-change:', 15 * 60 * 1000) // 15 min
 const vendorEarningsExportStore = createRedisStore('rl:vendor-earnings-export:', 15 * 60 * 1000) // 15 min
+const userOtpStore = createRedisStore('rl:user-otp:', 15 * 60 * 1000) // 15 min
 
 if (isRedisAvailable()) {
   logger.info('✅ Rate limiters using Redis stores (shared across instances)')
@@ -321,6 +322,30 @@ const vendorEarningsExportLimiter = createRateLimiter(
   'vendorEarningsExportLimiter'
 )
 
+// User mobile OTP: limit send / resend / verify activity per IP
+const userOtpLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many OTP requests. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`User OTP rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many OTP requests. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const userOtpLimiter = createRateLimiter(userOtpLimiterConfig, userOtpStore, 'userOtpLimiter')
+
 // Ensure all rate limiters are valid middleware functions
 // If any are undefined, replace with no-op middleware
 const ensureMiddleware = (middleware, name) => {
@@ -352,6 +377,7 @@ module.exports = {
     vendorEarningsExportLimiter,
     'vendorEarningsExportLimiter'
   ),
+  userOtpLimiter: ensureMiddleware(userOtpLimiter, 'userOtpLimiter'),
   createRateLimiter,
   createRedisStore
 }

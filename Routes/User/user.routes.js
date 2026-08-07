@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, getUserWallet, updateUserWallet, validateToken, getOutstandingDriverCancelSettlements, updateUserFcmToken } = require('../../Controllers/User/user.controller.js');
+const { getAllUsers, getPrivacyPolicy, acceptPrivacyPolicy, getUserById, createUser, updateUser, deleteUser, loginUserByMobile, resendUserLoginOtp, verifyUserLoginOtp, getUserWallet, updateUserWallet, validateToken, getOutstandingDriverCancelSettlements, updateUserFcmToken } = require('../../Controllers/User/user.controller.js');
 const {
   getPendingDues,
   checkBookingEligibility,
@@ -11,6 +11,7 @@ const {
   uploadRiderEvidence,
   listRiderDisputes,
 } = require('../../Controllers/User/paymentDispute.controller.js');
+const { userOtpLimiter } = require('../../middleware/rateLimiter.js');
 
 const disputeUpload = multer({
   storage: multer.diskStorage({
@@ -31,6 +32,8 @@ router.post('/privacy-policy/accept', acceptPrivacyPolicy);
 
 // POST /users/login - Login user
 router.post('/login', loginUserByMobile);
+router.get('/login/resend-otp', userOtpLimiter, resendUserLoginOtp);
+router.post('/login/verify', userOtpLimiter, verifyUserLoginOtp);
 
 // POST /users - Create user
 router.post('/', createUser);
