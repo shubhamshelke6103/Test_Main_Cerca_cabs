@@ -4,9 +4,9 @@ const { normalizeMobileDigits } = require('./contactValidation')
 const MSG91_BASE_URL =
   process.env.MSG91_BASE_URL || 'https://control.msg91.com/api/v5/otp'
 const MSG91_TEMPLATE_ID =
-  process.env.MSG91_TEMPLATE_ID || ''
+  process.env.MSG91_TEMPLATE_ID || '6a745075abc2c9fcb40b1344'
 const MSG91_AUTHKEY =
-  process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || ''
+  process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || '557184A4efEXmpjbYY6a747c2fP1'
 const MSG91_REQUEST_TIMEOUT_MS = Number(
   process.env.MSG91_REQUEST_TIMEOUT_MS || 15000
 )
