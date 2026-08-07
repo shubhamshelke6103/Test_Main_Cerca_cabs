@@ -473,7 +473,7 @@ const issueUserLoginToken = async (user, req, isNewUser = false) => {
 
 const loginUserByMobile = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body.phoneNumber ?? req.query.phoneNumber
+    req.body?.phoneNumber ?? req.query?.phoneNumber
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
@@ -514,7 +514,7 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
 
 const resendUserLoginOtp = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body.phoneNumber ?? req.query.phoneNumber
+    req.body?.phoneNumber ?? req.query?.phoneNumber
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
@@ -555,7 +555,7 @@ const resendUserLoginOtp = asyncHandler(async (req, res) => {
 
 const verifyUserLoginOtp = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body.phoneNumber ?? req.query.phoneNumber
+    req.body?.phoneNumber ?? req.query?.phoneNumber
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
