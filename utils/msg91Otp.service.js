@@ -4,9 +4,9 @@ const { normalizeMobileDigits } = require('./contactValidation')
 const MSG91_BASE_URL =
   process.env.MSG91_BASE_URL || 'https://control.msg91.com/api/v5/otp'
 const MSG91_TEMPLATE_ID =
-  process.env.MSG91_TEMPLATE_ID || '6a745075abc2c9fcb40b1344'
+  process.env.MSG91_TEMPLATE_ID || ''
 const MSG91_AUTHKEY =
-  process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || '557184A4efEXmpjbYY6a747c2fP1'
+  process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || ''
 const MSG91_REQUEST_TIMEOUT_MS = Number(
   process.env.MSG91_REQUEST_TIMEOUT_MS || 15000
 )
@@ -103,6 +103,49 @@ const parseMsg91Response = async response => {
   }
 }
 
+const mapVerifyOtpError = (payload = {}, fallbackStatus = 400) => {
+  const message = String(
+    payload.message || payload.error || payload.raw || ''
+  ).trim().toLowerCase()
+
+  if (
+    message.includes('incorrect') ||
+    message.includes('invalid otp') ||
+    message.includes('wrong otp')
+  ) {
+    return new AppError('The OTP you entered is incorrect.', 400, {
+      code: 'INVALID_OTP',
+      details: {
+        response: payload
+      }
+    })
+  }
+
+  if (
+    message.includes('expired') ||
+    message.includes('timeout') ||
+    message.includes('timed out')
+  ) {
+    return new AppError('OTP has expired. Please request a new one.', 400, {
+      code: 'OTP_EXPIRED',
+      details: {
+        response: payload
+      }
+    })
+  }
+
+  return new AppError(
+    payload.message || payload.error || 'OTP verification failed',
+    fallbackStatus,
+    {
+      code: payload.code || 'OTP_VERIFICATION_FAILED',
+      details: {
+        response: payload
+      }
+    }
+  )
+}
+
 const requestMsg91 = async (url, options = {}, operation = 'MSG91 request') => {
   const fetch = ensureFetch()
   const controller = new AbortController()
@@ -115,6 +158,15 @@ const requestMsg91 = async (url, options = {}, operation = 'MSG91 request') => {
     })
 
     const payload = await parseMsg91Response(response)
+    const operationKey = String(operation || '').toLowerCase()
+    const isVerifyOperation = operationKey.includes('verify otp')
+    const payloadType = String(payload.type || '').trim().toLowerCase()
+    const verifySucceeded = payloadType === 'success'
+
+    if (isVerifyOperation && !verifySucceeded) {
+      throw mapVerifyOtpError(payload, response.status >= 400 ? response.status : 400)
+    }
+
     if (!response.ok) {
       throw new AppError(
         payload.message ||
@@ -129,6 +181,10 @@ const requestMsg91 = async (url, options = {}, operation = 'MSG91 request') => {
           }
         }
       )
+    }
+
+    if (isVerifyOperation && !verifySucceeded) {
+      throw mapVerifyOtpError(payload, 400)
     }
 
     return payload
