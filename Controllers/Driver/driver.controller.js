@@ -58,6 +58,12 @@ const {
 const { queueExternalAlertEmail } = require('../../utils/alerting.service.js');
 const { getSocketIO, emitRideCancelledToClients } = require('../../utils/socket.js');
 const { normalizeEmail, normalizeMobileDigits } = require('../../utils/contactValidation.js');
+const {
+    normalizeMobileForMsg91,
+    sendLoginOtp,
+    resendLoginOtp,
+    verifyLoginOtp,
+} = require('../../utils/msg91Otp.service.js');
 const { checkAndAssignProximityRides } = require('../../utils/proximityRide.service.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
@@ -91,6 +97,163 @@ const buildDriverRegisterResponsePayload = (driverObj) => ({
 
 const buildDriverRegisterResponsePayloadFromDoc = (driverDoc) =>
     buildDriverRegisterResponsePayload(driverDoc);
+
+const findDriverByLoginPhone = async (phoneVariants) => {
+    const candidates = [...new Set(phoneVariants.filter(Boolean))];
+    if (!candidates.length) {
+        return null;
+    }
+
+    if (candidates.length === 1) {
+        return Driver.findOne({ phone: candidates[0] });
+    }
+
+    return Driver.findOne({ phone: { $in: candidates } });
+};
+
+const sendOtpLoginResponse = (res, payload) =>
+    res.status(200).json({
+        success: true,
+        message: 'OTP sent successfully',
+        ...payload,
+    });
+
+const issueDriverLoginToken = async (driver, req) => {
+    const fcmToken = extractFcmToken(req.body);
+    if (fcmToken && driver.fcmToken !== fcmToken) {
+        driver.fcmToken = fcmToken;
+        driver.fcmTokenUpdatedAt = new Date();
+    }
+
+    driver.lastSeen = new Date();
+    await driver.save();
+
+    const token = signDriverAuthToken(driver);
+    const approvalSummary = getDriverApprovalSummary(driver);
+    const missingDocuments = getMissingDriverApprovalDocuments(driver);
+
+    return {
+        message: 'Login successful',
+        token,
+        id: driver._id,
+        approvalStatus: approvalSummary.status,
+        missingDocuments,
+    };
+};
+
+const buildDriverOtpLoginContext = async (rawPhone) => {
+    const normalizedPhone = normalizeMobileForMsg91(rawPhone);
+    if (normalizedPhone.error || !normalizedPhone.value) {
+        throw new AppError(normalizedPhone.error || 'Phone number is required', 400, {
+            code: 'INVALID_PHONE_NUMBER',
+        });
+    }
+
+    const { local, international } = normalizedPhone.value;
+    const driver = await findDriverByLoginPhone([local, international]);
+
+    if (!driver) {
+        throw new AppError('Driver not found', 404, {
+            code: 'DRIVER_NOT_FOUND',
+        });
+    }
+
+    if (driver.isActive === false) {
+        logger.warn(`Blocked driver attempted login OTP request: ${driver.phone}`);
+        throw new AppError('Your account has been blocked', 403, {
+            code: 'DRIVER_BLOCKED',
+            details: { isBlocked: true },
+        });
+    }
+
+    return { driver, local, international };
+};
+
+/**
+ * @desc    Send driver login OTP
+ * @route   POST /drivers/login
+ */
+const loginDriver = asyncHandler(async (req, res) => {
+    const { local, international } = await buildDriverOtpLoginContext(
+        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
+    );
+
+    const otpResponse = await sendLoginOtp(international);
+    if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+        throw new AppError('OTP delivery failed', 502, {
+            code: 'OTP_DELIVERY_FAILED',
+            details: { response: otpResponse },
+        });
+    }
+
+    logger.info(`OTP sent for driver login: ${international}`);
+    return sendOtpLoginResponse(res, {
+        requestId: otpResponse.request_id || otpResponse.requestId || null,
+        mobile: local,
+        maskedMobile: `${international.slice(0, 4)}******${international.slice(-2)}`,
+    });
+});
+
+/**
+ * @desc    Resend driver login OTP
+ * @route   GET /drivers/login/resend-otp
+ */
+const resendDriverLoginOtp = asyncHandler(async (req, res) => {
+    const { local, international } = await buildDriverOtpLoginContext(
+        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
+    );
+
+    const otpResponse = await resendLoginOtp(international);
+    if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+        throw new AppError('OTP resend failed', 502, {
+            code: 'OTP_RESEND_FAILED',
+            details: { response: otpResponse },
+        });
+    }
+
+    logger.info(`OTP resent for driver login: ${international}`);
+    return sendOtpLoginResponse(res, {
+        requestId: otpResponse.request_id || otpResponse.requestId || null,
+        mobile: local,
+        maskedMobile: `${international.slice(0, 4)}******${international.slice(-2)}`,
+    });
+});
+
+/**
+ * @desc    Verify driver login OTP
+ * @route   POST /drivers/login/verify
+ */
+const verifyDriverLoginOtp = asyncHandler(async (req, res) => {
+    const { driver, local, international } = await buildDriverOtpLoginContext(
+        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
+    );
+
+    const otp = String(req.body.otp || '').trim();
+    if (!otp) {
+        throw new AppError('OTP is required', 400, {
+            code: 'INVALID_OTP',
+        });
+    }
+
+    const otpResponse = await verifyLoginOtp({
+        mobile: international,
+        otp,
+    });
+
+    if (String(otpResponse.type || '').toLowerCase() !== 'success') {
+        throw new AppError('OTP verification failed', 400, {
+            code: 'OTP_VERIFICATION_FAILED',
+            details: { response: otpResponse },
+        });
+    }
+
+    const response = await issueDriverLoginToken(driver, req);
+    logger.info(`Driver logged in after OTP verification: ${driver.phone}`);
+    return res.status(200).json({
+        ...response,
+        phone: local,
+    });
+});
 
 const parseRegisterLocation = (raw) => {
     if (raw == null) {
@@ -1028,7 +1191,7 @@ const addDriverDocuments = asyncHandler(async (req, res) => {
  * @desc    Login driver by email and password
  * @route   POST /drivers/login
  */
-const loginDriver = asyncHandler(async (req, res) => {
+const loginDriverLegacy = asyncHandler(async (req, res) => {
     const { password } = req.body;
     const emailResult = normalizeEmail(req.body.email);
     if (emailResult.error || !emailResult.value) {
@@ -3309,6 +3472,8 @@ module.exports = {
     deleteDriverProfilePhoto,
     addDriverDocuments,
     loginDriver,
+    resendDriverLoginOtp,
+    verifyDriverLoginOtp,
     getAllDrivers,
     getDriverById,
     deleteDriver,

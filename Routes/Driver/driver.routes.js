@@ -9,6 +9,8 @@ const {
     patchDriverProfilePhoto,
     deleteDriverProfilePhoto,
     loginDriver,
+    resendDriverLoginOtp,
+    verifyDriverLoginOtp,
     getAllDrivers,
     getDriverById,
     deleteDriver,
@@ -58,6 +60,11 @@ const {
     listDriverDisputes,
 } = require('../../Controllers/Driver/paymentDispute.controller.js');
 const { authenticateDriver } = require('../../utils/driverAuth');
+const {
+    driverOtpLimiter,
+    driverOtpVerifyLimiter,
+    driverOtpResendLimiter,
+} = require('../../middleware/rateLimiter.js');
 const { sharedLiveLocationRateLimiter } = require('../../middleware/shareToken.middleware');
 const { createOptionalDisputeUpload } = require('../../middleware/optionalDisputeUpload');
 
@@ -147,7 +154,9 @@ router.post('/register', driverProfilePicUpload.single('profilePic'), registerDr
 router.post('/', addDriver); // Add a new driver (JSON)
 router.post('/me/unassign-fleet', authenticateDriver, vendorController.unassignFleetVehicleAsDriver);
 router.post('/', addDriver); // Add a new driver with documents
-router.post('/login', loginDriver); // Login driver
+router.post('/login', driverOtpLimiter, loginDriver); // Send driver OTP
+router.get('/login/resend-otp', driverOtpLimiter, driverOtpResendLimiter, resendDriverLoginOtp);
+router.post('/login/verify', driverOtpVerifyLimiter, verifyDriverLoginOtp);
 router.get('/', getAllDrivers); // Get all drivers
 router.get('/:id', getDriverById); // Get a driver by ID
 router.delete('/:id', deleteDriver); // Delete a driver by ID

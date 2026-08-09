@@ -2,7 +2,10 @@
 const rateLimit = require('express-rate-limit')
 const { redis } = require('../config/redis')
 const logger = require('../utils/logger')
-const { getUserOtpResendRateLimitKey } = require('../utils/otpRateLimitKey')
+const {
+  getUserOtpResendRateLimitKey,
+  getDriverOtpResendRateLimitKey
+} = require('../utils/otpRateLimitKey')
 
 // Custom Redis store for express-rate-limit v7
 class RedisStore {
@@ -106,6 +109,9 @@ const vendorEarningsExportStore = createRedisStore('rl:vendor-earnings-export:',
 const userOtpStore = createRedisStore('rl:user-otp:', 15 * 60 * 1000) // 15 min
 const userOtpVerifyStore = createRedisStore('rl:user-otp-verify:', 60 * 1000) // 1 min
 const userOtpResendStore = createRedisStore('rl:user-otp-resend:', 2 * 60 * 1000) // 2 min
+const driverOtpStore = createRedisStore('rl:driver-otp:', 15 * 60 * 1000) // 15 min
+const driverOtpVerifyStore = createRedisStore('rl:driver-otp-verify:', 60 * 1000) // 1 min
+const driverOtpResendStore = createRedisStore('rl:driver-otp-resend:', 2 * 60 * 1000) // 2 min
 
 if (isRedisAvailable()) {
   logger.info('✅ Rate limiters using Redis stores (shared across instances)')
@@ -409,6 +415,93 @@ const userOtpResendLimiter = createRateLimiter(
   'userOtpResendLimiter'
 )
 
+// Driver mobile OTP: limit send / resend / verify activity per IP
+const driverOtpLimiterConfig = {
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many OTP requests. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Driver OTP rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 900
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many OTP requests. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const driverOtpLimiter = createRateLimiter(
+  driverOtpLimiterConfig,
+  driverOtpStore,
+  'driverOtpLimiter'
+)
+
+const driverOtpVerifyLimiterConfig = {
+  windowMs: 60 * 1000,
+  max: 5,
+  message: 'Too many OTP verification attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Driver OTP verify rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 60
+    res.status(429).json({
+      error: 'Too many requests',
+      message: 'Too many OTP verification attempts. Please try again later.',
+      retryAfter
+    })
+  }
+}
+
+const driverOtpVerifyLimiter = createRateLimiter(
+  driverOtpVerifyLimiterConfig,
+  driverOtpVerifyStore,
+  'driverOtpVerifyLimiter'
+)
+
+const driverOtpResendLimiterConfig = {
+  windowMs: 2 * 60 * 1000,
+  max: 1,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getDriverOtpResendRateLimitKey,
+  handler: (req, res) => {
+    const rt = req.rateLimit?.resetTime
+    const retryAfter =
+      rt instanceof Date
+        ? Math.max(1, Math.ceil((rt.getTime() - Date.now()) / 1000))
+        : 120
+
+    logger.warn(
+      `Driver OTP resend rate limit exceeded for key: ${getDriverOtpResendRateLimitKey(req)}`
+    )
+
+    res.status(429).json({
+      success: false,
+      message: 'Please wait 2 minutes before requesting another OTP.',
+      code: 'OTP_RESEND_RATE_LIMITED',
+      retryAfter
+    })
+  }
+}
+
+const driverOtpResendLimiter = createRateLimiter(
+  driverOtpResendLimiterConfig,
+  driverOtpResendStore,
+  'driverOtpResendLimiter'
+)
+
 // Ensure all rate limiters are valid middleware functions
 // If any are undefined, replace with no-op middleware
 const ensureMiddleware = (middleware, name) => {
@@ -449,7 +542,17 @@ module.exports = {
     userOtpResendLimiter,
     'userOtpResendLimiter'
   ),
+  driverOtpLimiter: ensureMiddleware(driverOtpLimiter, 'driverOtpLimiter'),
+  driverOtpVerifyLimiter: ensureMiddleware(
+    driverOtpVerifyLimiter,
+    'driverOtpVerifyLimiter'
+  ),
+  driverOtpResendLimiter: ensureMiddleware(
+    driverOtpResendLimiter,
+    'driverOtpResendLimiter'
+  ),
   getUserOtpResendRateLimitKey,
+  getDriverOtpResendRateLimitKey,
   createRateLimiter,
   createRedisStore
 }
