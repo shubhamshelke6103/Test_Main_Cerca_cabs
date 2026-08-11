@@ -139,7 +139,7 @@ app.use('/vendor', require('./Routes/Vendor/vendor.routes') )
 /* =======================
    HEALTH & UPLOAD
 ======================= */
-app.get('/health', (req, res) => {
+app.get('/health1', (req, res) => {
   res.status(200).json({
     status: 'ok',
   })
