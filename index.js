@@ -139,6 +139,12 @@ app.use('/vendor', require('./Routes/Vendor/vendor.routes') )
 /* =======================
    HEALTH & UPLOAD
 ======================= */
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+  })
+})
+
 app.get('/', (req, res) => {
   res.send('Welcome to Cerca API! Demo')
 })
