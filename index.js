@@ -130,20 +130,20 @@ app.use('/api/google-maps', require('./Routes/googleMaps.routes'))
 app.use('/api/offers', require('./Routes/User/offer.routes'))
 app.use('/api/rides', require('./Routes/ride.routes'))
 app.use('/request', require('./Routes/request.routes'))
+/* =======================
+   HEALTH & UPLOAD
+======================= */
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+  })
+})
+
 // Mount ride routes at /rides as well for backward compatibility with frontend
 app.use('/rides', require('./Routes/ride.routes'))
 // Mount shared ride page route at root level for easy access
 app.use('/', require('./Routes/ride.routes'))
 app.use('/vendor', require('./Routes/Vendor/vendor.routes') )
-
-/* =======================
-   HEALTH & UPLOAD
-======================= */
-app.get('/health1', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-  })
-})
 
 app.get('/', (req, res) => {
   res.send('Welcome to Cerca API! Demo')
