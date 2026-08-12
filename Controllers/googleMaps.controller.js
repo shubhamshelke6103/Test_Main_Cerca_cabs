@@ -91,7 +91,7 @@ const getPlacePredictions = async (req, res) => {
     }
     
     // Request geocode types for addresses
-    url += '&types=geocode';
+    // url += '&types=geocode';
 
     logger.info(`Fetching place predictions for query: ${query}`);
 
