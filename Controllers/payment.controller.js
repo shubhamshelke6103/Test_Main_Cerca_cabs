@@ -28,10 +28,10 @@ const initiatePayment = async (req, res) => {
             });
         }
 
-        // Validate minimum amount (₹10 = 1000 paise)
-        if (amount < 10) {
+        // Razorpay INR amounts are accepted from 100 paise (₹1).
+        if (amount < 1) {
             return res.status(400).json({
-                message: "Minimum amount is ₹10",
+                message: "Minimum amount is ₹1",
                 error: "VALIDATION_ERROR"
             });
         }
@@ -264,10 +264,12 @@ const createRidePaymentOrder = async (req, res) => {
     }
     const amount = payable.amount;
 
-    if (amount < 10) {
+    // Razorpay accepts INR orders from 100 paise (₹1), so small valid fares
+    // such as ₹4.90 must not be rejected by the application.
+    if (amount < 1) {
       return res.status(400).json({
         success: false,
-        message: 'Minimum payment amount is ₹10'
+        message: 'Minimum payment amount is ₹1'
       });
     }
 
@@ -366,9 +368,20 @@ const verifyRidePayment = async (req, res) => {
       });
     }
 
-    // Verify payment amount matches ride fare
+    // Verify payment amount matches the same payable amount used to create the
+    // order. This also handles rides whose final fare is in a fare-breakdown
+    // fallback rather than `ride.fare`.
     const paymentAmount = payment.amount / 100; // Convert from paise
-    const rideFare = ride.fare || 0;
+    const { resolveRidePayableAmount } = require('../utils/paymentOrchestrator/resolveRidePayableAmount');
+    const payable = resolveRidePayableAmount(ride);
+    if (!payable.ok) {
+      return res.status(400).json({
+        success: false,
+        code: payable.code || 'PAYABLE_AMOUNT_INVALID',
+        message: payable.message || 'Invalid ride fare amount'
+      });
+    }
+    const rideFare = payable.amount;
 
     if (Math.abs(paymentAmount - rideFare) > 0.01) {
       logger.warn(`Payment amount mismatch - Payment: ₹${paymentAmount}, Ride Fare: ₹${rideFare}`);
