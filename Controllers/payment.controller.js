@@ -45,7 +45,9 @@ const initiatePayment = async (req, res) => {
         }
 
         const options = {
-            amount: amount * 100, // Razorpay expects the amount in paise
+            // Round after conversion: JavaScript decimals such as 2.20 can
+            // otherwise become 220.00000000000003, which Razorpay rejects.
+            amount: Math.round(Number(amount) * 100),
             currency: "INR",
         };
 
@@ -275,7 +277,9 @@ const createRidePaymentOrder = async (req, res) => {
 
     // Create Razorpay order with rideId and userId in notes
     const options = {
-      amount: amount * 100, // Convert to paise
+      // Razorpay requires an integer amount in paise. Do not send a floating
+      // point result from the rupee-to-paise conversion (for example ₹2.20).
+      amount: Math.round(Number(amount) * 100),
       currency: 'INR',
       notes: {
         rideId: rideId,
