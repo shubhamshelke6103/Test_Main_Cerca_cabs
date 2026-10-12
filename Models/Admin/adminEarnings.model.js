@@ -103,6 +103,14 @@ const adminEarningsSchema = new mongoose.Schema({
         collectedAt: { type: Date, default: null },
         collectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
         notes: { type: String, default: null },
+        paymentMethod: {
+            type: String,
+            enum: ['MANUAL_CASH', 'RAZORPAY', 'ONLINE_NETTED'],
+            default: 'MANUAL_CASH',
+        },
+        razorpayOrderId: { type: String, default: null },
+        razorpayPaymentId: { type: String, default: null },
+        razorpaySignature: { type: String, default: null },
     },
     cancellationFeeSplit: {
         totalFee: { type: Number, default: 0 },

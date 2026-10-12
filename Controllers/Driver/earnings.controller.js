@@ -3,6 +3,10 @@ const AdminEarnings = require('../../Models/Admin/adminEarnings.model');
 const Ride = require('../../Models/Driver/ride.model');
 const logger = require('../../utils/logger');
 const { fetchDriverNetSettlement } = require('../../utils/driverNetSettlementBalance');
+const {
+  createDriverDuesOrder,
+  verifyAndSettleDriverDues,
+} = require('../../utils/driverCashSettlement.service');
 
 /**
  * @desc    Get driver earnings dashboard
@@ -663,9 +667,79 @@ const getCashOwedSummary = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Create Razorpay order for driver to pay outstanding cash platform fees
+ * @route   POST /api/drivers/:driverId/earnings/pay-cash-dues/create-order
+ */
+const createPayCashDuesOrder = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    const { amount, earningId } = req.body || {};
+
+    const orderData = await createDriverDuesOrder({
+      driverId,
+      amount,
+      earningId,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Razorpay order created successfully',
+      data: orderData,
+    });
+  } catch (error) {
+    logger.error('createPayCashDuesOrder error:', error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error creating payment order',
+      code: error.code || 'PAYMENT_ORDER_ERROR',
+    });
+  }
+};
+
+/**
+ * @desc    Verify Razorpay payment and settle driver cash platform fee dues
+ * @route   POST /api/drivers/:driverId/earnings/pay-cash-dues/verify
+ */
+const verifyPayCashDues = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      earningId,
+    } = req.body || {};
+
+    const settlementResult = await verifyAndSettleDriverDues({
+      driverId,
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpaySignature: razorpay_signature,
+      earningId,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: settlementResult.message,
+      data: settlementResult,
+    });
+  } catch (error) {
+    logger.error('verifyPayCashDues error:', error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Error verifying payment',
+      code: error.code || 'PAYMENT_VERIFY_ERROR',
+    });
+  }
+};
+
 module.exports = {
   getDriverEarnings,
   getPaymentHistory,
   getCashOwedSummary,
+  createPayCashDuesOrder,
+  verifyPayCashDues,
 };
-
