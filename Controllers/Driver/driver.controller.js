@@ -64,6 +64,7 @@ const {
     resendLoginOtp,
     verifyLoginOtp,
 } = require('../../utils/msg91Otp.service.js');
+const { isOtpBypassNumber } = require('../../utils/otpBypass.service.js');
 const { checkAndAssignProximityRides } = require('../../utils/proximityRide.service.js');
 const AppError = require('../../utils/errors/AppError.js');
 const asyncHandler = require('../../utils/errors/asyncHandler.js');
@@ -174,9 +175,19 @@ const buildDriverOtpLoginContext = async (rawPhone) => {
  * @route   POST /drivers/login
  */
 const loginDriver = asyncHandler(async (req, res) => {
-    const { local, international } = await buildDriverOtpLoginContext(
-        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
-    );
+    const rawPhone = req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone;
+    const { driver, local, international } = await buildDriverOtpLoginContext(rawPhone);
+
+    if (isOtpBypassNumber(local)) {
+        const response = await issueDriverLoginToken(driver, req);
+        logger.info(`Driver direct login via bypass (no OTP sent): ${driver.phone}`);
+        return res.status(200).json({
+            success: true,
+            directLogin: true,
+            ...response,
+            phone: local,
+        });
+    }
 
     const otpResponse = await sendLoginOtp(international);
     if (String(otpResponse.type || '').toLowerCase() !== 'success') {
@@ -199,9 +210,17 @@ const loginDriver = asyncHandler(async (req, res) => {
  * @route   GET /drivers/login/resend-otp
  */
 const resendDriverLoginOtp = asyncHandler(async (req, res) => {
-    const { local, international } = await buildDriverOtpLoginContext(
-        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
-    );
+    const rawPhone = req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone;
+    const { local, international } = await buildDriverOtpLoginContext(rawPhone);
+
+    if (isOtpBypassNumber(local)) {
+        return res.status(200).json({
+            success: true,
+            message: 'Direct login enabled for this driver account. No OTP required.',
+            directLogin: true,
+            mobile: local,
+        });
+    }
 
     const otpResponse = await resendLoginOtp(international);
     if (String(otpResponse.type || '').toLowerCase() !== 'success') {
@@ -224,9 +243,19 @@ const resendDriverLoginOtp = asyncHandler(async (req, res) => {
  * @route   POST /drivers/login/verify
  */
 const verifyDriverLoginOtp = asyncHandler(async (req, res) => {
-    const { driver, local, international } = await buildDriverOtpLoginContext(
-        req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
-    );
+    const rawPhone = req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone;
+    const { driver, local, international } = await buildDriverOtpLoginContext(rawPhone);
+
+    if (isOtpBypassNumber(local)) {
+        const response = await issueDriverLoginToken(driver, req);
+        logger.info(`Driver direct login via bypass on verify endpoint: ${driver.phone}`);
+        return res.status(200).json({
+            success: true,
+            directLogin: true,
+            ...response,
+            phone: local,
+        });
+    }
 
     const otp = String(req.body.otp || '').trim();
     if (!otp) {

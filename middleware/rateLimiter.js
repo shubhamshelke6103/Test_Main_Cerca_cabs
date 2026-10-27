@@ -6,6 +6,7 @@ const {
   getUserOtpResendRateLimitKey,
   getDriverOtpResendRateLimitKey
 } = require('../utils/otpRateLimitKey')
+const { isOtpBypassRequest } = require('../utils/otpBypass.service')
 
 // Custom Redis store for express-rate-limit v7
 class RedisStore {
@@ -338,6 +339,7 @@ const userOtpLimiterConfig = {
   message: 'Too many OTP requests. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   handler: (req, res) => {
     logger.warn(`User OTP rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
     const rt = req.rateLimit?.resetTime
@@ -362,6 +364,7 @@ const userOtpVerifyLimiterConfig = {
   message: 'Too many OTP verification attempts. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   handler: (req, res) => {
     logger.warn(`User OTP verify rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
     const rt = req.rateLimit?.resetTime
@@ -388,6 +391,7 @@ const userOtpResendLimiterConfig = {
   max: 1,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   keyGenerator: getUserOtpResendRateLimitKey,
   handler: (req, res) => {
     const rt = req.rateLimit?.resetTime
@@ -422,6 +426,7 @@ const driverOtpLimiterConfig = {
   message: 'Too many OTP requests. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   handler: (req, res) => {
     logger.warn(`Driver OTP rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
     const rt = req.rateLimit?.resetTime
@@ -449,6 +454,7 @@ const driverOtpVerifyLimiterConfig = {
   message: 'Too many OTP verification attempts. Please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   handler: (req, res) => {
     logger.warn(`Driver OTP verify rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`)
     const rt = req.rateLimit?.resetTime
@@ -475,6 +481,7 @@ const driverOtpResendLimiterConfig = {
   max: 1,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isOtpBypassRequest,
   keyGenerator: getDriverOtpResendRateLimitKey,
   handler: (req, res) => {
     const rt = req.rateLimit?.resetTime

@@ -17,6 +17,7 @@ const {
   resendLoginOtp,
   verifyLoginOtp
 } = require('../../utils/msg91Otp.service')
+const { isOtpBypassNumber } = require('../../utils/otpBypass.service')
 const AppError = require('../../utils/errors/AppError')
 const asyncHandler = require('../../utils/errors/asyncHandler')
 
@@ -473,7 +474,7 @@ const issueUserLoginToken = async (user, req, isNewUser = false) => {
 
 const loginUserByMobile = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body?.phoneNumber ?? req.query?.phoneNumber
+    req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
@@ -486,6 +487,59 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
   }
 
   const { local, international } = normalizedPhone.value
+
+  if (isOtpBypassNumber(local)) {
+    let user = await findUserByLoginPhone([local, international])
+
+    if (user) {
+      if (user.isActive === false) {
+        logger.warn(`Blocked user attempted login OTP request: ${user.phoneNumber}`)
+        throw new AppError('Your account has been blocked', 403, {
+          code: 'USER_BLOCKED',
+          details: { isBlocked: true }
+        })
+      }
+
+      if (!user.privacyPolicyAccepted) {
+        user.privacyPolicyAccepted = true
+        user.privacyPolicyAcceptedAt = new Date()
+        user.privacyPolicyVersion = PRIVACY_POLICY_VERSION
+        user.privacyPolicyUrl = PRIVACY_POLICY_URL
+      }
+
+      const response = await issueUserLoginToken(user, req, false)
+      logger.info(`User direct login via bypass (no OTP sent): ${user.phoneNumber}`)
+      return res.status(200).json({
+        success: true,
+        directLogin: true,
+        ...response
+      })
+    }
+
+    user = new User({
+      phoneNumber: local,
+      fullName: 'Direct Access User',
+      email: `user_${local}@cerca.app`,
+      isActive: true,
+      isVerified: true,
+      lastLogin: new Date(),
+      fcmToken: extractFcmToken(req.body),
+      fcmTokenUpdatedAt: extractFcmToken(req.body) ? new Date() : null,
+      privacyPolicyAccepted: true,
+      privacyPolicyAcceptedAt: new Date(),
+      privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+      privacyPolicyUrl: PRIVACY_POLICY_URL
+    })
+
+    const response = await issueUserLoginToken(user, req, true)
+    logger.info(`New user created and logged in via bypass (no OTP sent): ${user.phoneNumber}`)
+    return res.status(200).json({
+      success: true,
+      directLogin: true,
+      ...response
+    })
+  }
+
   const user = await findUserByLoginPhone([local, international])
 
   if (user && user.isActive === false) {
@@ -514,7 +568,7 @@ const loginUserByMobile = asyncHandler(async (req, res) => {
 
 const resendUserLoginOtp = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body?.phoneNumber ?? req.query?.phoneNumber
+    req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
@@ -527,6 +581,16 @@ const resendUserLoginOtp = asyncHandler(async (req, res) => {
   }
 
   const { local, international } = normalizedPhone.value
+
+  if (isOtpBypassNumber(local)) {
+    return res.status(200).json({
+      success: true,
+      message: 'Direct login enabled for this account. No OTP required.',
+      directLogin: true,
+      mobile: local
+    })
+  }
+
   const user = await findUserByLoginPhone([local, international])
 
   if (user && user.isActive === false) {
@@ -555,7 +619,7 @@ const resendUserLoginOtp = asyncHandler(async (req, res) => {
 
 const verifyUserLoginOtp = asyncHandler(async (req, res) => {
   const normalizedPhone = normalizeMobileForMsg91(
-    req.body?.phoneNumber ?? req.query?.phoneNumber
+    req.body?.phoneNumber ?? req.body?.phone ?? req.query?.phoneNumber ?? req.query?.phone
   )
   if (normalizedPhone.error || !normalizedPhone.value) {
     throw new AppError(
@@ -567,6 +631,60 @@ const verifyUserLoginOtp = asyncHandler(async (req, res) => {
     )
   }
 
+  const { local, international } = normalizedPhone.value
+
+  if (isOtpBypassNumber(local)) {
+    let user = await findUserByLoginPhone([local, international])
+
+    if (user) {
+      if (user.isActive === false) {
+        logger.warn(`Blocked user attempted verified bypass login: ${user.phoneNumber}`)
+        throw new AppError('Your account has been blocked', 403, {
+          code: 'USER_BLOCKED',
+          details: { isBlocked: true }
+        })
+      }
+
+      if (!user.privacyPolicyAccepted) {
+        user.privacyPolicyAccepted = true
+        user.privacyPolicyAcceptedAt = new Date()
+        user.privacyPolicyVersion = PRIVACY_POLICY_VERSION
+        user.privacyPolicyUrl = PRIVACY_POLICY_URL
+      }
+
+      const response = await issueUserLoginToken(user, req, false)
+      logger.info(`User direct login via bypass on verify endpoint: ${user.phoneNumber}`)
+      return res.status(200).json({
+        success: true,
+        directLogin: true,
+        ...response
+      })
+    }
+
+    user = new User({
+      phoneNumber: local,
+      fullName: 'Direct Access User',
+      email: `user_${local}@cerca.app`,
+      isActive: true,
+      isVerified: true,
+      lastLogin: new Date(),
+      fcmToken: extractFcmToken(req.body),
+      fcmTokenUpdatedAt: extractFcmToken(req.body) ? new Date() : null,
+      privacyPolicyAccepted: true,
+      privacyPolicyAcceptedAt: new Date(),
+      privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+      privacyPolicyUrl: PRIVACY_POLICY_URL
+    })
+
+    const response = await issueUserLoginToken(user, req, true)
+    logger.info(`New user created and logged in via bypass on verify endpoint: ${user.phoneNumber}`)
+    return res.status(200).json({
+      success: true,
+      directLogin: true,
+      ...response
+    })
+  }
+
   const otp = String(req.body.otp || '').trim()
   if (!otp) {
     throw new AppError('OTP is required', 400, {
@@ -574,7 +692,6 @@ const verifyUserLoginOtp = asyncHandler(async (req, res) => {
     })
   }
 
-  const { local, international } = normalizedPhone.value
   const otpResponse = await verifyLoginOtp({
     mobile: international,
     otp
